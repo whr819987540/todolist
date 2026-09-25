@@ -1,0 +1,9 @@
+用Tauri 2写一个todo管理软件
+
+要求：
+- 提供工作区、项目、项目下某个todo item三级划分
+- 进入工作区或工作区-项目后，左侧可以显示可折叠的工作区内容、项目内容，两个层级都可以折叠，todo item显示title，如果没有title，显示前几个字符（具体几个根据左侧空间确定）
+- 点击某个todo item后，右侧显示具体的todo内容，默认是markdown纯文本，支持右键todo item通过系统默认的markdown软件打开。注意，暂时不要在软件中加入markdown渲染的功能。todo item实际上包括：title、content，title单独存储，content存储到markdown文件中，并遵循{工作区}、{项目}的目录结构。
+- 暂时只支持windows版本，所有数据存储到用户的家目录
+- 在左侧的todo item上的合适位置加上完成标识、创建时间与最新修改时间
+- 整体的UI风格设计需要中国用户的使用习惯
