@@ -9,20 +9,65 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 const SETTINGS_FILE: &str = ".settings.json";
-pub const DEFAULT_TOGGLE_SHORTCUT: &str = "Ctrl+Alt+T";
 
+/// 快捷键格式如 `Ctrl+Alt+T`，None 表示不使用；文件里缺的字段取默认值
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    /// 显示主窗口 / 隐藏到托盘的全局快捷键，格式如 `Ctrl+Alt+T`；None 表示不使用
+    /// 全局快捷键：显示主窗口 / 隐藏到托盘
     pub toggle_shortcut: Option<String>,
+    /// 应用内快捷键（窗口在前台且选中了待办时生效）：标记完成 / 未完成
+    pub toggle_done_shortcut: Option<String>,
+    /// 应用内快捷键：用默认程序打开选中的待办
+    pub open_external_shortcut: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            toggle_shortcut: Some(DEFAULT_TOGGLE_SHORTCUT.into()),
+            toggle_shortcut: Some("Ctrl+Alt+T".into()),
+            toggle_done_shortcut: Some("Ctrl+Alt+D".into()),
+            open_external_shortcut: Some("Ctrl+Alt+O".into()),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShortcutAction {
+    ToggleWindow,
+    ToggleDone,
+    OpenExternal,
+}
+
+impl ShortcutAction {
+    pub const ALL: [Self; 3] = [Self::ToggleWindow, Self::ToggleDone, Self::OpenExternal];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ToggleWindow => "显示 / 隐藏主窗口",
+            Self::ToggleDone => "标记完成 / 未完成",
+            Self::OpenExternal => "用默认程序打开",
+        }
+    }
+}
+
+impl Settings {
+    pub fn shortcut(&self, action: ShortcutAction) -> Option<&str> {
+        match action {
+            ShortcutAction::ToggleWindow => self.toggle_shortcut.as_deref(),
+            ShortcutAction::ToggleDone => self.toggle_done_shortcut.as_deref(),
+            ShortcutAction::OpenExternal => self.open_external_shortcut.as_deref(),
+        }
+    }
+
+    pub fn set_shortcut(&mut self, action: ShortcutAction, shortcut: Option<String>) {
+        let slot = match action {
+            ShortcutAction::ToggleWindow => &mut self.toggle_shortcut,
+            ShortcutAction::ToggleDone => &mut self.toggle_done_shortcut,
+            ShortcutAction::OpenExternal => &mut self.open_external_shortcut,
+        };
+        *slot = shortcut;
     }
 }
 

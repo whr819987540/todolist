@@ -4,6 +4,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { SettingsProvider } from "./settings";
 import { CssVars, ThemeContext, useSystemDark, useWindowTheme, type ThemeMode } from "./theme";
 import { useLocalState } from "./utils";
 import "./styles.css";
@@ -53,7 +54,9 @@ function Root() {
         <AntApp className="app-root" message={{ top: 56, maxCount: 3 }}>
           <CssVars dark={dark} />
           <ErrorBoundary>
-            <App />
+            <SettingsProvider>
+              <App />
+            </SettingsProvider>
           </ErrorBoundary>
         </AntApp>
       </ConfigProvider>

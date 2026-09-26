@@ -31,7 +31,8 @@ export interface Actions {
 
   /** open=true 时创建后立即打开并聚焦标题 */
   newTodo(project: string, title?: string, open?: boolean): Promise<void>;
-  toggleDone(project: string, t: TodoSummary): void;
+  /** notify=true 时弹出提示（用快捷键操作时看不到鼠标点击的反馈） */
+  toggleDone(project: string, t: TodoSummary, notify?: boolean): void;
   deleteTodo(project: string, t: TodoSummary): void;
   moveTodo(project: string, t: TodoSummary, target: string): void;
   openExternal(project: string, t: TodoSummary): void;

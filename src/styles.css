@@ -915,8 +915,21 @@ mark {
 
 /* ---------------- 设置 ---------------- */
 
+.setting-group {
+  font-size: 12px;
+  color: var(--c-text-3);
+  padding-bottom: 6px;
+  margin: 16px 0 12px;
+  border-bottom: 1px solid var(--c-border);
+}
+.setting-group:first-child {
+  margin-top: 4px;
+}
 .setting-item {
-  padding: 4px 0 8px;
+  padding: 0 0 8px;
+}
+.setting-item + .setting-item {
+  margin-top: 12px;
 }
 .setting-label {
   font-weight: 600;

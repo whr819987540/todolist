@@ -42,10 +42,21 @@ export interface SaveResult {
 
 export type SortKey = "created" | "updated" | "title";
 
-export interface ShortcutInfo {
-  /** 格式如 "Ctrl+Alt+T"；null 表示不使用 */
-  shortcut: string | null;
-  defaultShortcut: string;
-  /** false 表示设置了但没注册上（例如被其他程序占用） */
-  registered: boolean;
+export type ShortcutAction = "toggleWindow" | "toggleDone" | "openExternal";
+
+/** 快捷键格式如 "Ctrl+Alt+T"；null 表示不使用 */
+export interface AppSettings {
+  /** 全局快捷键：显示主窗口 / 隐藏到托盘 */
+  toggleShortcut: string | null;
+  /** 应用内快捷键：标记选中的待办完成 / 未完成 */
+  toggleDoneShortcut: string | null;
+  /** 应用内快捷键：用默认程序打开选中的待办 */
+  openExternalShortcut: string | null;
+}
+
+export interface SettingsInfo {
+  settings: AppSettings;
+  defaults: AppSettings;
+  /** 全局快捷键是否注册成功；设置了却为 false 说明被其他程序占用了 */
+  toggleShortcutRegistered: boolean;
 }

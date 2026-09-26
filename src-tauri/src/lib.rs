@@ -2,8 +2,9 @@ mod settings;
 mod store;
 
 use serde::Serialize;
-use settings::{SettingsStore, DEFAULT_TOGGLE_SHORTCUT};
+use settings::{Settings, SettingsStore, ShortcutAction};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use store::{Store, TodoDetail, TodoSummary, WorkspaceInfo, WorkspaceTree, SaveResult};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -296,70 +297,90 @@ fn set_window_icons(window: &tauri::WebviewWindow) {
 
 // ----- 全局快捷键 -----
 
+/// 最近一次注册全局快捷键是否成功。录制快捷键时的临时暂停不算失败，所以不能直接用 is_registered 判断
+static TOGGLE_REGISTERED: AtomicBool = AtomicBool::new(false);
+
 /// 重新注册显示/隐藏主窗口的全局快捷键（先清掉旧的）；None 表示不使用
 fn register_toggle_shortcut(app: &AppHandle, shortcut: Option<&str>) -> Cmd<()> {
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
-    let Some(text) = shortcut else { return Ok(()) };
-    let parsed: Shortcut = text.parse().map_err(|_| format!("无法识别的快捷键：{text}"))?;
-    gs.register(parsed)
-        .map_err(|_| format!("快捷键 {text} 注册失败，可能已被其他程序占用，请换一个"))
+    let result = shortcut.map_or(Ok(()), |text| {
+        gs.register(parse_shortcut(text)?)
+            .map_err(|_| format!("快捷键 {text} 注册失败，可能已被其他程序占用，请换一个"))
+    });
+    TOGGLE_REGISTERED.store(shortcut.is_some() && result.is_ok(), Ordering::Relaxed);
+    result
+}
+
+fn parse_shortcut(text: &str) -> Cmd<Shortcut> {
+    text.parse().map_err(|_| format!("无法识别的快捷键：{text}"))
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ShortcutInfo {
-    shortcut: Option<String>,
-    default_shortcut: &'static str,
-    /// false 表示设置了快捷键但没注册上（例如启动时已被其他程序占用）
-    registered: bool,
+struct SettingsInfo {
+    settings: Settings,
+    defaults: Settings,
+    /// 全局快捷键是否注册成功；设置了却为 false 说明被其他程序占用了
+    toggle_shortcut_registered: bool,
 }
 
-fn shortcut_info(app: &AppHandle, settings: &SettingsStore) -> ShortcutInfo {
-    let shortcut = settings.get().toggle_shortcut;
-    let registered = shortcut
-        .as_deref()
-        .and_then(|s| s.parse::<Shortcut>().ok())
-        .is_some_and(|s| app.global_shortcut().is_registered(s));
-    ShortcutInfo {
-        shortcut,
-        default_shortcut: DEFAULT_TOGGLE_SHORTCUT,
-        registered,
+fn settings_info(store: &SettingsStore) -> SettingsInfo {
+    SettingsInfo {
+        settings: store.get(),
+        defaults: Settings::default(),
+        toggle_shortcut_registered: TOGGLE_REGISTERED.load(Ordering::Relaxed),
     }
 }
 
 #[tauri::command]
-fn get_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>) -> ShortcutInfo {
-    shortcut_info(&app, &settings)
+fn get_settings(settings: State<'_, SettingsStore>) -> SettingsInfo {
+    settings_info(&settings)
 }
 
+/// 修改某个快捷键（None 表示不使用）；和其他操作的快捷键重复时拒绝
 #[tauri::command]
-fn set_toggle_shortcut(
+fn set_shortcut(
     app: AppHandle,
     settings: State<'_, SettingsStore>,
+    action: ShortcutAction,
     shortcut: Option<String>,
-) -> Cmd<ShortcutInfo> {
+) -> Cmd<SettingsInfo> {
     let old = settings.get();
-    let mut next = old.clone();
-    next.toggle_shortcut = shortcut;
-    let saved = register_toggle_shortcut(&app, next.toggle_shortcut.as_deref())
-        .and_then(|_| settings.save(next));
-    if let Err(e) = saved {
-        // 新的用不了就恢复原来的
-        let _ = register_toggle_shortcut(&app, old.toggle_shortcut.as_deref());
-        return Err(e);
+    if let Some(text) = shortcut.as_deref() {
+        let parsed = parse_shortcut(text)?;
+        for other in ShortcutAction::ALL {
+            if other != action && old.shortcut(other).and_then(|s| s.parse::<Shortcut>().ok()) == Some(parsed) {
+                return Err(format!("{text} 已用于「{}」，请换一个", other.label()));
+            }
+        }
     }
-    Ok(shortcut_info(&app, &settings))
+    let mut next = old.clone();
+    next.set_shortcut(action, shortcut);
+    if action != ShortcutAction::ToggleWindow {
+        settings.save(next)?;
+    } else {
+        let saved = register_toggle_shortcut(&app, next.toggle_shortcut.as_deref())
+            .and_then(|_| settings.save(next));
+        if let Err(e) = saved {
+            // 新的用不了就恢复原来的
+            let _ = register_toggle_shortcut(&app, old.toggle_shortcut.as_deref());
+            return Err(e);
+        }
+    }
+    Ok(settings_info(&settings))
 }
 
-/// 设置界面录制快捷键期间暂停，否则按下当前快捷键会直接把窗口藏起来、录不到
+/// 设置界面录制快捷键期间暂停，否则按下当前快捷键会直接把窗口藏起来、录不到。
+/// 返回最新设置：恢复时可能注册失败（暂停期间被其他程序占用了）
 #[tauri::command]
-fn pause_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>, paused: bool) {
+fn pause_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>, paused: bool) -> SettingsInfo {
     if paused {
         let _ = app.global_shortcut().unregister_all();
     } else {
         let _ = register_toggle_shortcut(&app, settings.get().toggle_shortcut.as_deref());
     }
+    settings_info(&settings)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -426,8 +447,8 @@ pub fn run() {
             reveal_todo,
             open_folder,
             quit_app,
-            get_toggle_shortcut,
-            set_toggle_shortcut,
+            get_settings,
+            set_shortcut,
             pause_toggle_shortcut,
         ])
         .run(tauri::generate_context!())

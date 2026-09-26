@@ -10,6 +10,8 @@ import { App as AntApp, Breadcrumb, Button, Dropdown, Input, Modal, Spin, Tag, T
 import { useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { registerFlusher, useWindowFocus } from "../hooks";
+import { useSettings } from "../settings";
+import { shortcutLabel } from "../shortcuts";
 import type { TodoSummary } from "../types";
 import { countChars, fullTime, relativeTime, useNow } from "../utils";
 
@@ -44,6 +46,7 @@ export default function TodoEditor(props: Props) {
   const { workspace, project, summary } = props;
   const id = summary.id;
   const { message } = AntApp.useApp();
+  const keys = useSettings().info?.settings;
   const now = useNow();
 
   const [loading, setLoading] = useState(true);
@@ -276,15 +279,24 @@ export default function TodoEditor(props: Props) {
           ]}
         />
         <div className="editor-actions">
-          <Button
-            type={summary.done ? "default" : "primary"}
-            ghost={!summary.done}
-            icon={summary.done ? <UndoOutlined /> : <CheckOutlined />}
-            onClick={props.onToggleDone}
+          <Tooltip title={keys?.toggleDoneShortcut && `快捷键：${shortcutLabel(keys.toggleDoneShortcut)}`}>
+            <Button
+              type={summary.done ? "default" : "primary"}
+              ghost={!summary.done}
+              icon={summary.done ? <UndoOutlined /> : <CheckOutlined />}
+              onClick={props.onToggleDone}
+            >
+              {summary.done ? "标记为未完成" : "标记完成"}
+            </Button>
+          </Tooltip>
+          <Tooltip
+            title={
+              <>
+                用系统默认的 Markdown 程序打开
+                {keys?.openExternalShortcut && <div>快捷键：{shortcutLabel(keys.openExternalShortcut)}</div>}
+              </>
+            }
           >
-            {summary.done ? "标记为未完成" : "标记完成"}
-          </Button>
-          <Tooltip title="用系统默认的 Markdown 程序打开">
             <Button icon={<ExportOutlined />} onClick={props.onOpenExternal}>
               默认程序打开
             </Button>

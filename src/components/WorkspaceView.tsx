@@ -2,6 +2,8 @@ import { App as AntApp, Spin, type InputRef } from "antd";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useWindowFocus } from "../hooks";
+import { useSettings } from "../settings";
+import { eventShortcut, sameShortcut } from "../shortcuts";
 import type { SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { compareName, displayTitle, useLocalState } from "../utils";
 import { useNameDialog } from "./NameDialog";
@@ -36,6 +38,7 @@ export default function WorkspaceView({ workspace, initialSel, onHome, onSwitch 
   const [storedWidth, setWidth] = useLocalState("sidebarWidth", 300);
   const width = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, storedWidth));
   const [dialog, openDialog] = useNameDialog();
+  const { info: settingsInfo } = useSettings();
   const editorRef = useRef<EditorHandle | null>(null);
   const searchRef = useRef<InputRef>(null);
 
@@ -214,9 +217,11 @@ export default function WorkspaceView({ workspace, initialSel, onHome, onSwitch 
           setFocusTitleId(title ? null : s.id);
         }
       }),
-    toggleDone: (project, t) =>
+    toggleDone: (project, t, notify) =>
       run(async () => {
-        patchTodo(project, await api.setTodoDone(workspace, project, t.id, !t.done));
+        const s = await api.setTodoDone(workspace, project, t.id, !t.done);
+        patchTodo(project, s);
+        if (notify) message.success(s.done ? "已标记为完成" : "已标记为未完成");
       }),
     deleteTodo: (project, t) =>
       confirmDelete(`删除待办「${displayTitle(t).text}」？`, "对应的 Markdown 文件将被移到回收站。", async () => {
@@ -251,13 +256,30 @@ export default function WorkspaceView({ workspace, initialSel, onHome, onSwitch 
 
   // 键盘快捷键
   const aRef = useRef(a);
+  const selRef = useRef({ project: selProject?.name, todo: selTodo, keys: settingsInfo?.settings });
   useEffect(() => {
     aRef.current = a;
+    selRef.current = { project: selProject?.name, todo: selTodo, keys: settingsInfo?.settings };
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+      // 设置里可修改的快捷键，作用于当前选中的待办（优先于下面的内置快捷键）
+      const { project, todo, keys } = selRef.current;
+      const combo = eventShortcut(e);
+      if (project && todo && combo && keys) {
+        if (sameShortcut(combo, keys.toggleDoneShortcut)) {
+          e.preventDefault();
+          if (!e.repeat) aRef.current.toggleDone(project, todo, true);
+          return;
+        }
+        if (sameShortcut(combo, keys.openExternalShortcut)) {
+          e.preventDefault();
+          if (!e.repeat) aRef.current.openExternal(project, todo);
+          return;
+        }
+      }
       if (e.key === "F5" || (ctrl && key === "r")) {
         e.preventDefault();
         reload().then(() => message.success("已刷新"));
