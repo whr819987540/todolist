@@ -1,6 +1,10 @@
+mod backup;
 mod settings;
 mod store;
+mod webdav;
 
+use backup::RemoteBackup;
+use chrono::Local;
 use serde::Serialize;
 use settings::{Settings, SettingsStore, ShortcutAction};
 use std::path::{Path, PathBuf};
@@ -12,6 +16,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_window_state::StateFlags;
+use webdav::{WebDav, WebDavConfig, WebDavInfo, WebDavStore};
 
 type Cmd<T> = Result<T, String>;
 
@@ -383,6 +388,99 @@ fn pause_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>, pau
     settings_info(&settings)
 }
 
+// ----- 设置备份（WebDAV） -----
+
+#[tauri::command]
+fn get_webdav(webdav: State<'_, WebDavStore>) -> WebDavInfo {
+    webdav.info()
+}
+
+/// password 为 null 时保留原来的密码
+#[tauri::command]
+fn save_webdav(webdav: State<'_, WebDavStore>, config: WebDavConfig, password: Option<String>) -> Cmd<WebDavInfo> {
+    webdav.save(&config, password.as_deref())?;
+    Ok(webdav.info())
+}
+
+/// 用界面上还没保存的配置测试连接；password 为 null 时用已保存的密码
+#[tauri::command]
+async fn test_webdav(
+    webdav: State<'_, WebDavStore>,
+    config: WebDavConfig,
+    password: Option<String>,
+) -> Cmd<String> {
+    let password = match password {
+        Some(p) => p,
+        None => webdav.password()?.unwrap_or_default(),
+    };
+    let client = WebDav::new(&config, &password)?;
+    let dir = client.dir_label();
+    Ok(if client.check().await? {
+        format!("连接成功，远程目录{dir}已存在")
+    } else {
+        format!("连接成功，远程目录{dir}还不存在，第一次备份时会自动创建")
+    })
+}
+
+/// 把当前设置打包上传，返回备份文件名
+#[tauri::command]
+async fn backup_to_webdav(settings: State<'_, SettingsStore>, webdav: State<'_, WebDavStore>) -> Cmd<String> {
+    let now = Local::now();
+    let name = backup::file_name(now);
+    let data = backup::pack(&settings.get(), now)?;
+    webdav.connect()?.upload(&name, data).await?;
+    Ok(name)
+}
+
+#[tauri::command]
+async fn list_webdav_backups(webdav: State<'_, WebDavStore>) -> Cmd<Vec<RemoteBackup>> {
+    Ok(backup::backups(webdav.connect()?.list().await?))
+}
+
+#[tauri::command]
+async fn restore_from_webdav(
+    app: AppHandle,
+    settings: State<'_, SettingsStore>,
+    webdav: State<'_, WebDavStore>,
+    name: String,
+) -> Cmd<SettingsInfo> {
+    let data = webdav.connect()?.download(&name).await?;
+    restore_settings(&app, &settings, &data)
+}
+
+/// 从本地选择的备份包恢复（前端读出文件内容传过来）
+#[tauri::command]
+fn restore_from_file(app: AppHandle, settings: State<'_, SettingsStore>, data: Vec<u8>) -> Cmd<SettingsInfo> {
+    restore_settings(&app, &settings, &data)
+}
+
+fn restore_settings(app: &AppHandle, settings: &SettingsStore, zip: &[u8]) -> Cmd<SettingsInfo> {
+    let next = backup::unpack(zip)?;
+    check_shortcuts(&next)?;
+    settings.save(next.clone())?;
+    // 全局快捷键被占用不影响恢复，设置界面会提示
+    let _ = register_toggle_shortcut(app, next.toggle_shortcut.as_deref());
+    Ok(settings_info(settings))
+}
+
+/// 恢复的设置里，快捷键要都能识别、互不重复
+fn check_shortcuts(s: &Settings) -> Cmd<()> {
+    let mut seen: Vec<(ShortcutAction, Shortcut)> = Vec::new();
+    for action in ShortcutAction::ALL {
+        let Some(text) = s.shortcut(action) else { continue };
+        let parsed = parse_shortcut(text)?;
+        if let Some((other, _)) = seen.iter().find(|(_, p)| *p == parsed) {
+            return Err(format!(
+                "备份里的快捷键 {text} 同时用于「{}」和「{}」，无法恢复",
+                other.label(),
+                action.label()
+            ));
+        }
+        seen.push((action, parsed));
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -410,8 +508,10 @@ pub fn run() {
             let settings = SettingsStore::load(store.root());
             // 注册失败（被其他程序占用）不影响启动，设置界面里会提示
             let _ = register_toggle_shortcut(app.handle(), settings.get().toggle_shortcut.as_deref());
+            let webdav = WebDavStore::load(store.root(), &app.config().identifier);
             app.manage(store);
             app.manage(settings);
+            app.manage(webdav);
             setup_tray(app)?;
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window("main") {
@@ -450,6 +550,13 @@ pub fn run() {
             get_settings,
             set_shortcut,
             pause_toggle_shortcut,
+            get_webdav,
+            save_webdav,
+            test_webdav,
+            backup_to_webdav,
+            list_webdav_backups,
+            restore_from_webdav,
+            restore_from_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

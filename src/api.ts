@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  RemoteBackup,
   SaveResult,
   SettingsInfo,
   ShortcutAction,
   TodoDetail,
   TodoSummary,
+  WebDavConfig,
+  WebDavInfo,
   WorkspaceInfo,
   WorkspaceTree,
 } from "./types";
@@ -61,6 +64,19 @@ export const api = {
   setShortcut: (action: ShortcutAction, shortcut: string | null) =>
     invoke<SettingsInfo>("set_shortcut", { action, shortcut }),
   pauseToggleShortcut: (paused: boolean) => invoke<SettingsInfo>("pause_toggle_shortcut", { paused }),
+
+  getWebdav: () => invoke<WebDavInfo>("get_webdav"),
+  /** password 为 null 时保留原来的密码 */
+  saveWebdav: (config: WebDavConfig, password: string | null) =>
+    invoke<WebDavInfo>("save_webdav", { config, password }),
+  /** 用还没保存的配置测试连接；password 为 null 时用已保存的密码。返回提示文字 */
+  testWebdav: (config: WebDavConfig, password: string | null) =>
+    invoke<string>("test_webdav", { config, password }),
+  /** 返回备份文件名 */
+  backupToWebdav: () => invoke<string>("backup_to_webdav"),
+  listWebdavBackups: () => invoke<RemoteBackup[]>("list_webdav_backups"),
+  restoreFromWebdav: (name: string) => invoke<SettingsInfo>("restore_from_webdav", { name }),
+  restoreFromFile: (data: Uint8Array) => invoke<SettingsInfo>("restore_from_file", { data: Array.from(data) }),
 };
 
 /** invoke 失败时 reject 的是 Rust 端返回的中文错误字符串 */

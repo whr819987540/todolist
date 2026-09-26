@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-const SETTINGS_FILE: &str = ".settings.json";
+pub const SETTINGS_FILE: &str = ".settings.json";
 
 /// 快捷键格式如 `Ctrl+Alt+T`，None 表示不使用；文件里缺的字段取默认值
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -25,6 +25,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 trash = "5"
+# WebDAV 设置备份：HTTPS 用系统自带的 schannel（认 Windows 证书库），zip 只需 deflate，密码存 Windows 凭据管理器
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "system-proxy"] }
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+keyring = { version = "3", features = ["windows-native"] }
+roxmltree = "0.21"
+percent-encoding = "2"
 
 # 给窗口补设大图标（见 lib.rs set_window_icons）
 [target.'cfg(windows)'.dependencies]
@@ -34,6 +40,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_HiDpi",
   "Win32_UI_WindowsAndMessaging",
 ] }
+# 读 Windows 的代理设置（见 webdav.rs proxy）
+windows-registry = "0.6"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

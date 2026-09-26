@@ -949,6 +949,87 @@ mark {
   margin-top: 8px;
 }
 
+.settings-tabs .ant-tabs-nav {
+  margin-bottom: 4px;
+}
+/* 窗口矮时只滚动标签页内容，标签栏保持可见 */
+.settings-tabs .ant-tabs-content-holder {
+  max-height: calc(100vh - 170px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* 备份与恢复 */
+.webdav-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 16px;
+}
+.webdav-form .ant-form-item {
+  margin-bottom: 12px;
+}
+.webdav-form .webdav-wide {
+  grid-column: 1 / -1;
+}
+.webdav-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.setting-group.backup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 2px;
+}
+.backup-tools {
+  display: flex;
+  gap: 4px;
+}
+.backup-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.backup-bar .setting-desc {
+  margin: 0;
+}
+.backup-list {
+  max-height: 232px;
+  overflow-y: auto;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+}
+.backup-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+}
+.backup-item + .backup-item {
+  border-top: 1px solid var(--c-border);
+}
+.backup-item:hover {
+  background: var(--c-hover);
+}
+.backup-info {
+  flex: 1;
+  min-width: 0;
+}
+.backup-name {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.backup-empty {
+  padding: 20px 12px;
+  font-size: 12px;
+  text-align: center;
+}
+
 .shortcut-box {
   flex: 1;
   min-width: 0;

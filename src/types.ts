@@ -60,3 +60,25 @@ export interface SettingsInfo {
   /** 全局快捷键是否注册成功；设置了却为 false 说明被其他程序占用了 */
   toggleShortcutRegistered: boolean;
 }
+
+export interface WebDavConfig {
+  /** 服务地址，如 https://dav.jianguoyun.com/dav/ */
+  url: string;
+  username: string;
+  /** 存放备份的远程目录，可多级 */
+  dir: string;
+}
+
+export interface WebDavInfo {
+  config: WebDavConfig;
+  /** 是否已保存密码（密码存在 Windows 凭据管理器，不返回给前端） */
+  hasPassword: boolean;
+}
+
+export interface RemoteBackup {
+  /** 文件名，如 TodoList-settings-20260926-153012.zip */
+  name: string;
+  size: number | null;
+  /** 备份时间，从文件名解析 */
+  time: number;
+}

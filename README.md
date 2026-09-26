@@ -10,6 +10,7 @@
 - **托盘常驻**：点窗口的关闭按钮只会隐藏到系统托盘，程序继续运行；左键单击托盘图标恢复窗口，右键托盘图标选「退出」才真正退出（会先保存正在编辑的内容）
 - **全局快捷键**：默认 Ctrl+Alt+T，在任何程序里按下都能呼出主窗口，主窗口在前台时按下则隐藏到托盘；点右上角的设置按钮可修改、恢复默认或不使用
 - **待办快捷键**：选中某条待办时，Ctrl+Alt+D 标记完成 / 未完成，Ctrl+Alt+O 用默认程序打开；同样可在设置里修改
+- **设置备份**：在「设置 → 备份与恢复」里填写 WebDAV 服务器（如坚果云），可把设置打包成 `TodoList-settings-年月日-时分秒.zip` 上传；恢复时可从服务器上的备份列表选择，也可选择本地的备份 zip。备份只含设置，不含待办数据
 - **全局搜索**：首页可跨全部工作区搜索工作区、项目和待办（标题与正文开头），点击结果直接打开
 - **外部修改感知**：从其他编辑器切回时自动刷新；若两边同时改了同一条，会弹窗让你选择保留哪一份
 - 工作区内搜索（Ctrl+F）、隐藏已完成、三种排序、在项目间移动待办、删除进回收站、深色模式、侧栏宽度可拖动
@@ -24,13 +25,16 @@ TodoList\
     {项目}\
       .todos.json            标题、完成状态、创建/修改/完成时间
       20260926-153012.md     待办正文，一条待办一个文件
-  .settings.json             应用设置（快捷键）
+  .settings.json             应用设置（快捷键），设置备份的内容就是这个文件
+  .webdav.json               WebDAV 服务器地址、用户名、远程目录（密码存在 Windows 凭据管理器）
 ```
 
 - 标题单独存在 `.todos.json` 里，正文存在 `.md` 文件里
 - 直接往项目文件夹里放 `.md` 文件，软件会自动识别为新待办（文件名作为标题）
 - `.todos.json` 损坏时会备份为 `.todos.json.broken-时间戳` 并重建，正文不受影响
 - 删除的工作区 / 项目 / 待办进入 Windows 回收站
+- WebDAV 密码保存在 Windows 凭据管理器（普通凭据 `webdav.com.whr.todolist`），不写进任何文件，也不会进入备份包
+- 访问 WebDAV 时使用 Windows 的代理设置（或环境变量 `HTTPS_PROXY`），代理例外和 `NO_PROXY` 里的地址直连
 
 测试时可用环境变量 `TODOLIST_DATA_DIR` 指定其他数据目录。
 
@@ -55,12 +59,14 @@ TodoList\
 npm install
 npm run tauri dev       # 开发调试
 npm run tauri build     # 打包，安装包在 src-tauri/target/release/bundle/nsis/
-cd src-tauri && cargo test   # 存储层单元测试
+cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 ```
 
 代码结构：
 
 - `src-tauri/src/store.rs`：文件存储、元数据对齐、名称校验
 - `src-tauri/src/settings.rs`：应用设置的读写
+- `src-tauri/src/backup.rs`：设置备份包的打包、解包和命名
+- `src-tauri/src/webdav.rs`：WebDAV 连接配置、密码存取、客户端（含代理处理）
 - `src-tauri/src/lib.rs`：Tauri 命令、打开外部程序、系统托盘、全局快捷键、窗口图标
-- `src/components/`：首页（含搜索）、侧栏树、概览、编辑器、设置
+- `src/components/`：首页（含搜索）、侧栏树、概览、编辑器、设置（快捷键、备份与恢复）

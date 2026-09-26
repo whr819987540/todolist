@@ -1,10 +1,11 @@
 import { ExclamationCircleFilled, SettingOutlined } from "@ant-design/icons";
-import { App as AntApp, Button, Modal, Tooltip } from "antd";
+import { App as AntApp, Button, Modal, Tabs, Tooltip } from "antd";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useSettings } from "../settings";
 import { checkShortcut, eventShortcut, keyLabel, keyName, modifiers, shortcutLabel } from "../shortcuts";
 import type { AppSettings, ShortcutAction } from "../types";
+import BackupSettings from "./BackupSettings";
 
 /** 设置按钮，点击打开设置对话框 */
 export default function SettingsButton({ type = "default" }: { type?: "default" | "text" }) {
@@ -14,8 +15,14 @@ export default function SettingsButton({ type = "default" }: { type?: "default" 
       <Tooltip title="设置">
         <Button type={type} icon={<SettingOutlined />} onClick={() => setOpen(true)} />
       </Tooltip>
-      <Modal open={open} title="设置" footer={null} width={540} destroyOnHidden onCancel={() => setOpen(false)}>
-        <ShortcutSettings />
+      <Modal open={open} title="设置" footer={null} width={560} centered destroyOnHidden onCancel={() => setOpen(false)}>
+        <Tabs
+          className="settings-tabs"
+          items={[
+            { key: "shortcuts", label: "快捷键", children: <ShortcutSettings /> },
+            { key: "backup", label: "备份与恢复", children: <BackupSettings /> },
+          ]}
+        />
       </Modal>
     </>
   );
