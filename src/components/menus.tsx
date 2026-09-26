@@ -29,8 +29,8 @@ export interface Actions {
   deleteProject(project: string): void;
   openProjectFolder(project: string): void;
 
-  /** open=true 时创建后立即打开并聚焦标题 */
-  newTodo(project: string, title?: string, open?: boolean): Promise<void>;
+  /** open=true 时创建后立即打开并聚焦标题；返回是否创建成功（失败时已弹出提示） */
+  newTodo(project: string, title?: string, open?: boolean): Promise<boolean>;
   /** notify=true 时弹出提示（用快捷键操作时看不到鼠标点击的反馈） */
   toggleDone(project: string, t: TodoSummary, notify?: boolean): void;
   deleteTodo(project: string, t: TodoSummary): void;

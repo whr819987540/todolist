@@ -107,11 +107,14 @@ export default function WorkspaceView({ workspace, initialSel, onHome, onSwitch 
   /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
   const flushEditor = () => editorRef.current?.flush() ?? Promise.resolve();
 
+  /** 执行操作，出错时弹出提示；返回是否成功 */
   const run = async (fn: () => Promise<void>) => {
     try {
       await fn();
+      return true;
     } catch (e) {
       message.error(errMsg(e));
+      return false;
     }
   };
 

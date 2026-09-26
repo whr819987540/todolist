@@ -117,8 +117,8 @@ export function ProjectOverview(p: {
     if (!title || adding) return;
     setAdding(true);
     try {
-      await a.newTodo(project.name, title, false);
-      setDraft("");
+      // 创建失败（例如项目文件夹在外部被删）时保留输入，方便重试
+      if (await a.newTodo(project.name, title, false)) setDraft("");
     } finally {
       setAdding(false);
     }
