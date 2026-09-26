@@ -31,6 +31,7 @@ import {
   sortTodos,
   useNow,
 } from "../utils";
+import Highlight from "./Highlight";
 import { projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
 import SettingsButton from "./SettingsButton";
 
@@ -427,20 +428,6 @@ function RowMore({ menu }: { menu: MenuProps }) {
       </span>
     </Dropdown>
   );
-}
-
-function Highlight({ text, kw }: { text: string; kw: string }) {
-  if (!kw) return <>{text}</>;
-  const lower = text.toLowerCase();
-  const k = kw.toLowerCase();
-  const parts: React.ReactNode[] = [];
-  let i = 0;
-  for (let j = lower.indexOf(k); j >= 0; j = lower.indexOf(k, i)) {
-    parts.push(text.slice(i, j), <mark key={j}>{text.slice(j, j + k.length)}</mark>);
-    i = j + k.length;
-  }
-  parts.push(text.slice(i));
-  return <>{parts}</>;
 }
 
 function WorkspaceSwitcher(p: { current: string; onSwitch: (name: string) => void; onHome: () => void }) {

@@ -94,6 +94,13 @@ export default function WorkspaceView({ workspace, initialSel, onHome, onSwitch 
 
   const expand = (key: string) => setCollapsed((c) => (c[key] ? { ...c, [key]: false } : c));
 
+  // 从首页搜索结果直接打开某个项目 / 待办时，展开它所在的分支
+  const initialProject = initialSel.project;
+  useEffect(() => {
+    if (initialProject)
+      setCollapsed((c) => (c[WS_KEY] || c[initialProject] ? { ...c, [WS_KEY]: false, [initialProject]: false } : c));
+  }, [initialProject, setCollapsed]);
+
   /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
   const flushEditor = () => editorRef.current?.flush() ?? Promise.resolve();
 

@@ -206,6 +206,52 @@ mark {
   margin-top: 80px;
 }
 
+.home-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 24px 0 12px;
+}
+.home-toolbar .section-title {
+  margin: 0;
+}
+.home-search {
+  width: 300px;
+}
+
+/* 首页搜索结果 */
+.search-summary {
+  font-size: 13px;
+  color: var(--c-text-3);
+  margin-top: -4px;
+}
+.search-loading {
+  padding: 40px 0;
+  text-align: center;
+}
+.list-main {
+  flex: 1;
+  min-width: 0;
+}
+.list-snippet {
+  font-size: 12px;
+  color: var(--c-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.list-path {
+  flex: none;
+  max-width: 220px;
+  font-size: 12px;
+  color: var(--c-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .home-footer {
   padding: 10px 40px;
   font-size: 12px;
@@ -591,6 +637,11 @@ mark {
 .check.checked {
   border-color: var(--c-success);
   background: var(--c-success);
+}
+/* 只显示状态、不能点击（首页搜索结果） */
+.check.static {
+  cursor: default;
+  pointer-events: none;
 }
 
 /* ---------------- 概览 ---------------- */

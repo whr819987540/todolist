@@ -6,25 +6,45 @@ import {
   MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
-import { App as AntApp, Button, Dropdown, Empty, Progress, Spin, Tooltip, type MenuProps } from "antd";
+import {
+  App as AntApp,
+  Button,
+  Dropdown,
+  Empty,
+  Input,
+  Progress,
+  Spin,
+  Tooltip,
+  type InputRef,
+  type MenuProps,
+} from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useWindowFocus } from "../hooks";
 import { ThemeButton } from "../theme";
-import type { WorkspaceInfo } from "../types";
+import type { WorkspaceInfo, WorkspaceTree } from "../types";
 import { avatarColor, compareName, firstChar, relativeTime, useNow } from "../utils";
+import Highlight from "./Highlight";
 import Logo from "./Logo";
 import { useNameDialog } from "./NameDialog";
+import SearchResults from "./SearchResults";
 import SettingsButton from "./SettingsButton";
+import type { Selection } from "./Sidebar";
 
 /** 首页：全部工作区 */
-export default function Home({ onEnter }: { onEnter: (workspace: string) => void }) {
+export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: Selection) => void }) {
   const { message, modal } = AntApp.useApp();
   const [list, setList] = useState<WorkspaceInfo[] | null>(null);
   const [root, setRoot] = useState("");
+  const [keyword, setKeyword] = useState("");
+  const [trees, setTrees] = useState<WorkspaceTree[] | null>(null);
   const [dialog, openDialog] = useNameDialog();
+  const searchRef = useRef<InputRef>(null);
   const now = useNow();
+  const kw = keyword.trim();
+  const searching = kw !== "";
 
   const reload = useCallback(async () => {
     try {
@@ -44,6 +64,18 @@ export default function Home({ onEnter }: { onEnter: (workspace: string) => void
   useWindowFocus((focused) => {
     if (focused) reload();
   });
+
+  // 搜索时才加载各工作区的项目和待办；工作区列表刷新（切回窗口、F5）后跟着重新加载
+  useEffect(() => {
+    if (!searching || !list) return;
+    let stale = false;
+    Promise.all(list.map((ws) => api.loadWorkspace(ws.name).catch(() => null))).then((ts) => {
+      if (!stale) setTrees(ts.filter((t) => t !== null));
+    });
+    return () => {
+      stale = true;
+    };
+  }, [searching, list]);
 
   const create = () =>
     openDialog({
@@ -72,6 +104,9 @@ export default function Home({ onEnter }: { onEnter: (workspace: string) => void
       } else if (ctrl && key === "n") {
         e.preventDefault();
         createRef.current();
+      } else if (ctrl && key === "f") {
+        e.preventDefault();
+        searchRef.current?.focus({ cursor: "all" });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -124,6 +159,44 @@ export default function Home({ onEnter }: { onEnter: (workspace: string) => void
     },
   });
 
+  const renderCard = (ws: WorkspaceInfo) => {
+    const pct = ws.todoCount ? Math.round((ws.doneCount / ws.todoCount) * 100) : 0;
+    return (
+      <Dropdown key={ws.name} menu={menu(ws)} trigger={["contextMenu"]}>
+        <div className="card ws-card" onClick={() => onEnter(ws.name)}>
+          <div className="card-head">
+            <span className="ws-avatar big" style={{ background: avatarColor(ws.name) }}>
+              {firstChar(ws.name)}
+            </span>
+            <div className="card-title">
+              <div className="card-name" title={ws.name}>
+                <Highlight text={ws.name} kw={kw} />
+              </div>
+              <div className="muted small">
+                {ws.projectCount} 个项目 · {ws.todoCount} 条待办
+              </div>
+            </div>
+            <Dropdown menu={menu(ws)} trigger={["click"]} placement="bottomRight">
+              <Button
+                type="text"
+                size="small"
+                icon={<MoreOutlined />}
+                onClick={(e) => e.stopPropagation()}
+              />
+            </Dropdown>
+          </div>
+          <Progress percent={pct} size="small" />
+          <div className="card-foot">
+            <span>
+              已完成 {ws.doneCount} / {ws.todoCount}
+            </span>
+            <span>更新于 {relativeTime(ws.updatedAt, now)}</span>
+          </div>
+        </div>
+      </Dropdown>
+    );
+  };
+
   return (
     <div className="home">
       <header className="home-header">
@@ -150,14 +223,42 @@ export default function Home({ onEnter }: { onEnter: (workspace: string) => void
       </header>
 
       <main className="home-main">
-        <div className="section-title">
-          我的工作区{list && list.length > 0 && <span className="muted">（{list.length}）</span>}
+        <div className="home-toolbar">
+          <div className="section-title">
+            {searching ? (
+              "搜索结果"
+            ) : (
+              <>我的工作区{list && list.length > 0 && <span className="muted">（{list.length}）</span>}</>
+            )}
+          </div>
+          {(searching || (list && list.length > 0)) && (
+            <Input
+              ref={searchRef}
+              className="home-search"
+              allowClear
+              prefix={<SearchOutlined className="muted" />}
+              placeholder="搜索工作区、项目、待办（Ctrl+F）"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setKeyword("");
+              }}
+            />
+          )}
         </div>
 
         {list === null ? (
           <div className="fullscreen-center">
             <Spin />
           </div>
+        ) : searching ? (
+          <SearchResults
+            kw={kw}
+            workspaces={list.filter((ws) => ws.name.toLowerCase().includes(kw.toLowerCase()))}
+            trees={trees}
+            renderCard={renderCard}
+            onEnter={onEnter}
+          />
         ) : list.length === 0 ? (
           <Empty className="home-empty" description="还没有工作区，先创建一个吧">
             <Button type="primary" size="large" icon={<PlusOutlined />} onClick={create}>
@@ -166,43 +267,7 @@ export default function Home({ onEnter }: { onEnter: (workspace: string) => void
           </Empty>
         ) : (
           <div className="card-grid">
-            {list.map((ws) => {
-              const pct = ws.todoCount ? Math.round((ws.doneCount / ws.todoCount) * 100) : 0;
-              return (
-                <Dropdown key={ws.name} menu={menu(ws)} trigger={["contextMenu"]}>
-                  <div className="card ws-card" onClick={() => onEnter(ws.name)}>
-                    <div className="card-head">
-                      <span className="ws-avatar big" style={{ background: avatarColor(ws.name) }}>
-                        {firstChar(ws.name)}
-                      </span>
-                      <div className="card-title">
-                        <div className="card-name" title={ws.name}>
-                          {ws.name}
-                        </div>
-                        <div className="muted small">
-                          {ws.projectCount} 个项目 · {ws.todoCount} 条待办
-                        </div>
-                      </div>
-                      <Dropdown menu={menu(ws)} trigger={["click"]} placement="bottomRight">
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<MoreOutlined />}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </Dropdown>
-                    </div>
-                    <Progress percent={pct} size="small" />
-                    <div className="card-foot">
-                      <span>
-                        已完成 {ws.doneCount} / {ws.todoCount}
-                      </span>
-                      <span>更新于 {relativeTime(ws.updatedAt, now)}</span>
-                    </div>
-                  </div>
-                </Dropdown>
-              );
-            })}
+            {list.map(renderCard)}
             <div className="card card-add" onClick={create}>
               <PlusOutlined /> 新建工作区
             </div>
