@@ -823,6 +823,10 @@ mark {
   margin: 0 8px;
 }
 
+.editor-alert {
+  margin-top: 12px;
+}
+
 .editor-text {
   flex: 1;
   min-height: 0;

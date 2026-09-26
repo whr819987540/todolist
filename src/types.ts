@@ -27,11 +27,16 @@ export interface WorkspaceInfo {
   updatedAt: number;
 }
 
+/** 正文文件的编码；unknown 表示认不出来，只能只读显示 */
+export type TextEncoding = "UTF-8" | "UTF-16" | "GBK" | "unknown";
+
 export interface TodoDetail {
   summary: TodoSummary;
   content: string;
   path: string;
   mtime: number;
+  /** 文件现在的编码；在软件里保存后一律是 UTF-8 */
+  encoding: TextEncoding;
 }
 
 export interface SaveResult {

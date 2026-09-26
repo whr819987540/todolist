@@ -6,13 +6,26 @@ import {
   MoreOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
-import { App as AntApp, Breadcrumb, Button, Dropdown, Input, Modal, Spin, Tag, Tooltip, type InputRef, type MenuProps } from "antd";
+import {
+  Alert,
+  App as AntApp,
+  Breadcrumb,
+  Button,
+  Dropdown,
+  Input,
+  Modal,
+  Spin,
+  Tag,
+  Tooltip,
+  type InputRef,
+  type MenuProps,
+} from "antd";
 import { useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { registerFlusher, useWindowFocus } from "../hooks";
 import { useSettings } from "../settings";
 import { shortcutLabel } from "../shortcuts";
-import type { TodoSummary } from "../types";
+import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
 import { countChars, fullTime, relativeTime, useNow } from "../utils";
 
 export interface EditorHandle {
@@ -41,6 +54,13 @@ type Status = "saved" | "dirty" | "saving" | "error";
 const CONTENT_DELAY = 800;
 const TITLE_DELAY = 500;
 
+const ENCODING_LABELS: Record<TextEncoding, string> = {
+  "UTF-8": "UTF-8",
+  "UTF-16": "UTF-16（修改后转存为 UTF-8）",
+  GBK: "GBK（修改后转存为 UTF-8）",
+  unknown: "编码无法识别（只读）",
+};
+
 /** 右侧的待办详情：标题 + Markdown 纯文本内容，自动保存 */
 export default function TodoEditor(props: Props) {
   const { workspace, project, summary } = props;
@@ -54,8 +74,11 @@ export default function TodoEditor(props: Props) {
   const [content, setContent] = useState("");
   const [title, setTitle] = useState(summary.title);
   const [path, setPath] = useState("");
+  const [encoding, setEncoding] = useState<TextEncoding>("UTF-8");
   const [status, setStatus] = useState<Status>("saved");
   const [conflict, setConflict] = useState(false);
+  // 认不出编码的文件只读，免得保存时把原文件覆盖成乱码
+  const readOnly = encoding === "unknown";
 
   const titleRef = useRef<InputRef>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -108,6 +131,7 @@ export default function TodoEditor(props: Props) {
         s.savedContent = text;
         s.mtime = r.mtime;
         s.conflict = false;
+        setEncoding("UTF-8");
         propsRef.current.onSummary(r.summary);
         refreshStatus();
       } catch (e) {
@@ -152,6 +176,7 @@ export default function TodoEditor(props: Props) {
         s.loaded = true;
         setContent(d.content);
         setPath(d.path);
+        setEncoding(d.encoding);
         setLoading(false);
         propsRef.current.onSummary(d.summary);
         if (propsRef.current.autoFocusTitle) titleRef.current?.focus();
@@ -198,19 +223,20 @@ export default function TodoEditor(props: Props) {
       const d = await api.readTodo(workspace, project, id);
       // 读取期间用户开始打字了：保留用户的输入，由保存时的冲突检测兜底
       if (d.mtime === s.mtime || s.content !== s.savedContent) return;
-      applyDiskContent(d.content, d.mtime);
+      applyDiskContent(d);
       propsRef.current.onSummary(d.summary);
     } catch {
       /* 文件被删等情况由外层刷新处理 */
     }
   });
 
-  const applyDiskContent = (text: string, mtime: number) => {
+  const applyDiskContent = (d: TodoDetail) => {
     const el = textRef.current;
     const caret = el?.selectionStart ?? 0;
-    s.content = s.savedContent = text;
-    s.mtime = mtime;
-    setContent(text);
+    s.content = s.savedContent = d.content;
+    s.mtime = d.mtime;
+    setContent(d.content);
+    setEncoding(d.encoding);
     refreshStatus();
     requestAnimationFrame(() => {
       if (el && document.activeElement === el) el.setSelectionRange(caret, caret);
@@ -242,7 +268,7 @@ export default function TodoEditor(props: Props) {
     try {
       const d = await api.readTodo(workspace, project, id);
       s.conflict = false;
-      applyDiskContent(d.content, d.mtime);
+      applyDiskContent(d);
       propsRef.current.onSummary(d.summary);
     } catch (e) {
       message.error(errMsg(e));
@@ -349,16 +375,27 @@ export default function TodoEditor(props: Props) {
         ) : loadError ? (
           <div className="editor-loading error-text">{loadError}</div>
         ) : (
-          <textarea
-            ref={textRef}
-            className="editor-text"
-            spellCheck={false}
-            value={content}
-            placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法（此处按纯文本编辑，右键左侧待办可用默认程序打开）"}
-            onChange={(e) => onContentChange(e.target.value)}
-            onBlur={() => saveContent()}
-            onKeyDown={onKeyDown}
-          />
+          <>
+            {readOnly && (
+              <Alert
+                className="editor-alert"
+                type="warning"
+                showIcon
+                title="认不出这条待办正文的编码（不是 UTF-8 或 GBK），为免损坏原文件，这里只读显示；需要修改请用默认程序打开"
+              />
+            )}
+            <textarea
+              ref={textRef}
+              className="editor-text"
+              spellCheck={false}
+              readOnly={readOnly}
+              value={content}
+              placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法（此处按纯文本编辑，右键左侧待办可用默认程序打开）"}
+              onChange={(e) => onContentChange(e.target.value)}
+              onBlur={() => saveContent()}
+              onKeyDown={onKeyDown}
+            />
+          </>
         )}
       </div>
 
@@ -369,7 +406,7 @@ export default function TodoEditor(props: Props) {
         </span>
         <span>{countChars(content)} 字</span>
         <span>{lines} 行</span>
-        <span>Markdown · UTF-8</span>
+        <span className={readOnly ? "warning-text" : undefined}>Markdown · {ENCODING_LABELS[encoding]}</span>
         <span className="statusbar-path" title="点击复制文件路径" onClick={copyPath}>
           {path}
         </span>

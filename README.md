@@ -31,6 +31,7 @@ TodoList\
 
 - 标题单独存在 `.todos.json` 里，正文存在 `.md` 文件里
 - 直接往项目文件夹里放 `.md` 文件，软件会自动识别为新待办（文件名作为标题）
+- 正文按 UTF-8 保存；放进来的 GBK（ANSI）或带 BOM 的 UTF-16 文件也能正常显示，在软件里改过后转存为 UTF-8；认不出编码的文件只读显示，需要修改时用默认程序打开
 - `.todos.json` 损坏时会备份为 `.todos.json.broken-时间戳` 并重建，正文不受影响
 - 删除的工作区 / 项目 / 待办进入 Windows 回收站
 - WebDAV 密码保存在 Windows 凭据管理器（普通凭据 `webdav.com.whr.todolist`），不写进任何文件，也不会进入备份包

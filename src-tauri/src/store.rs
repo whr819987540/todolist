@@ -12,8 +12,12 @@
 //!
 //! Markdown 文件是“待办是否存在”的唯一依据：元数据里有但文件不在的条目会被清理，
 //! 文件在但元数据里没有的（例如用户手动拷进来的 .md）会被自动补登记。
+//!
+//! 正文一律按 UTF-8 写入；拷进来的文件可能是 GBK 或带 BOM 的 UTF-16，读取时识别编码，
+//! 认不出来的只读，不允许在软件里保存，免得把原文件覆盖成乱码。
 
 use chrono::Local;
+use encoding_rs::{DecoderResult, Encoding, GB18030, UTF_8};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
@@ -114,6 +118,24 @@ pub struct TodoDetail {
     pub path: String,
     /// .md 文件的修改时间，保存时回传用于检测外部修改冲突
     pub mtime: i64,
+    /// .md 文件现在的编码；保存后一律变成 UTF-8
+    pub encoding: TextEncoding,
+}
+
+/// 正文文件的编码
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum TextEncoding {
+    #[serde(rename = "UTF-8")]
+    Utf8,
+    /// 带 BOM 的 UTF-16（记事本里的“Unicode”）
+    #[serde(rename = "UTF-16")]
+    Utf16,
+    /// 中文 Windows 的 ANSI 编码（按兼容 GBK 的 GB18030 解码）
+    #[serde(rename = "GBK")]
+    Gbk,
+    /// 认不出来：尽量显示，但不能在软件里保存
+    #[serde(rename = "unknown")]
+    Unknown,
 }
 
 #[derive(Debug, Serialize)]
@@ -314,13 +336,14 @@ impl Store {
         let path = Self::todo_file(&dir, id)?;
         let (meta, idx) = meta_with_entry(&dir, id)?;
         let bytes = fs::read(&path).map_err(|e| format!("读取待办失败：{e}"))?;
-        let content = decode_text(&bytes);
+        let Decoded { text: content, encoding } = decode_text(&bytes, true);
         let mtime = mtime_ms(&path).unwrap_or(0);
         Ok(TodoDetail {
             summary: summary_of(&meta.todos[idx], mtime, make_preview(&content)),
             content,
             path: path.to_string_lossy().into_owned(),
             mtime,
+            encoding,
         })
     }
 
@@ -346,6 +369,11 @@ impl Store {
                     mtime: current,
                 });
             }
+        }
+        // 认不出编码的文件界面上是只读的，这里再挡一次；force 是用户在冲突对话框里明确选了覆盖
+        let unknown = fs::read(&path).is_ok_and(|b| decode_text(&b, true).encoding == TextEncoding::Unknown);
+        if unknown && !force {
+            return Err("正文文件不是 UTF-8 或 GBK 编码，为免损坏原文件不能在这里保存，请用默认程序打开编辑".into());
         }
         atomic_write(&path, content.as_bytes()).map_err(|e| format!("保存失败：{e}"))?;
         let mtime = mtime_ms(&path).unwrap_or_else(now_ms);
@@ -627,8 +655,41 @@ pub(crate) fn strip_bom(bytes: &[u8]) -> &[u8] {
     bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
 }
 
-fn decode_text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(strip_bom(bytes)).replace("\r\n", "\n")
+struct Decoded {
+    text: String,
+    encoding: TextEncoding,
+}
+
+/// 识别编码并解码正文：有 BOM 按 BOM，没有就先试 UTF-8、再试 GBK；都不行时尽量解出来并标记为 Unknown。
+/// `complete` 为 false 表示 bytes 只是文件开头，末尾可能截在字符中间。
+fn decode_text(bytes: &[u8], complete: bool) -> Decoded {
+    let bom = Encoding::for_bom(bytes);
+    let body = &bytes[bom.map_or(0, |(_, len)| len)..];
+    let found = match bom {
+        Some((enc, _)) => {
+            let kind = if enc == UTF_8 { TextEncoding::Utf8 } else { TextEncoding::Utf16 };
+            decode_strict(enc, body, complete).map(|t| (t, kind))
+        }
+        None => decode_strict(UTF_8, body, complete)
+            .map(|t| (t, TextEncoding::Utf8))
+            .or_else(|| decode_strict(GB18030, body, complete).map(|t| (t, TextEncoding::Gbk))),
+    };
+    let (text, encoding) = found.unwrap_or_else(|| {
+        let enc = bom.map_or(UTF_8, |(enc, _)| enc);
+        (enc.decode_without_bom_handling(body).0.into_owned(), TextEncoding::Unknown)
+    });
+    Decoded { text: text.replace("\r\n", "\n"), encoding }
+}
+
+/// 按指定编码严格解码：有非法字节，或解出了 NUL（正常文本不会有，多半是不带 BOM 的 UTF-16 或二进制文件，
+/// GBK 也能把它们“解”成功）都返回 None
+fn decode_strict(enc: &'static Encoding, bytes: &[u8], last: bool) -> Option<String> {
+    let mut decoder = enc.new_decoder_without_bom_handling();
+    let mut out = String::with_capacity(decoder.max_utf8_buffer_length_without_replacement(bytes.len())?);
+    match decoder.decode_to_string_without_replacement(bytes, &mut out, last) {
+        (DecoderResult::InputEmpty, _) if !out.contains('\0') => Some(out),
+        _ => None,
+    }
 }
 
 fn read_preview(path: &Path) -> String {
@@ -636,8 +697,8 @@ fn read_preview(path: &Path) -> String {
     if let Ok(f) = File::open(path) {
         let _ = f.take(PREVIEW_READ_BYTES).read_to_end(&mut buf);
     }
-    let text = String::from_utf8_lossy(strip_bom(&buf));
-    // 截断位置可能落在多字节字符中间，丢掉末尾的替换字符
+    // 读满了说明后面还有内容，截断位置可能落在多字节字符中间
+    let text = decode_text(&buf, (buf.len() as u64) < PREVIEW_READ_BYTES).text;
     make_preview(text.trim_end_matches('\u{FFFD}'))
 }
 
@@ -928,6 +989,54 @@ mod tests {
         let gen = todos.iter().find(|t| t.id == "20250101-080000").unwrap();
         assert_eq!(gen.title, "");
         assert_eq!(s.read_todo("w", "p", "会议纪要").unwrap().content, "周会\n内容");
+    }
+
+    #[test]
+    fn non_utf8_files_are_decoded_or_left_untouched() {
+        let (_tmp, s) = store("encoding");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let dir = s.project_path("w", "p").unwrap();
+        fs::write(dir.join("gbk.md"), encoding_rs::GBK.encode("# 周会\r\n讨论排期").0).unwrap();
+        let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain("待办 A".encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        fs::write(dir.join("utf16.md"), utf16).unwrap();
+        let broken = b"abc \xff\xfe\xff def".to_vec();
+        fs::write(dir.join("broken.md"), &broken).unwrap();
+
+        let tree = s.load_workspace("w").unwrap();
+        let preview = |id: &str| tree.projects[0].todos.iter().find(|t| t.id == id).unwrap().preview.clone();
+        assert_eq!(preview("gbk"), "周会 讨论排期");
+        assert_eq!(preview("utf16"), "待办 A");
+
+        // GBK：正常显示，保存后转成 UTF-8
+        let d = s.read_todo("w", "p", "gbk").unwrap();
+        assert_eq!((d.content.as_str(), d.encoding), ("# 周会\n讨论排期", TextEncoding::Gbk));
+        assert!(s.save_todo_content("w", "p", "gbk", "# 周会\n改过了", Some(d.mtime), false).unwrap().saved);
+        assert_eq!(fs::read(dir.join("gbk.md")).unwrap(), "# 周会\n改过了".as_bytes());
+        assert_eq!(s.read_todo("w", "p", "gbk").unwrap().encoding, TextEncoding::Utf8);
+
+        assert_eq!(s.read_todo("w", "p", "utf16").unwrap().encoding, TextEncoding::Utf16);
+
+        // 认不出来的：不许覆盖，原文件保持原样
+        let d = s.read_todo("w", "p", "broken").unwrap();
+        assert_eq!(d.encoding, TextEncoding::Unknown);
+        assert!(s.save_todo_content("w", "p", "broken", "x", Some(d.mtime), false).is_err());
+        assert_eq!(fs::read(dir.join("broken.md")).unwrap(), broken);
+    }
+
+    #[test]
+    fn truncated_preview_keeps_encoding() {
+        // 预览只读文件开头，截断处落在字符中间时不能误判编码
+        let (_tmp, s) = store("preview-cut");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let dir = s.project_path("w", "p").unwrap();
+        fs::write(dir.join("utf8.md"), "字".repeat(2000)).unwrap();
+        fs::write(dir.join("gbk.md"), encoding_rs::GBK.encode(&format!("a{}", "字".repeat(3000))).0).unwrap();
+        let tree = s.load_workspace("w").unwrap();
+        let preview = |id: &str| tree.projects[0].todos.iter().find(|t| t.id == id).unwrap().preview.clone();
+        assert_eq!(preview("utf8"), "字".repeat(PREVIEW_CHARS));
+        assert_eq!(preview("gbk"), format!("a{}", "字".repeat(PREVIEW_CHARS - 1)));
     }
 
     #[test]
