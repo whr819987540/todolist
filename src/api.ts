@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   SaveResult,
+  ShortcutInfo,
   TodoDetail,
   TodoSummary,
   WorkspaceInfo,
@@ -53,6 +54,11 @@ export const api = {
   openFolder: (workspace?: string, project?: string) =>
     invoke<void>("open_folder", { workspace: workspace ?? null, project: project ?? null }),
   quitApp: () => invoke<void>("quit_app"),
+
+  getToggleShortcut: () => invoke<ShortcutInfo>("get_toggle_shortcut"),
+  /** null 表示不使用快捷键 */
+  setToggleShortcut: (shortcut: string | null) => invoke<ShortcutInfo>("set_toggle_shortcut", { shortcut }),
+  pauseToggleShortcut: (paused: boolean) => invoke<void>("pause_toggle_shortcut", { paused }),
 };
 
 /** invoke 失败时 reject 的是 Rust 端返回的中文错误字符串 */

@@ -41,3 +41,11 @@ export interface SaveResult {
 }
 
 export type SortKey = "created" | "updated" | "title";
+
+export interface ShortcutInfo {
+  /** 格式如 "Ctrl+Alt+T"；null 表示不使用 */
+  shortcut: string | null;
+  defaultShortcut: string;
+  /** false 表示设置了但没注册上（例如被其他程序占用） */
+  registered: boolean;
+}

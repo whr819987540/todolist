@@ -32,6 +32,7 @@ import {
   useNow,
 } from "../utils";
 import { projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
+import SettingsButton from "./SettingsButton";
 
 export const WS_KEY = "\u0000workspace";
 
@@ -135,6 +136,7 @@ export default function Sidebar(props: Props) {
         </Tooltip>
         <WorkspaceSwitcher current={tree.name} onSwitch={props.onSwitchWorkspace} onHome={a.goHome} />
         <ThemeButton type="text" />
+        <SettingsButton type="text" />
       </div>
 
       <div className="sidebar-search">

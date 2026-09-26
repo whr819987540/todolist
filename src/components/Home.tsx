@@ -16,6 +16,7 @@ import type { WorkspaceInfo } from "../types";
 import { avatarColor, compareName, firstChar, relativeTime, useNow } from "../utils";
 import Logo from "./Logo";
 import { useNameDialog } from "./NameDialog";
+import SettingsButton from "./SettingsButton";
 
 /** 首页：全部工作区 */
 export default function Home({ onEnter }: { onEnter: (workspace: string) => void }) {
@@ -135,6 +136,7 @@ export default function Home({ onEnter }: { onEnter: (workspace: string) => void
         </div>
         <div className="home-actions">
           <ThemeButton />
+          <SettingsButton />
           <Tooltip title="刷新（F5）">
             <Button icon={<ReloadOutlined />} onClick={reload} />
           </Tooltip>

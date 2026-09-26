@@ -623,7 +623,7 @@ fn is_generated_id(id: &str) -> bool {
 // 文本处理
 // ---------------------------------------------------------------------------
 
-fn strip_bom(bytes: &[u8]) -> &[u8] {
+pub(crate) fn strip_bom(bytes: &[u8]) -> &[u8] {
     bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
 }
 
@@ -792,7 +792,7 @@ fn rename_dir(dir: &Path, parent: &Path, old: &str, new: &str, what: &str) -> Re
 
 /// 先写临时文件再替换，避免写到一半崩溃留下残缺文件；
 /// 目标被其他程序以不允许替换的方式打开时退回直接覆盖写。
-fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let tmp = path.with_file_name(format!(".{name}.tmp"));
     fs::write(&tmp, data)?;

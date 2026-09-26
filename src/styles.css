@@ -89,6 +89,9 @@ mark {
 .error-text {
   color: var(--c-error);
 }
+.warning-text {
+  color: var(--c-warning);
+}
 
 .fullscreen-center {
   height: 100%;
@@ -857,4 +860,75 @@ mark {
   .list-time {
     width: auto;
   }
+}
+
+/* ---------------- 设置 ---------------- */
+
+.setting-item {
+  padding: 4px 0 8px;
+}
+.setting-label {
+  font-weight: 600;
+}
+.setting-desc {
+  font-size: 12px;
+  color: var(--c-text-3);
+  margin: 4px 0 12px;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.setting-hint {
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.shortcut-box {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 11px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--c-border-strong);
+  border-radius: 6px;
+  background: var(--c-bg);
+  cursor: pointer;
+  outline: none;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.shortcut-box:hover {
+  border-color: var(--c-primary);
+}
+.shortcut-box.recording {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 2px var(--c-primary-bg);
+}
+
+.keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.keys-plus {
+  color: var(--c-text-3);
+  font-size: 12px;
+}
+kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  color: var(--c-text);
+  background: var(--c-fill);
+  border: 1px solid var(--c-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
 }

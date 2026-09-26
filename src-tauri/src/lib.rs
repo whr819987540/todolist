@@ -1,11 +1,15 @@
+mod settings;
 mod store;
 
+use serde::Serialize;
+use settings::{SettingsStore, DEFAULT_TOGGLE_SHORTCUT};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use store::{Store, TodoDetail, TodoSummary, WorkspaceInfo, WorkspaceTree, SaveResult};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_window_state::StateFlags;
 
 type Cmd<T> = Result<T, String>;
@@ -208,6 +212,19 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+/// 主窗口在前台时藏到托盘，否则（隐藏、最小化、被其他窗口挡住）调到前台
+fn toggle_main_window(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let in_front = w.is_visible().unwrap_or(false)
+        && !w.is_minimized().unwrap_or(false)
+        && w.is_focused().unwrap_or(false);
+    if in_front {
+        let _ = w.hide();
+    } else {
+        show_main_window(app);
+    }
+}
+
 /// 通知前端保存后调用 quit_app；前端卡住没响应时 5 秒后强制退出
 fn request_quit(app: &AppHandle) {
     let _ = app.emit("quit-requested", ());
@@ -277,6 +294,74 @@ fn set_window_icons(window: &tauri::WebviewWindow) {
     }
 }
 
+// ----- 全局快捷键 -----
+
+/// 重新注册显示/隐藏主窗口的全局快捷键（先清掉旧的）；None 表示不使用
+fn register_toggle_shortcut(app: &AppHandle, shortcut: Option<&str>) -> Cmd<()> {
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let Some(text) = shortcut else { return Ok(()) };
+    let parsed: Shortcut = text.parse().map_err(|_| format!("无法识别的快捷键：{text}"))?;
+    gs.register(parsed)
+        .map_err(|_| format!("快捷键 {text} 注册失败，可能已被其他程序占用，请换一个"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShortcutInfo {
+    shortcut: Option<String>,
+    default_shortcut: &'static str,
+    /// false 表示设置了快捷键但没注册上（例如启动时已被其他程序占用）
+    registered: bool,
+}
+
+fn shortcut_info(app: &AppHandle, settings: &SettingsStore) -> ShortcutInfo {
+    let shortcut = settings.get().toggle_shortcut;
+    let registered = shortcut
+        .as_deref()
+        .and_then(|s| s.parse::<Shortcut>().ok())
+        .is_some_and(|s| app.global_shortcut().is_registered(s));
+    ShortcutInfo {
+        shortcut,
+        default_shortcut: DEFAULT_TOGGLE_SHORTCUT,
+        registered,
+    }
+}
+
+#[tauri::command]
+fn get_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>) -> ShortcutInfo {
+    shortcut_info(&app, &settings)
+}
+
+#[tauri::command]
+fn set_toggle_shortcut(
+    app: AppHandle,
+    settings: State<'_, SettingsStore>,
+    shortcut: Option<String>,
+) -> Cmd<ShortcutInfo> {
+    let old = settings.get();
+    let mut next = old.clone();
+    next.toggle_shortcut = shortcut;
+    let saved = register_toggle_shortcut(&app, next.toggle_shortcut.as_deref())
+        .and_then(|_| settings.save(next));
+    if let Err(e) = saved {
+        // 新的用不了就恢复原来的
+        let _ = register_toggle_shortcut(&app, old.toggle_shortcut.as_deref());
+        return Err(e);
+    }
+    Ok(shortcut_info(&app, &settings))
+}
+
+/// 设置界面录制快捷键期间暂停，否则按下当前快捷键会直接把窗口藏起来、录不到
+#[tauri::command]
+fn pause_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>, paused: bool) {
+    if paused {
+        let _ = app.global_shortcut().unregister_all();
+    } else {
+        let _ = register_toggle_shortcut(&app, settings.get().toggle_shortcut.as_deref());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -290,9 +375,22 @@ pub fn run() {
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
                 .build(),
         )
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        toggle_main_window(app);
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             let store = Store::new(data_root(app)?)?;
+            let settings = SettingsStore::load(store.root());
+            // 注册失败（被其他程序占用）不影响启动，设置界面里会提示
+            let _ = register_toggle_shortcut(app.handle(), settings.get().toggle_shortcut.as_deref());
             app.manage(store);
+            app.manage(settings);
             setup_tray(app)?;
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window("main") {
@@ -328,6 +426,9 @@ pub fn run() {
             reveal_todo,
             open_folder,
             quit_app,
+            get_toggle_shortcut,
+            set_toggle_shortcut,
+            pause_toggle_shortcut,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
