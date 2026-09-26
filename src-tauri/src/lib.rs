@@ -1,8 +1,12 @@
 mod store;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use store::{Store, TodoDetail, TodoSummary, WorkspaceInfo, WorkspaceTree, SaveResult};
-use tauri::{Manager, State};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri_plugin_window_state::StateFlags;
 
 type Cmd<T> = Result<T, String>;
 
@@ -187,23 +191,89 @@ async fn open_folder(
     tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("无法打开文件夹：{e}"))
 }
 
+/// 前端把编辑中的内容写盘后调用，真正退出程序
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+// ----- 系统托盘 -----
+
+/// 把主窗口从托盘 / 最小化状态调回前台
+fn show_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// 通知前端保存后调用 quit_app；前端卡住没响应时 5 秒后强制退出
+fn request_quit(app: &AppHandle) {
+    let _ = app.emit("quit-requested", ());
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        app.exit(0);
+    });
+}
+
+/// 托盘图标：左键单击显示主窗口，右键菜单「显示主窗口 / 退出」
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let mut tray = TrayIconBuilder::with_id("main")
+        .tooltip("待办清单")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, e| match e.id().as_ref() {
+            "show" => show_main_window(app),
+            "quit" => request_quit(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, e| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = e
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // 已经开着时再次启动只把原窗口调到前台，避免两个进程同时写同一份数据
+        // 已经开着时再次启动只把原窗口调到前台（包括藏在托盘里时），避免两个进程同时写同一份数据
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
+            show_main_window(app);
         }))
-        // 记住窗口大小和位置
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // 记住窗口大小和位置；不记可见性，否则从托盘退出后会记成“隐藏”
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                .build(),
+        )
         .setup(|app| {
             let store = Store::new(data_root(app)?)?;
             app.manage(store);
+            setup_tray(app)?;
             Ok(())
+        })
+        // 点窗口的关闭按钮只隐藏到托盘，真正退出走托盘菜单的「退出」
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_data_root,
@@ -225,6 +295,7 @@ pub fn run() {
             open_todo_external,
             reveal_todo,
             open_folder,
+            quit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

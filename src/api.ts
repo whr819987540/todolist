@@ -52,6 +52,7 @@ export const api = {
     invoke<void>("reveal_todo", { workspace, project, id }),
   openFolder: (workspace?: string, project?: string) =>
     invoke<void>("open_folder", { workspace: workspace ?? null, project: project ?? null }),
+  quitApp: () => invoke<void>("quit_app"),
 };
 
 /** invoke 失败时 reject 的是 Rust 端返回的中文错误字符串 */

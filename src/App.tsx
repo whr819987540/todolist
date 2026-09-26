@@ -1,5 +1,7 @@
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useState } from "react";
+import { api } from "./api";
 import Home from "./components/Home";
 import type { Selection } from "./components/Sidebar";
 import WorkspaceView from "./components/WorkspaceView";
@@ -16,19 +18,18 @@ export default function App() {
     [],
   );
 
-  // 关闭窗口前先把编辑中的内容保存下来
+  // 点关闭按钮时 Rust 端把窗口藏到托盘，这里阻止默认的销毁窗口并把编辑中的内容写盘；
+  // 从托盘「退出」时同样先写盘，再真正退出
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    getCurrentWindow()
-      .onCloseRequested(() => flushAll())
-      .then((u) => {
-        if (disposed) u();
-        else unlisten = u;
-      });
+    const pending = [
+      getCurrentWindow().onCloseRequested((e) => {
+        e.preventDefault();
+        return flushAll();
+      }),
+      listen("quit-requested", () => flushAll().finally(api.quitApp)),
+    ];
     return () => {
-      disposed = true;
-      unlisten?.();
+      pending.forEach((p) => p.then((unlisten) => unlisten()));
     };
   }, []);
 
