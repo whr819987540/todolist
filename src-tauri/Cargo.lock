@@ -3780,6 +3780,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
  "trash",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

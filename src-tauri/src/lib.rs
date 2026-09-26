@@ -249,6 +249,34 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+// ----- 窗口图标 -----
+
+/// Tauri 只给窗口设了小图标（ICON_SMALL），大图标和窗口类图标都是空的，
+/// Alt+Tab、任务栏缩略图等用大图标的地方就会显示系统默认图标。
+/// 这里从 exe 资源里（tauri-build 以 ID 32512 嵌入的 icon.ico）按当前 DPI 取合适尺寸，大小图标都补上。
+#[cfg(windows)]
+fn set_window_icons(window: &tauri::WebviewWindow) {
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        LoadImageW, SendMessageW, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR, SM_CXICON,
+        SM_CXSMICON, WM_SETICON,
+    };
+    let Ok(hwnd) = window.hwnd() else { return };
+    let hwnd = hwnd.0;
+    unsafe {
+        let dpi = GetDpiForWindow(hwnd);
+        let module = GetModuleHandleW(std::ptr::null());
+        for (kind, metric) in [(ICON_BIG, SM_CXICON), (ICON_SMALL, SM_CXSMICON)] {
+            let size = GetSystemMetricsForDpi(metric, dpi);
+            let icon = LoadImageW(module, 32512usize as *const u16, IMAGE_ICON, size, size, LR_DEFAULTCOLOR);
+            if !icon.is_null() {
+                SendMessageW(hwnd, WM_SETICON, kind as usize, icon as isize);
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -266,6 +294,10 @@ pub fn run() {
             let store = Store::new(data_root(app)?)?;
             app.manage(store);
             setup_tray(app)?;
+            #[cfg(windows)]
+            if let Some(w) = app.get_webview_window("main") {
+                set_window_icons(&w);
+            }
             Ok(())
         })
         // 点窗口的关闭按钮只隐藏到托盘，真正退出走托盘菜单的「退出」
