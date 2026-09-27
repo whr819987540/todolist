@@ -119,7 +119,7 @@ export default function BackupSettings() {
   const confirmRestore = (what: string, doRestore: () => Promise<SettingsInfo>) =>
     modal.confirm({
       title: "恢复设置？",
-      content: `将用${what}覆盖当前的设置（快捷键等），待办数据不受影响。`,
+      content: `将用${what}覆盖当前的设置（快捷键、字号等），待办数据不受影响。`,
       okText: "恢复",
       cancelText: "取消",
       onOk: async () => {
@@ -241,7 +241,7 @@ export default function BackupSettings() {
         >
           立即备份到 WebDAV
         </Button>
-        <span className="setting-desc">只含快捷键等设置（.settings.json），不含待办数据和密码</span>
+        <span className="setting-desc">只含快捷键、字号等设置（.settings.json），不含待办数据和密码</span>
       </div>
       {list}
       <input ref={fileRef} type="file" accept=".zip,application/zip" hidden onChange={onPickFile} />

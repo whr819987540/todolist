@@ -18,6 +18,9 @@
   --c-fill: rgba(0, 0, 0, 0.02);
   --c-highlight: #ffe58f;
   --font: -apple-system, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  /* 字号由 settings.tsx 按设置注入，这里是默认值 */
+  --fs-sidebar: 14px;
+  --fs-editor: 15px;
 }
 
 * {
@@ -442,11 +445,21 @@ mark {
 
 /* ---------------- 树 ---------------- */
 
+/* 树里的尺寸都跟着 --fs-sidebar 走，注释里是默认 14px 时的值；次要文字最小 11px，再小就看不清了 */
 .tree {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 2px 0 12px;
+  font-size: var(--fs-sidebar);
+}
+.tree .ws-avatar {
+  width: calc(var(--fs-sidebar) + 6px); /* 20px */
+  height: calc(var(--fs-sidebar) + 6px);
+  font-size: calc(var(--fs-sidebar) - 2px); /* 12px */
+}
+.tree .project-icon {
+  font-size: calc(var(--fs-sidebar) + 1px); /* 15px */
 }
 
 .tree-row {
@@ -454,7 +467,7 @@ mark {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
+  min-height: calc(var(--fs-sidebar) + 18px); /* 32px */
   margin: 1px 8px;
   padding-right: 6px;
   border-radius: 6px;
@@ -506,7 +519,7 @@ mark {
 
 .row-count {
   flex: none;
-  font-size: 12px;
+  font-size: max(11px, calc(var(--fs-sidebar) - 2px));
   color: var(--c-text-3);
   min-width: 16px;
   text-align: right;
@@ -542,7 +555,7 @@ mark {
 }
 
 .tree-empty {
-  font-size: 12px;
+  font-size: max(11px, calc(var(--fs-sidebar) - 2px));
   color: var(--c-text-3);
   padding: 6px 12px;
 }
@@ -569,8 +582,8 @@ mark {
   min-width: 0;
 }
 .todo-title {
-  font-size: 13.5px;
-  line-height: 20px;
+  font-size: calc(var(--fs-sidebar) - 0.5px); /* 13.5px */
+  line-height: calc(var(--fs-sidebar) + 6px); /* 20px */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -588,8 +601,8 @@ mark {
   font-weight: normal;
 }
 .todo-meta {
-  font-size: 12px;
-  line-height: 18px;
+  font-size: max(11px, calc(var(--fs-sidebar) - 2px)); /* 12px */
+  line-height: calc(var(--fs-sidebar) + 4px); /* 18px */
   color: var(--c-text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -637,6 +650,10 @@ mark {
 .check.checked {
   border-color: var(--c-success);
   background: var(--c-success);
+}
+/* 和待办标题的第一行垂直居中 */
+.todo-row .check {
+  margin-top: calc(var(--fs-sidebar) / 2 - 5px); /* 2px */
 }
 /* 只显示状态、不能点击（首页搜索结果） */
 .check.static {
@@ -838,7 +855,7 @@ mark {
   background: transparent;
   color: var(--c-text);
   font-family: var(--font);
-  font-size: 15px;
+  font-size: var(--fs-editor);
   line-height: 1.8;
   tab-size: 2;
 }
@@ -874,8 +891,12 @@ mark {
   direction: rtl;
   cursor: pointer;
 }
-.statusbar-path:hover {
+.statusbar-path:hover,
+.statusbar-font:hover {
   color: var(--c-primary);
+}
+.statusbar-font {
+  cursor: pointer;
 }
 
 .save-state {
@@ -951,6 +972,29 @@ mark {
 .setting-hint {
   font-size: 12px;
   margin-top: 8px;
+}
+
+/* 字号 */
+.font-settings {
+  padding-top: 12px;
+}
+.font-slider {
+  flex: 1;
+  margin: 0 12px 0 6px;
+}
+.font-input {
+  width: 96px;
+}
+.font-sample {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: 6px;
+  color: var(--c-text-2);
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .settings-tabs .ant-tabs-nav {

@@ -23,7 +23,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { registerFlusher, useWindowFocus } from "../hooks";
-import { useSettings } from "../settings";
+import { FONT_LIMITS, useSettings } from "../settings";
 import { shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
 import { countChars, fullTime, relativeTime, useNow } from "../utils";
@@ -53,6 +53,8 @@ type Status = "saved" | "dirty" | "saving" | "error";
 
 const CONTENT_DELAY = 800;
 const TITLE_DELAY = 500;
+/** Ctrl+滚轮调字号：滚轮转一格（约 100）调 1px，触控板双指缩放的小增量攒够一半再调 */
+const WHEEL_STEP = 50;
 
 const ENCODING_LABELS: Record<TextEncoding, string> = {
   "UTF-8": "UTF-8",
@@ -66,7 +68,8 @@ export default function TodoEditor(props: Props) {
   const { workspace, project, summary } = props;
   const id = summary.id;
   const { message } = AntApp.useApp();
-  const keys = useSettings().info?.settings;
+  const { info: settingsInfo, setFontSize } = useSettings();
+  const keys = settingsInfo?.settings;
   const now = useNow();
 
   const [loading, setLoading] = useState(true);
@@ -82,6 +85,7 @@ export default function TodoEditor(props: Props) {
 
   const titleRef = useRef<InputRef>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const propsRef = useRef(props);
   const messageRef = useRef(message);
   useEffect(() => {
@@ -243,6 +247,40 @@ export default function TodoEditor(props: Props) {
     });
   };
 
+  const zoomBy = (step: number) => {
+    const { min, max } = FONT_LIMITS.editor;
+    const size = setFontSize("editor", (cur) => cur + step);
+    const edge = size === max && step > 0 ? "（最大）" : size === min && step < 0 ? "（最小）" : "";
+    messageRef.current.open({
+      key: "editor-font-size",
+      type: "info",
+      content: `编辑区字号 ${size}px${edge}`,
+      duration: 1,
+    });
+  };
+  const zoomRef = useRef(zoomBy);
+  useEffect(() => {
+    zoomRef.current = zoomBy;
+  });
+
+  // 按住 Ctrl 滚动滚轮调编辑区字号；要阻止默认行为，只能用非 passive 的原生监听
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    let acc = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey || !e.deltaY) return;
+      e.preventDefault();
+      const delta = e.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? e.deltaY : Math.sign(e.deltaY) * WHEEL_STEP;
+      acc = Math.sign(acc) === Math.sign(delta) ? acc + delta : delta;
+      if (Math.abs(acc) < WHEEL_STEP) return;
+      acc = 0;
+      zoomRef.current(delta < 0 ? 1 : -1);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   const onContentChange = (text: string) => {
     s.content = text;
     setContent(text);
@@ -333,7 +371,7 @@ export default function TodoEditor(props: Props) {
         </div>
       </header>
 
-      <div className="editor-body">
+      <div className="editor-body" ref={bodyRef}>
         <Input
           ref={titleRef}
           className={`editor-title${summary.done ? " done" : ""}`}
@@ -407,6 +445,23 @@ export default function TodoEditor(props: Props) {
         <span>{countChars(content)} 字</span>
         <span>{lines} 行</span>
         <span className={readOnly ? "warning-text" : undefined}>Markdown · {ENCODING_LABELS[encoding]}</span>
+        {keys && (
+          <Tooltip
+            title={
+              <>
+                编辑区字号，按住 Ctrl 滚动鼠标滚轮调整
+                {keys.editorFontSize !== settingsInfo.defaults.editorFontSize && <div>点击恢复默认</div>}
+              </>
+            }
+          >
+            <span
+              className="statusbar-font"
+              onClick={() => setFontSize("editor", settingsInfo.defaults.editorFontSize)}
+            >
+              {keys.editorFontSize}px
+            </span>
+          </Tooltip>
+        )}
         <span className="statusbar-path" title="点击复制文件路径" onClick={copyPath}>
           {path}
         </span>

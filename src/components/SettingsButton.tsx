@@ -1,10 +1,10 @@
 import { ExclamationCircleFilled, SettingOutlined } from "@ant-design/icons";
-import { App as AntApp, Button, Modal, Tabs, Tooltip } from "antd";
+import { App as AntApp, Button, InputNumber, Modal, Slider, Tabs, Tooltip } from "antd";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
-import { useSettings } from "../settings";
+import { FONT_FIELDS, FONT_LIMITS, useSettings } from "../settings";
 import { checkShortcut, eventShortcut, keyLabel, keyName, modifiers, shortcutLabel } from "../shortcuts";
-import type { AppSettings, ShortcutAction } from "../types";
+import type { FontArea, ShortcutAction } from "../types";
 import BackupSettings from "./BackupSettings";
 
 /** 设置按钮，点击打开设置对话框 */
@@ -20,6 +20,7 @@ export default function SettingsButton({ type = "default" }: { type?: "default" 
           className="settings-tabs"
           items={[
             { key: "shortcuts", label: "快捷键", children: <ShortcutSettings /> },
+            { key: "fonts", label: "字号", children: <FontSettings /> },
             { key: "backup", label: "备份与恢复", children: <BackupSettings /> },
           ]}
         />
@@ -28,7 +29,9 @@ export default function SettingsButton({ type = "default" }: { type?: "default" 
   );
 }
 
-const ITEMS: { action: ShortcutAction; field: keyof AppSettings; label: string; desc: string }[] = [
+type ShortcutField = "toggleShortcut" | "toggleDoneShortcut" | "openExternalShortcut";
+
+const ITEMS: { action: ShortcutAction; field: ShortcutField; label: string; desc: string }[] = [
   {
     action: "toggleWindow",
     field: "toggleShortcut",
@@ -109,6 +112,68 @@ function ShortcutSettings() {
       <div className="setting-group">应用内快捷键</div>
       {ITEMS.slice(1).map(row)}
     </>
+  );
+}
+
+const FONT_ITEMS: { area: FontArea; label: string; desc: string; sample: string }[] = [
+  {
+    area: "sidebar",
+    label: "左侧列表",
+    desc: "进入工作区后，左侧的工作区、项目与待办列表。",
+    sample: "整理本周会议纪要",
+  },
+  {
+    area: "editor",
+    label: "待办编辑区",
+    desc: "右侧的待办正文。编辑时按住 Ctrl 滚动鼠标滚轮也能快速调整。",
+    sample: "在这里记录详细内容，Markdown 纯文本 123",
+  },
+];
+
+/** 调整后立即生效，不用点保存 */
+function FontSettings() {
+  const { info, setFontSize } = useSettings();
+  if (!info) return <div className="setting-item" />;
+  return (
+    <div className="font-settings">
+      {FONT_ITEMS.map(({ area, label, desc, sample }) => {
+        const value = info.settings[FONT_FIELDS[area]];
+        const defaultValue = info.defaults[FONT_FIELDS[area]];
+        const { min, max } = FONT_LIMITS[area];
+        return (
+          <div className="setting-item" key={area}>
+            <div className="setting-label">{label}</div>
+            <div className="setting-desc">{desc}</div>
+            <div className="setting-row">
+              <Slider
+                className="font-slider"
+                min={min}
+                max={max}
+                value={value}
+                marks={{ [min]: `${min}`, [defaultValue]: "默认", [max]: `${max}` }}
+                tooltip={{ formatter: (v) => `${v}px` }}
+                onChange={(v) => setFontSize(area, v)}
+              />
+              <InputNumber
+                className="font-input"
+                min={min}
+                max={max}
+                precision={0}
+                value={value}
+                suffix="px"
+                onChange={(v) => v != null && setFontSize(area, v)}
+              />
+              <Button disabled={value === defaultValue} onClick={() => setFontSize(area, defaultValue)}>
+                恢复默认
+              </Button>
+            </div>
+            <div className="font-sample" style={{ fontSize: value }}>
+              {sample}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

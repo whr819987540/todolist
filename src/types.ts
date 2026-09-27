@@ -49,6 +49,9 @@ export type SortKey = "created" | "updated" | "title";
 
 export type ShortcutAction = "toggleWindow" | "toggleDone" | "openExternal";
 
+/** 可以单独调字号的区域：左侧列表、右侧待办编辑区 */
+export type FontArea = "sidebar" | "editor";
+
 /** 快捷键格式如 "Ctrl+Alt+T"；null 表示不使用 */
 export interface AppSettings {
   /** 全局快捷键：显示主窗口 / 隐藏到托盘 */
@@ -57,6 +60,10 @@ export interface AppSettings {
   toggleDoneShortcut: string | null;
   /** 应用内快捷键：用默认程序打开选中的待办 */
   openExternalShortcut: string | null;
+  /** 左侧工作区 / 项目 / 待办列表的字号（px） */
+  sidebarFontSize: number;
+  /** 右侧待办正文编辑区的字号（px） */
+  editorFontSize: number;
 }
 
 export interface SettingsInfo {

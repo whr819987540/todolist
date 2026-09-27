@@ -6,7 +6,7 @@ mod webdav;
 use backup::RemoteBackup;
 use chrono::Local;
 use serde::Serialize;
-use settings::{Settings, SettingsStore, ShortcutAction};
+use settings::{FontArea, Settings, SettingsStore, ShortcutAction};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -388,6 +388,17 @@ fn pause_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>, pau
     settings_info(&settings)
 }
 
+// ----- 字号 -----
+
+/// 修改左侧列表或编辑区的字号，超出范围时取最近的边界值
+#[tauri::command]
+fn set_font_size(settings: State<'_, SettingsStore>, area: FontArea, size: u32) -> Cmd<SettingsInfo> {
+    let mut next = settings.get();
+    next.set_font_size(area, size);
+    settings.save(next)?;
+    Ok(settings_info(&settings))
+}
+
 // ----- 设置备份（WebDAV） -----
 
 #[tauri::command]
@@ -550,6 +561,7 @@ pub fn run() {
             get_settings,
             set_shortcut,
             pause_toggle_shortcut,
+            set_font_size,
             get_webdav,
             save_webdav,
             test_webdav,

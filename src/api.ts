@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  FontArea,
   RemoteBackup,
   SaveResult,
   SettingsInfo,
@@ -64,6 +65,8 @@ export const api = {
   setShortcut: (action: ShortcutAction, shortcut: string | null) =>
     invoke<SettingsInfo>("set_shortcut", { action, shortcut }),
   pauseToggleShortcut: (paused: boolean) => invoke<SettingsInfo>("pause_toggle_shortcut", { paused }),
+  /** 超出范围时后端取最近的边界值 */
+  setFontSize: (area: FontArea, size: number) => invoke<SettingsInfo>("set_font_size", { area, size }),
 
   getWebdav: () => invoke<WebDavInfo>("get_webdav"),
   /** password 为 null 时保留原来的密码 */

@@ -115,6 +115,7 @@ mod tests {
         let settings = Settings {
             toggle_shortcut: Some("Ctrl+Alt+Y".into()),
             open_external_shortcut: None,
+            editor_font_size: 20,
             ..Default::default()
         };
         let data = pack(&settings, time()).unwrap();
@@ -122,6 +123,8 @@ mod tests {
         assert_eq!(back.toggle_shortcut.as_deref(), Some("Ctrl+Alt+Y"));
         assert_eq!(back.toggle_done_shortcut.as_deref(), Some("Ctrl+Alt+D"));
         assert_eq!(back.open_external_shortcut, None);
+        assert_eq!(back.editor_font_size, 20);
+        assert_eq!(back.sidebar_font_size, 14);
     }
 
     #[test]
