@@ -13,7 +13,7 @@ interface Props {
   /** 全部工作区的项目和待办；null 表示还在加载 */
   trees: WorkspaceTree[] | null;
   renderCard: (ws: WorkspaceInfo) => React.ReactNode;
-  onEnter: (workspace: string, sel?: Selection) => void;
+  onEnter: (workspace: string, sel?: Omit<Selection, "workspace">) => void;
 }
 
 /** 标题里没有关键字、是正文开头命中时，截取关键字附近的一段显示出来 */

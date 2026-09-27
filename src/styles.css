@@ -414,6 +414,74 @@ mark {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 选中多个工作区时叠放头像 */
+.ws-avatars {
+  flex: none;
+  display: inline-flex;
+}
+.ws-avatars .ws-avatar + .ws-avatar {
+  margin-left: -6px;
+  box-shadow: 0 0 0 2px var(--c-bg-sidebar);
+}
+
+/* 选中工作区的下拉面板 */
+.ws-picker-pop .ant-popover-container {
+  padding: 6px;
+}
+.ws-picker {
+  width: 260px;
+}
+.ws-picker-head {
+  font-size: 12px;
+  color: var(--c-text-3);
+  padding: 4px 8px 6px;
+}
+.ws-picker-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.ws-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.ws-picker-item:hover {
+  background: var(--c-hover);
+}
+.ws-picker-item.locked {
+  cursor: not-allowed;
+}
+/* 点整行切换，复选框只负责显示（否则点在复选框上会触发两次） */
+.ws-picker-check {
+  pointer-events: none;
+}
+.ws-picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-picker-only {
+  display: none;
+  flex: none;
+  font-size: 12px;
+}
+.ws-picker-item:hover .ws-picker-only {
+  display: inline;
+}
+.ws-picker-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--c-border);
+}
 
 .sidebar-search {
   display: flex;
@@ -444,6 +512,13 @@ mark {
 }
 
 /* ---------------- 树 ---------------- */
+
+/* 选中多个工作区时，工作区之间加分隔线 */
+.ws-branch + .ws-branch {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--c-border);
+}
 
 /* 树里的尺寸都跟着 --fs-sidebar 走，注释里是默认 14px 时的值；次要文字最小 11px，再小就看不清了 */
 .tree {

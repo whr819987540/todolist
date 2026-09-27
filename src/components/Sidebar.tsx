@@ -14,7 +14,7 @@ import {
   SortAscendingOutlined,
   VerticalAlignMiddleOutlined,
 } from "@ant-design/icons";
-import { Button, Dropdown, Input, Tooltip, type InputRef, type MenuProps } from "antd";
+import { Button, Checkbox, Dropdown, Input, Popover, Tooltip, type InputRef, type MenuProps } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { ThemeButton } from "../theme";
@@ -37,26 +37,34 @@ import SettingsButton from "./SettingsButton";
 
 export const WS_KEY = "\u0000workspace";
 
+/** 右侧显示的内容：只有 workspace 时是工作区概览，有 project 时是项目概览，再有 todoId 时是这条待办 */
 export interface Selection {
+  workspace: string;
   project?: string;
   todoId?: string;
 }
 
+type Collapsed = Record<string, boolean>;
+
 interface Props {
-  tree: WorkspaceTree;
+  /** 侧栏里显示的工作区（已加载的） */
+  trees: WorkspaceTree[];
+  /** 选中显示的工作区 */
+  workspaces: string[];
+  onWorkspacesChange: (list: string[]) => void;
   sel: Selection;
-  actions: Actions;
+  actionsFor: (workspace: string) => Actions;
+  onHome: () => void;
   width: number;
   searchRef: React.RefObject<InputRef | null>;
-  collapsed: Record<string, boolean>;
-  setCollapsed: (fn: (prev: Record<string, boolean>) => Record<string, boolean>) => void;
+  collapsedOf: (workspace: string) => Collapsed;
+  setCollapsed: (workspace: string, fn: (prev: Collapsed) => Collapsed) => void;
   keyword: string;
   setKeyword: (v: string) => void;
   hideDone: boolean;
   setHideDone: (v: boolean) => void;
   sortKey: SortKey;
   setSortKey: (v: SortKey) => void;
-  onSwitchWorkspace: (name: string) => void;
 }
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -65,56 +73,50 @@ const SORT_LABELS: Record<SortKey, string> = {
   title: "按标题",
 };
 
+const countDone = (t: WorkspaceTree) => t.projects.reduce((n, p) => n + p.todos.filter((x) => x.done).length, 0);
+const countAll = (t: WorkspaceTree) => t.projects.reduce((n, p) => n + p.todos.length, 0);
+
 export default function Sidebar(props: Props) {
-  const { tree, sel, actions: a, collapsed, setCollapsed, keyword, hideDone, sortKey } = props;
+  const { trees, sel, actionsFor, collapsedOf, setCollapsed, keyword, hideDone, sortKey } = props;
   const now = useNow();
   const kw = keyword.trim();
-  const projectNames = useMemo(() => tree.projects.map((p) => p.name), [tree]);
+  const multi = trees.length > 1;
 
-  const visible = useMemo(() => {
-    const k = kw.toLowerCase();
-    return tree.projects
-      .map((project) => {
-        let todos = sortTodos(project.todos, sortKey);
-        if (hideDone) todos = todos.filter((t) => !t.done);
-        if (kw) todos = todos.filter((t) => matchTodo(t, kw));
-        return { project, todos, nameMatch: !!k && project.name.toLowerCase().includes(k) };
-      })
-      .filter((x) => !kw || x.todos.length > 0 || x.nameMatch);
-  }, [tree, kw, hideDone, sortKey]);
+  const total = trees.reduce((n, t) => n + countAll(t), 0);
+  const done = trees.reduce((n, t) => n + countDone(t), 0);
 
-  const total = tree.projects.reduce((n, p) => n + p.todos.length, 0);
-  const done = tree.projects.reduce((n, p) => n + p.todos.filter((t) => t.done).length, 0);
-
-  // 搜索时忽略折叠状态，把命中项全部展开
-  const isOpen = (key: string) => !!kw || !collapsed[key];
-  const toggle = (key: string) => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
-  const anyProjectOpen = tree.projects.some((p) => !collapsed[p.name]);
-  const toggleAll = () =>
-    setCollapsed((c) => {
-      const next = { ...c };
-      for (const p of tree.projects) next[p.name] = anyProjectOpen;
-      return next;
-    });
+  const anyProjectOpen = trees.some((t) => t.projects.some((p) => !collapsedOf(t.name)[p.name]));
+  const toggleAll = () => {
+    for (const t of trees)
+      setCollapsed(t.name, (c) => {
+        const next = { ...c };
+        for (const p of t.projects) next[p.name] = anyProjectOpen;
+        return next;
+      });
+  };
 
   // 选中项滚动到可见区域
   useEffect(() => {
     if (!sel.todoId) return;
-    const el = document.querySelector(`[data-todo="${CSS.escape(`${sel.project}/${sel.todoId}`)}"]`);
-    el?.scrollIntoView({ block: "nearest" });
-  }, [sel.project, sel.todoId]);
+    const key = `${sel.workspace}/${sel.project}/${sel.todoId}`;
+    document.querySelector(`[data-todo="${CSS.escape(key)}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [sel.workspace, sel.project, sel.todoId]);
 
-  const currentProject = sel.project ?? (tree.projects.length === 1 ? tree.projects[0].name : undefined);
+  // 「新建」按钮作用于右侧正在显示的工作区
+  const selTree = trees.find((t) => t.name === sel.workspace);
+  const a = actionsFor(sel.workspace);
+  const currentProject = sel.project ?? (selTree?.projects.length === 1 ? selTree.projects[0].name : undefined);
+  const where = (project?: string) => [multi ? sel.workspace : "", project ?? ""].filter(Boolean).join(" / ");
   const newMenu: MenuProps = {
     items: [
       {
         key: "todo",
         icon: <PlusOutlined />,
-        label: currentProject ? `新建待办（${currentProject}）` : "新建待办（请先选择项目）",
+        label: currentProject ? `新建待办（${where(currentProject)}）` : "新建待办（请先选择项目）",
         disabled: !currentProject,
         extra: "Ctrl+N",
       },
-      { key: "project", icon: <FolderFilled />, label: "新建项目" },
+      { key: "project", icon: <FolderFilled />, label: multi ? `新建项目（${where()}）` : "新建项目" },
     ],
     onClick: ({ key }) => {
       if (key === "todo" && currentProject) a.newTodo(currentProject, "", true);
@@ -133,9 +135,9 @@ export default function Sidebar(props: Props) {
     <aside className="sidebar" style={{ width: props.width }}>
       <div className="sidebar-head">
         <Tooltip title="返回首页">
-          <Button type="text" icon={<HomeOutlined />} onClick={a.goHome} />
+          <Button type="text" icon={<HomeOutlined />} onClick={props.onHome} />
         </Tooltip>
-        <WorkspaceSwitcher current={tree.name} onSwitch={props.onSwitchWorkspace} onHome={a.goHome} />
+        <WorkspacePicker selected={props.workspaces} onChange={props.onWorkspacesChange} onHome={props.onHome} />
         <ThemeButton type="text" />
         <SettingsButton type="text" />
       </div>
@@ -158,7 +160,7 @@ export default function Sidebar(props: Props) {
       </div>
 
       <div className="sidebar-bar">
-        <span className="sidebar-bar-title">项目与待办</span>
+        <span className="sidebar-bar-title">{multi ? "工作区、项目与待办" : "项目与待办"}</span>
         <Dropdown menu={sortMenu} trigger={["click"]}>
           <Tooltip title={`排序：${SORT_LABELS[sortKey]}`}>
             <Button type="text" size="small" icon={<SortAscendingOutlined />} />
@@ -184,75 +186,136 @@ export default function Sidebar(props: Props) {
       </div>
 
       <div className="tree" role="tree">
-        <Dropdown menu={workspaceMenu(a)} trigger={["contextMenu"]}>
-          <div
-            className={`tree-row ws-row${!sel.project ? " selected" : ""}`}
-            onClick={() => {
-              a.selectWorkspace();
-              if (!isOpen(WS_KEY)) toggle(WS_KEY);
-            }}
-            onDoubleClick={() => toggle(WS_KEY)}
-          >
-            <Chevron open={isOpen(WS_KEY)} onClick={() => toggle(WS_KEY)} />
-            <span className="ws-avatar" style={{ background: avatarColor(tree.name) }}>
-              {firstChar(tree.name)}
-            </span>
-            <span className="row-label">{tree.name}</span>
-            <span className="row-count" title={`未完成 ${total - done} / 共 ${total}`}>
-              {total - done || ""}
-            </span>
-            <span className="row-actions">
-              <RowButton title="新建项目" icon={<PlusOutlined />} onClick={a.newProject} />
-              <RowMore menu={workspaceMenu(a)} />
-            </span>
-          </div>
-        </Dropdown>
-
-        {isOpen(WS_KEY) && (
-          <div role="group">
-            {visible.map(({ project, todos }) => (
-              <ProjectBranch
-                key={project.name}
-                project={project}
-                todos={todos}
-                open={isOpen(project.name)}
-                onToggle={() => toggle(project.name)}
-                sel={sel}
-                actions={a}
-                projectNames={projectNames}
-                keyword={kw}
-                now={now}
-                hideDone={hideDone}
-              />
-            ))}
-            {tree.projects.length === 0 && (
-              <div className="tree-empty" style={{ paddingLeft: 30 }}>
-                还没有项目，
-                <a onClick={a.newProject}>新建一个</a>
-              </div>
-            )}
-            {kw && visible.length === 0 && (
-              <div className="tree-empty" style={{ paddingLeft: 30 }}>
-                没有找到包含“{kw}”的待办
-              </div>
-            )}
-          </div>
-        )}
+        {trees.map((tree) => (
+          <WorkspaceBranch
+            key={tree.name}
+            tree={tree}
+            sel={sel}
+            actions={actionsFor(tree.name)}
+            collapsed={collapsedOf(tree.name)}
+            setCollapsed={(fn) => setCollapsed(tree.name, fn)}
+            keyword={kw}
+            hideDone={hideDone}
+            sortKey={sortKey}
+            now={now}
+          />
+        ))}
       </div>
 
       <div className="sidebar-foot">
-        共 {total} 条待办，已完成 {done} 条
+        {multi && `${trees.length} 个工作区，`}共 {total} 条待办，已完成 {done} 条
       </div>
     </aside>
   );
 }
 
+/** 一个工作区：工作区行 + 下面的项目和待办 */
+function WorkspaceBranch(p: {
+  tree: WorkspaceTree;
+  sel: Selection;
+  actions: Actions;
+  collapsed: Collapsed;
+  setCollapsed: (fn: (prev: Collapsed) => Collapsed) => void;
+  keyword: string;
+  hideDone: boolean;
+  sortKey: SortKey;
+  now: number;
+}) {
+  const { tree, actions: a, collapsed, keyword: kw, hideDone, sortKey } = p;
+  const projectNames = useMemo(() => tree.projects.map((x) => x.name), [tree]);
+  // 右侧显示的是这个工作区里的内容时才有选中项
+  const sel = p.sel.workspace === tree.name ? p.sel : undefined;
+
+  const visible = useMemo(() => {
+    const k = kw.toLowerCase();
+    return tree.projects
+      .map((project) => {
+        let todos = sortTodos(project.todos, sortKey);
+        if (hideDone) todos = todos.filter((t) => !t.done);
+        if (kw) todos = todos.filter((t) => matchTodo(t, kw));
+        return { project, todos, nameMatch: !!k && project.name.toLowerCase().includes(k) };
+      })
+      .filter((x) => !kw || x.todos.length > 0 || x.nameMatch);
+  }, [tree, kw, hideDone, sortKey]);
+
+  const total = countAll(tree);
+  const done = countDone(tree);
+
+  // 搜索时忽略折叠状态，把命中项全部展开
+  const isOpen = (key: string) => !!kw || !collapsed[key];
+  const toggle = (key: string) => p.setCollapsed((c) => ({ ...c, [key]: !c[key] }));
+
+  return (
+    <div className="ws-branch" role="treeitem" aria-expanded={isOpen(WS_KEY)}>
+      <Dropdown menu={workspaceMenu(a)} trigger={["contextMenu"]}>
+        <div
+          className={`tree-row ws-row${sel && !sel.project ? " selected" : ""}`}
+          onClick={() => {
+            a.selectWorkspace();
+            if (!isOpen(WS_KEY)) toggle(WS_KEY);
+          }}
+          onDoubleClick={() => toggle(WS_KEY)}
+        >
+          <Chevron open={isOpen(WS_KEY)} onClick={() => toggle(WS_KEY)} />
+          <span className="ws-avatar" style={{ background: avatarColor(tree.name) }}>
+            {firstChar(tree.name)}
+          </span>
+          <span className="row-label" title={tree.name}>
+            {tree.name}
+          </span>
+          <span className="row-count" title={`未完成 ${total - done} / 共 ${total}`}>
+            {total - done || ""}
+          </span>
+          <span className="row-actions">
+            <RowButton title="新建项目" icon={<PlusOutlined />} onClick={a.newProject} />
+            <RowMore menu={workspaceMenu(a)} />
+          </span>
+        </div>
+      </Dropdown>
+
+      {isOpen(WS_KEY) && (
+        <div role="group">
+          {visible.map(({ project, todos }) => (
+            <ProjectBranch
+              key={project.name}
+              workspace={tree.name}
+              project={project}
+              todos={todos}
+              open={isOpen(project.name)}
+              onToggle={() => toggle(project.name)}
+              sel={sel}
+              actions={a}
+              projectNames={projectNames}
+              keyword={kw}
+              now={p.now}
+              hideDone={hideDone}
+            />
+          ))}
+          {tree.projects.length === 0 && (
+            <div className="tree-empty" style={{ paddingLeft: 30 }}>
+              还没有项目，
+              <a onClick={a.newProject}>新建一个</a>
+            </div>
+          )}
+          {kw && visible.length === 0 && tree.projects.length > 0 && (
+            <div className="tree-empty" style={{ paddingLeft: 30 }}>
+              没有找到包含“{kw}”的待办
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProjectBranch(p: {
+  workspace: string;
   project: ProjectNode;
   todos: TodoSummary[];
   open: boolean;
   onToggle: () => void;
-  sel: Selection;
+  /** 右侧显示的是这个工作区里的内容时才传 */
+  sel?: Selection;
   actions: Actions;
   projectNames: string[];
   keyword: string;
@@ -261,7 +324,7 @@ function ProjectBranch(p: {
 }) {
   const { project, todos, sel, actions: a } = p;
   const undone = project.todos.filter((t) => !t.done).length;
-  const selected = sel.project === project.name && !sel.todoId;
+  const selected = sel?.project === project.name && !sel.todoId;
   const hiddenDone = p.hideDone ? project.todos.length - undone : 0;
 
   return (
@@ -296,9 +359,10 @@ function ProjectBranch(p: {
           {todos.map((t) => (
             <TodoRow
               key={t.id}
+              workspace={p.workspace}
               project={project.name}
               todo={t}
-              selected={sel.project === project.name && sel.todoId === t.id}
+              selected={sel?.project === project.name && sel.todoId === t.id}
               actions={a}
               projectNames={p.projectNames}
               keyword={p.keyword}
@@ -323,6 +387,7 @@ function ProjectBranch(p: {
 }
 
 function TodoRow(p: {
+  workspace: string;
   project: string;
   todo: TodoSummary;
   selected: boolean;
@@ -351,7 +416,7 @@ function TodoRow(p: {
         <div
           role="treeitem"
           aria-selected={p.selected}
-          data-todo={`${p.project}/${t.id}`}
+          data-todo={`${p.workspace}/${p.project}/${t.id}`}
           className={`tree-row todo-row${p.selected ? " selected" : ""}${t.done ? " done" : ""}`}
           style={{ paddingLeft: 44 }}
           onClick={() => a.selectTodo(p.project, t.id)}
@@ -430,40 +495,118 @@ function RowMore({ menu }: { menu: MenuProps }) {
   );
 }
 
-function WorkspaceSwitcher(p: { current: string; onSwitch: (name: string) => void; onHome: () => void }) {
+/** 侧栏顶部：选中要显示的工作区，可多选，勾选后立即显示 */
+function WorkspacePicker(p: { selected: string[]; onChange: (list: string[]) => void; onHome: () => void }) {
+  const [open, setOpen] = useState(false);
   const [names, setNames] = useState<string[]>([]);
-  const menu: MenuProps = {
-    selectable: true,
-    selectedKeys: [p.current],
-    items: [
-      { type: "group", label: "切换工作区", children: names.map((n) => ({ key: n, label: n })) },
-      { type: "divider" },
-      { key: "\u0000home", icon: <HomeOutlined />, label: "全部工作区" },
-    ],
-    onClick: ({ key }) => {
-      if (key === "\u0000home") p.onHome();
-      else if (key !== p.current) p.onSwitch(key);
-    },
+  const chosen = new Set(p.selected);
+  const only = p.selected.length === 1;
+
+  const toggle = (name: string) => {
+    if (!chosen.has(name)) p.onChange([...p.selected, name]);
+    else if (!only) p.onChange(p.selected.filter((n) => n !== name));
   };
+
+  const panel = (
+    <div className="ws-picker">
+      <div className="ws-picker-head">选中要显示的工作区（可多选）</div>
+      <div className="ws-picker-list">
+        {names.map((n) => {
+          const checked = chosen.has(n);
+          // 至少要显示一个工作区
+          const locked = checked && only;
+          return (
+            <div
+              key={n}
+              className={`ws-picker-item${locked ? " locked" : ""}`}
+              title={locked ? "至少要选中一个工作区" : undefined}
+              onClick={() => toggle(n)}
+            >
+              <Checkbox className="ws-picker-check" checked={checked} disabled={locked} tabIndex={-1} />
+              <span className="ws-avatar" style={{ background: avatarColor(n) }}>
+                {firstChar(n)}
+              </span>
+              <span className="ws-picker-name">{n}</span>
+              {!locked && (
+                <a
+                  className="ws-picker-only"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    p.onChange([n]);
+                    setOpen(false);
+                  }}
+                >
+                  仅显示
+                </a>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="ws-picker-foot">
+        <Button
+          size="small"
+          type="text"
+          disabled={names.every((n) => chosen.has(n))}
+          onClick={() => p.onChange(names)}
+        >
+          全选
+        </Button>
+        <Button
+          size="small"
+          type="text"
+          icon={<HomeOutlined />}
+          onClick={() => {
+            setOpen(false);
+            p.onHome();
+          }}
+        >
+          返回首页
+        </Button>
+      </div>
+    </div>
+  );
+
+  const [first] = p.selected;
   return (
-    <Dropdown
-      menu={menu}
-      trigger={["click"]}
-      onOpenChange={(open) => {
-        if (open)
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o)
           api
             .listWorkspaces()
             .then((l) => setNames(l.map((w) => w.name).sort(compareName)))
             .catch(() => {});
       }}
+      trigger="click"
+      placement="bottomLeft"
+      arrow={false}
+      classNames={{ root: "ws-picker-pop" }}
+      content={panel}
     >
-      <button className="ws-switcher" title="切换工作区">
-        <span className="ws-avatar" style={{ background: avatarColor(p.current) }}>
-          {firstChar(p.current)}
-        </span>
-        <span className="ws-switcher-name">{p.current}</span>
+      <button className="ws-switcher" title={`正在显示：${p.selected.join("、")}`}>
+        {only ? (
+          <>
+            <span className="ws-avatar" style={{ background: avatarColor(first) }}>
+              {firstChar(first)}
+            </span>
+            <span className="ws-switcher-name">{first}</span>
+          </>
+        ) : (
+          <>
+            <span className="ws-avatars">
+              {p.selected.slice(0, 3).map((n) => (
+                <span key={n} className="ws-avatar" style={{ background: avatarColor(n) }}>
+                  {firstChar(n)}
+                </span>
+              ))}
+            </span>
+            <span className="ws-switcher-name">{p.selected.length} 个工作区</span>
+          </>
+        )}
         <DownOutlined className="muted" style={{ fontSize: 10 }} />
       </button>
-    </Dropdown>
+    </Popover>
   );
 }

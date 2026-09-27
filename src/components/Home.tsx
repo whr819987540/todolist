@@ -34,7 +34,7 @@ import SettingsButton from "./SettingsButton";
 import type { Selection } from "./Sidebar";
 
 /** 首页：全部工作区 */
-export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: Selection) => void }) {
+export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: Omit<Selection, "workspace">) => void }) {
   const { message, modal } = AntApp.useApp();
   const [list, setList] = useState<WorkspaceInfo[] | null>(null);
   const [root, setRoot] = useState("");

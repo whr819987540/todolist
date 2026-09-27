@@ -7,14 +7,17 @@ import type { Selection } from "./components/Sidebar";
 import WorkspaceView from "./components/WorkspaceView";
 import { flushAll } from "./hooks";
 
-type View = { name: "home" } | { name: "workspace"; workspace: string; sel: Selection };
+/** 从首页进入某个工作区（可直接打开其中的项目 / 待办）；进去后可以在侧栏再选中其他工作区 */
+type Entry = Omit<Selection, "workspace">;
+
+type View = { name: "home" } | { name: "workspace"; workspace: string; sel: Entry };
 
 export default function App() {
   const [view, setView] = useState<View>({ name: "home" });
 
   const goHome = useCallback(() => setView({ name: "home" }), []);
   const enter = useCallback(
-    (workspace: string, sel: Selection = {}) => setView({ name: "workspace", workspace, sel }),
+    (workspace: string, sel: Entry = {}) => setView({ name: "workspace", workspace, sel }),
     [],
   );
 
@@ -35,12 +38,6 @@ export default function App() {
 
   if (view.name === "home") return <Home onEnter={enter} />;
   return (
-    <WorkspaceView
-      key={view.workspace}
-      workspace={view.workspace}
-      initialSel={view.sel}
-      onHome={goHome}
-      onSwitch={enter}
-    />
+    <WorkspaceView initialWorkspace={view.workspace} initialSel={view.sel} onHome={goHome} />
   );
 }
