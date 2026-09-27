@@ -224,7 +224,17 @@ export default function Sidebar(props: Props) {
           value={keyword}
           onChange={(e) => props.setKeyword(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Escape") props.setKeyword("");
+            // Esc：退出搜索，焦点回到左侧列表；列表恢复原样后把选中项滚到可见区域
+            if (e.key === "Escape") {
+              e.preventDefault();
+              props.setKeyword("");
+              focusTree();
+              requestAnimationFrame(() =>
+                rows()
+                  .find((r) => r.dataset.sel === current)
+                  ?.scrollIntoView({ block: "nearest" }),
+              );
+            }
           }}
         />
         <Dropdown menu={newMenu} trigger={["click"]} placement="bottomRight">
