@@ -103,6 +103,8 @@ export function ProjectOverview(p: {
   projectNames: string[];
   sortKey: SortKey;
   actions: Actions;
+  /** 打开时聚焦快速添加框（用键盘在左侧列表里移过来时不聚焦） */
+  autoFocus: boolean;
 }) {
   const { project, actions: a } = p;
   const now = useNow();
@@ -183,7 +185,7 @@ export function ProjectOverview(p: {
 
       <div className="quick-add">
         <Input
-          autoFocus
+          autoFocus={p.autoFocus}
           size="large"
           prefix={<PlusOutlined className="muted" />}
           placeholder="添加待办：输入标题后按 Enter 创建"

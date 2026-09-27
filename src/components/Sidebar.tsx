@@ -15,7 +15,7 @@ import {
   VerticalAlignMiddleOutlined,
 } from "@ant-design/icons";
 import { Button, Checkbox, Dropdown, Input, Popover, Tooltip, type InputRef, type MenuProps } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { ThemeButton } from "../theme";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
@@ -46,6 +46,22 @@ export interface Selection {
 
 type Collapsed = Record<string, boolean>;
 
+/** 列表里每一行对应的选中项，存在行的 data-sel 上，键盘上下移动时按显示顺序取 */
+const selKey = (s: Selection) => JSON.stringify([s.workspace, s.project ?? "", s.todoId ?? ""]);
+
+function parseSelKey(key: string): Selection {
+  const [workspace, project, todoId] = JSON.parse(key) as string[];
+  return { workspace, project: project || undefined, todoId: todoId || undefined };
+}
+
+/** 供 WorkspaceView 的快捷键（Alt+方向键）调用 */
+export interface SidebarHandle {
+  /** 焦点移到左侧列表 */
+  focus(): void;
+  /** 选中上一行 / 下一行（折叠起来的不算），焦点移到左侧列表 */
+  move(step: 1 | -1): void;
+}
+
 interface Props {
   /** 侧栏里显示的工作区（已加载的） */
   trees: WorkspaceTree[];
@@ -53,8 +69,12 @@ interface Props {
   workspaces: string[];
   onWorkspacesChange: (list: string[]) => void;
   sel: Selection;
+  onSelect: (s: Selection) => void;
   actionsFor: (workspace: string) => Actions;
   onHome: () => void;
+  /** 焦点移到右侧（编辑区 / 概览） */
+  onFocusMain: () => void;
+  handleRef: React.RefObject<SidebarHandle | null>;
   width: number;
   searchRef: React.RefObject<InputRef | null>;
   collapsedOf: (workspace: string) => Collapsed;
@@ -95,12 +115,65 @@ export default function Sidebar(props: Props) {
       });
   };
 
+  const treeRef = useRef<HTMLDivElement>(null);
+  // 用键盘操作时给列表里的选中行加上焦点框，用鼠标点时不加
+  const [kbFocus, setKbFocus] = useState(false);
+  const rows = () => [...(treeRef.current?.querySelectorAll<HTMLElement>(".tree-row[data-sel]") ?? [])];
+
   // 选中项滚动到可见区域
+  const current = selKey(sel);
   useEffect(() => {
-    if (!sel.todoId) return;
-    const key = `${sel.workspace}/${sel.project}/${sel.todoId}`;
-    document.querySelector(`[data-todo="${CSS.escape(key)}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [sel.workspace, sel.project, sel.todoId]);
+    rows()
+      .find((r) => r.dataset.sel === current)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [current]);
+
+  const focusTree = () => {
+    setKbFocus(true);
+    treeRef.current?.focus({ preventScroll: true });
+  };
+
+  const move = (step: 1 | -1) => {
+    focusTree();
+    const keys = rows().map((r) => r.dataset.sel!);
+    if (!keys.length) return;
+    let at = keys.indexOf(current);
+    // 选中项被折叠或筛选掉了：从它所在的项目 / 工作区开始
+    if (at < 0 && sel.project) at = keys.indexOf(selKey({ workspace: sel.workspace, project: sel.project }));
+    if (at < 0) at = keys.indexOf(selKey({ workspace: sel.workspace }));
+    const next = at < 0 ? 0 : at + step;
+    if (next >= 0 && next < keys.length && next !== at) props.onSelect(parseSelKey(keys[next]));
+  };
+
+  useImperativeHandle(props.handleRef, () => ({ focus: focusTree, move }));
+
+  // 列表获得焦点时：↑↓ 移动，← → 折叠 / 展开（或回到上一级），Enter 打开待办或折叠 / 展开
+  const onTreeKey = (e: React.KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const ws = sel.workspace;
+    // 待办没有下一级；搜索时全部展开，不能折叠
+    const branch = sel.todoId ? null : (sel.project ?? WS_KEY);
+    const open = branch !== null && (!!kw || !collapsedOf(ws)[branch]);
+    const setOpen = (v: boolean) => branch && setCollapsed(ws, (c) => ({ ...c, [branch]: !v }));
+    if (!["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Enter"].includes(e.key)) return;
+    e.preventDefault();
+    if (e.key === "Enter" && sel.todoId) {
+      // 焦点移到右侧正文；在这个处理函数里移走焦点，列表的 onBlur 清不掉焦点框，这里直接清
+      setKbFocus(false);
+      props.onFocusMain();
+      return;
+    }
+    setKbFocus(true);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") move(e.key === "ArrowDown" ? 1 : -1);
+    else if (e.key === "ArrowRight") {
+      if (branch && !open) setOpen(true);
+      else if (branch) move(1);
+    } else if (e.key === "ArrowLeft") {
+      if (branch && open && !kw) setOpen(false);
+      else if (sel.todoId) props.onSelect({ workspace: ws, project: sel.project });
+      else if (sel.project) props.onSelect({ workspace: ws });
+    } else if (e.key === "Enter" && !kw) setOpen(!open);
+  };
 
   // 「新建」按钮作用于右侧正在显示的工作区
   const selTree = trees.find((t) => t.name === sel.workspace);
@@ -185,7 +258,15 @@ export default function Sidebar(props: Props) {
         </Tooltip>
       </div>
 
-      <div className="tree" role="tree">
+      <div
+        ref={treeRef}
+        className={`tree${kbFocus ? " kb-focus" : ""}`}
+        role="tree"
+        tabIndex={0}
+        onKeyDown={onTreeKey}
+        onMouseDown={() => setKbFocus(false)}
+        onBlur={() => setKbFocus(false)}
+      >
         {trees.map((tree) => (
           <WorkspaceBranch
             key={tree.name}
@@ -250,6 +331,7 @@ function WorkspaceBranch(p: {
       <Dropdown menu={workspaceMenu(a)} trigger={["contextMenu"]}>
         <div
           className={`tree-row ws-row${sel && !sel.project ? " selected" : ""}`}
+          data-sel={selKey({ workspace: tree.name })}
           onClick={() => {
             a.selectWorkspace();
             if (!isOpen(WS_KEY)) toggle(WS_KEY);
@@ -332,6 +414,7 @@ function ProjectBranch(p: {
       <Dropdown menu={projectMenu(a, project.name)} trigger={["contextMenu"]}>
         <div
           className={`tree-row project-row${selected ? " selected" : ""}`}
+          data-sel={selKey({ workspace: p.workspace, project: project.name })}
           style={{ paddingLeft: 22 }}
           onClick={() => {
             a.selectProject(project.name);
@@ -416,7 +499,7 @@ function TodoRow(p: {
         <div
           role="treeitem"
           aria-selected={p.selected}
-          data-todo={`${p.workspace}/${p.project}/${t.id}`}
+          data-sel={selKey({ workspace: p.workspace, project: p.project, todoId: t.id })}
           className={`tree-row todo-row${p.selected ? " selected" : ""}${t.done ? " done" : ""}`}
           style={{ paddingLeft: 44 }}
           onClick={() => a.selectTodo(p.project, t.id)}

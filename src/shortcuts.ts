@@ -65,6 +65,8 @@ const RESERVED: Record<string, string> = {
   "Ctrl+S": "保存", "Ctrl+F": "搜索", "Ctrl+N": "新建", "Ctrl+R": "刷新",
   "Ctrl+A": "全选", "Ctrl+C": "复制", "Ctrl+V": "粘贴", "Ctrl+X": "剪切",
   "Ctrl+Z": "撤销", "Ctrl+Y": "重做", "Ctrl+Shift+Z": "重做",
+  "Alt+ArrowLeft": "切换到左侧列表", "Alt+ArrowRight": "切换到右侧编辑区",
+  "Alt+ArrowUp": "选中上一项", "Alt+ArrowDown": "选中下一项",
 };
 
 /** 录到的快捷键不能用时返回原因 */

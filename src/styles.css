@@ -555,6 +555,14 @@ mark {
 .tree-row.selected {
   background: var(--c-primary-bg);
 }
+.tree:focus,
+.main:focus {
+  outline: none;
+}
+/* 用键盘操作左侧列表时，选中行加焦点框，表示方向键作用在这里 */
+.tree.kb-focus .tree-row.selected {
+  box-shadow: inset 0 0 0 1.5px var(--c-primary);
+}
 .tree-row.selected .row-label {
   color: var(--c-primary);
   font-weight: 600;

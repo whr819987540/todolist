@@ -26,6 +26,7 @@ import { useWindowFocus } from "../hooks";
 import { ThemeButton } from "../theme";
 import type { WorkspaceInfo, WorkspaceTree } from "../types";
 import { avatarColor, compareName, firstChar, relativeTime, useNow } from "../utils";
+import { forgetWorkspaceState, renameWorkspaceState } from "../workspaceState";
 import Highlight from "./Highlight";
 import Logo from "./Logo";
 import { useNameDialog } from "./NameDialog";
@@ -118,7 +119,8 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
       title: "重命名工作区",
       initial: ws.name,
       onSubmit: async (v) => {
-        await api.renameWorkspace(ws.name, v);
+        const name = await api.renameWorkspace(ws.name, v);
+        renameWorkspaceState(ws.name, name);
         message.success("已重命名");
         await reload();
       },
@@ -134,6 +136,7 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
       onOk: async () => {
         try {
           await api.deleteWorkspace(ws.name);
+          forgetWorkspaceState(ws.name);
           message.success("已移到回收站");
         } catch (e) {
           message.error(errMsg(e));

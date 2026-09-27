@@ -6,9 +6,18 @@ import { useSettings } from "../settings";
 import { eventShortcut, sameShortcut } from "../shortcuts";
 import type { SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { compareName, displayTitle, useLocalState } from "../utils";
+import {
+  collapsedKey,
+  forgetWorkspaceState,
+  readJson,
+  readOpenWorkspaces,
+  renameWorkspaceState,
+  writeJson,
+  writeOpenWorkspaces,
+} from "../workspaceState";
 import { useNameDialog } from "./NameDialog";
 import { ProjectOverview, WorkspaceOverview } from "./Overview";
-import Sidebar, { WS_KEY, type Selection } from "./Sidebar";
+import Sidebar, { WS_KEY, type Selection, type SidebarHandle } from "./Sidebar";
 import TodoEditor, { type EditorHandle } from "./TodoEditor";
 import { todoMenu, type Actions } from "./menus";
 
@@ -30,25 +39,13 @@ const sortNames = (names: string[]) => [...new Set(names)].sort(compareName);
 
 type Collapsed = Record<string, boolean>;
 
-const collapsedKey = (ws: string) => `collapsed:${ws}`;
-
-function readCollapsed(ws: string): Collapsed {
-  try {
-    return JSON.parse(localStorage.getItem(collapsedKey(ws)) ?? "{}") as Collapsed;
-  } catch {
-    return {};
-  }
-}
+const readCollapsed = (ws: string) => readJson<Collapsed>(collapsedKey(ws), {});
 
 /** 各工作区的折叠状态，分别存在 localStorage 的 collapsed:{工作区} 里 */
 function useCollapsed() {
   const [map, setMap] = useState<Record<string, Collapsed>>({});
   useEffect(() => {
-    try {
-      for (const [ws, c] of Object.entries(map)) localStorage.setItem(collapsedKey(ws), JSON.stringify(c));
-    } catch {
-      /* 忽略 */
-    }
+    for (const [ws, c] of Object.entries(map)) writeJson(collapsedKey(ws), c);
   }, [map]);
 
   const get = (ws: string) => map[ws] ?? readCollapsed(ws);
@@ -58,25 +55,30 @@ function useCollapsed() {
   );
   /** 工作区改名后折叠状态跟过去 */
   const rename = useCallback((from: string, to: string) => {
-    setMap(({ [from]: state, ...rest }) => ({ ...rest, [to]: state ?? readCollapsed(from) }));
-    try {
-      localStorage.removeItem(collapsedKey(from));
-    } catch {
-      /* 忽略 */
-    }
+    renameWorkspaceState(from, to);
+    setMap(({ [from]: state, ...rest }) => (state ? { ...rest, [to]: state } : rest));
   }, []);
-  return [get, set, rename] as const;
+  const forget = useCallback((ws: string) => {
+    forgetWorkspaceState(ws);
+    setMap(({ [ws]: _, ...rest }) => rest);
+  }, []);
+  return [get, set, rename, forget] as const;
 }
 
 export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: Props) {
   const { message, modal } = AntApp.useApp();
-  // 侧栏里选中显示的工作区，按名称排序
-  const [workspaces, setWorkspaces] = useState<string[]>([initialWorkspace]);
+  // 侧栏里选中显示的工作区，按名称排序；进入时恢复上次选中的，再加上这次进入的
+  const [workspaces, setWorkspaces] = useState(() => sortNames([initialWorkspace, ...readOpenWorkspaces()]));
+  const restoredList = useRef(workspaces);
+  // 第一次加载前核对恢复的工作区还在不在（可能已在首页或外部删除、改名）
+  const existing = useRef<Promise<Set<string> | null> | null>(null);
   const [loaded, setLoaded] = useState<WorkspaceTree[] | null>(null);
   const [sel, setSel] = useState<Selection>({ workspace: initialWorkspace, ...initialSel });
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null);
+  // 用键盘在左侧列表里移到的选中项：这时焦点留在列表，右侧不自动聚焦输入框
+  const [kbSel, setKbSel] = useState<Selection | null>(null);
   const [keyword, setKeyword] = useState("");
-  const [collapsedOf, setCollapsed, renameCollapsed] = useCollapsed();
+  const [collapsedOf, setCollapsed, renameCollapsed, forgetCollapsed] = useCollapsed();
   const [hideDone, setHideDone] = useLocalState("hideDone", false);
   const [sortKey, setSortKey] = useLocalState<SortKey>("sortKey", "created");
   const [storedWidth, setWidth] = useLocalState("sidebarWidth", 300);
@@ -85,6 +87,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
   const { info: settingsInfo } = useSettings();
   const editorRef = useRef<EditorHandle | null>(null);
   const searchRef = useRef<InputRef>(null);
+  const sidebarRef = useRef<SidebarHandle | null>(null);
+  const mainRef = useRef<HTMLElement>(null);
 
   const onHomeRef = useRef(onHome);
   useEffect(() => {
@@ -96,7 +100,24 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
     workspacesRef.current = workspaces;
   });
 
+  useEffect(() => {
+    writeOpenWorkspaces(workspaces);
+  }, [workspaces]);
+
   const reload = useCallback(async () => {
+    if (workspaces === restoredList.current && workspaces.length > 1) {
+      existing.current ??= api.listWorkspaces().then(
+        (l) => new Set(l.map((w) => w.name)),
+        () => null,
+      );
+      const names = await existing.current;
+      // 已经不在的悄悄去掉，不必逐个报「工作区不存在」
+      const kept = names ? workspaces.filter((ws) => ws === initialWorkspace || names.has(ws)) : workspaces;
+      if (kept.length < workspaces.length) {
+        setWorkspaces(kept);
+        return;
+      }
+    }
     const results = await Promise.all(
       workspaces.map((ws) =>
         api.loadWorkspace(ws).then(sortTree, (e) => {
@@ -115,7 +136,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
     }
     if (trees.length < workspaces.length) setWorkspaces(trees.map((t) => t.name));
     setLoaded(trees);
-  }, [workspaces, message]);
+  }, [workspaces, initialWorkspace, message]);
 
   useEffect(() => {
     reload();
@@ -254,6 +275,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
             if (inSel) await flushEditor();
             await api.deleteWorkspace(ws);
             if (inSel) editorRef.current?.detach();
+            forgetCollapsed(ws);
             message.success("已移到回收站");
             const rest = workspaces.filter((w) => w !== ws);
             if (rest.length) changeWorkspaces(rest);
@@ -357,10 +379,18 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
     };
   };
 
+  /** 焦点移到右侧：待办的正文、项目概览的快速添加框，概览页没有输入框时落在右侧区域本身 */
+  const focusMain = () => {
+    const main = mainRef.current;
+    (main?.querySelector<HTMLElement>(".editor-text, .quick-add input") ?? main)?.focus();
+  };
+
   // 键盘快捷键
   const kbRef = useRef({ actionsFor, sel, selTree, selTodo, keys: settingsInfo?.settings });
+  const focusMainRef = useRef(focusMain);
   useEffect(() => {
     kbRef.current = { actionsFor, sel, selTree, selTodo, keys: settingsInfo?.settings };
+    focusMainRef.current = focusMain;
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -381,6 +411,15 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
           if (!e.repeat) a.openExternal(sel.project, selTodo);
           return;
         }
+      }
+      // Alt+←/→ 在左侧列表和右侧之间切换焦点，Alt+↑/↓ 在左侧列表里上下移动；对话框里不响应
+      if (e.altKey && !ctrl && !e.shiftKey && e.key.startsWith("Arrow")) {
+        if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
+        e.preventDefault();
+        if (e.key === "ArrowLeft") sidebarRef.current?.focus();
+        else if (e.key === "ArrowRight") focusMainRef.current();
+        else sidebarRef.current?.move(e.key === "ArrowDown" ? 1 : -1);
+        return;
       }
       if (e.key === "F5" || (ctrl && key === "r")) {
         e.preventDefault();
@@ -462,6 +501,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
         projectNames={selTree.projects.map((p) => p.name)}
         sortKey={sortKey}
         actions={a}
+        autoFocus={sel !== kbSel}
       />
     );
   } else {
@@ -475,8 +515,15 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
         workspaces={workspaces}
         onWorkspacesChange={changeWorkspaces}
         sel={sel}
+        onSelect={(s) => {
+          setFocusTitleId(null);
+          setKbSel(s);
+          setSel(s);
+        }}
         actionsFor={actionsFor}
         onHome={goHome}
+        onFocusMain={focusMain}
+        handleRef={sidebarRef}
         width={width}
         searchRef={searchRef}
         collapsedOf={collapsedOf}
@@ -489,7 +536,9 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
         setSortKey={setSortKey}
       />
       <div className="resizer" onMouseDown={startResize} onDoubleClick={() => setWidth(300)} title="拖动调整宽度，双击恢复默认" />
-      <main className="main">{main}</main>
+      <main className="main" ref={mainRef} tabIndex={-1}>
+        {main}
+      </main>
       {dialog}
     </div>
   );
