@@ -60,6 +60,7 @@ TodoList\
 npm install
 npm run tauri dev       # 开发调试
 npm run tauri build     # 打包，安装包在 src-tauri/target/release/bundle/nsis/
+npm run release         # 打包并安装到本机，见下文
 cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 ```
 
@@ -71,3 +72,22 @@ cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 - `src-tauri/src/webdav.rs`：WebDAV 连接配置、密码存取、客户端（含代理处理）
 - `src-tauri/src/lib.rs`：Tauri 命令、打开外部程序、系统托盘、全局快捷键、窗口图标
 - `src/components/`：首页（含搜索）、侧栏树、概览、编辑器、设置（快捷键、备份与恢复）
+- `scripts/release.mjs`：改版本号、打包并安装到本机（`npm run release`）
+
+### 安装到本机与升级
+
+```bash
+npm run release              # 用当前版本号打包并安装
+npm run release -- patch     # 先升版本号（0.1.0 → 0.1.1）再打包安装；也可以是 minor、major 或 0.2.0 这样的具体版本
+```
+
+`scripts/release.mjs` 依次：
+
+1. 带了版本参数时，改 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 里的版本号（`Cargo.lock` 在构建时自动更新），这几个文件的改动要一起提交
+2. `npm run tauri build`
+3. 如果程序正在运行，提示从托盘「退出」并等它退出后再继续。安装程序会直接结束所有名为 `todo-list.exe` 的进程，先正常退出才能保证正在编辑的内容已保存
+4. 运行安装包（只显示进度条，不用点下一步），装完自动启动。已经装过时按升级处理：直接覆盖，不先卸载旧版，也不会重建你删掉的快捷方式
+
+程序只装给当前用户，位置是 `%LOCALAPPDATA%\待办清单\`，不需要管理员权限，可以在「设置 → 应用」里卸载。待办数据在 `%USERPROFILE%\TodoList`，安装、升级、卸载都不会动它。
+
+平时请从开始菜单或桌面快捷方式启动安装版，不要直接运行 `src-tauri\target\release\todo-list.exe`：两者是同一个应用，同时只能开一个；而且它运行时文件被占用，再次构建会报拒绝访问（os error 5）。
