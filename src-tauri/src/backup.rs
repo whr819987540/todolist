@@ -96,6 +96,7 @@ pub fn unpack(data: &[u8]) -> Result<Settings> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::EditorBackground;
 
     fn time() -> DateTime<Local> {
         Local.with_ymd_and_hms(2026, 9, 26, 15, 30, 12).unwrap()
@@ -116,6 +117,8 @@ mod tests {
             toggle_shortcut: Some("Ctrl+Alt+Y".into()),
             open_external_shortcut: None,
             editor_font_size: 20,
+            editor_background: EditorBackground::Custom,
+            editor_custom_color: "#112233".into(),
             ..Default::default()
         };
         let data = pack(&settings, time()).unwrap();
@@ -125,6 +128,8 @@ mod tests {
         assert_eq!(back.open_external_shortcut, None);
         assert_eq!(back.editor_font_size, 20);
         assert_eq!(back.sidebar_font_size, 14);
+        assert_eq!(back.editor_background, EditorBackground::Custom);
+        assert_eq!(back.editor_custom_color, "#112233");
     }
 
     #[test]

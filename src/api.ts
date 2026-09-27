@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  EditorBackground,
   FontArea,
   RemoteBackup,
   SaveResult,
@@ -69,6 +70,9 @@ export const api = {
   pauseToggleShortcut: (paused: boolean) => invoke<SettingsInfo>("pause_toggle_shortcut", { paused }),
   /** 超出范围时后端取最近的边界值 */
   setFontSize: (area: FontArea, size: number) => invoke<SettingsInfo>("set_font_size", { area, size }),
+  /** customColor 是「自定义」用的颜色（#rrggbb），选别的背景色时也一起保存 */
+  setEditorBackground: (background: EditorBackground, customColor: string) =>
+    invoke<SettingsInfo>("set_editor_background", { background, customColor }),
 
   getWebdav: () => invoke<WebDavInfo>("get_webdav"),
   /** password 为 null 时保留原来的密码 */

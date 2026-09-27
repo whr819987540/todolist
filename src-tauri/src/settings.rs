@@ -11,6 +11,9 @@ use std::sync::{Mutex, MutexGuard};
 
 pub const SETTINGS_FILE: &str = ".settings.json";
 
+/// 编辑区自定义背景色的默认值：豆沙绿
+const DEFAULT_CUSTOM_COLOR: &str = "#c7edcc";
+
 /// 快捷键格式如 `Ctrl+Alt+T`，None 表示不使用；文件里缺的字段取默认值
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -25,6 +28,10 @@ pub struct Settings {
     pub sidebar_font_size: u32,
     /// 右侧待办正文编辑区的字号（px）
     pub editor_font_size: u32,
+    /// 右侧待办编辑区的背景色
+    pub editor_background: EditorBackground,
+    /// 背景色选「自定义」时用的颜色，`#rrggbb`；选别的背景色时也保留，再选「自定义」还是它
+    pub editor_custom_color: String,
 }
 
 impl Default for Settings {
@@ -35,8 +42,24 @@ impl Default for Settings {
             open_external_shortcut: Some("Ctrl+Alt+O".into()),
             sidebar_font_size: 14,
             editor_font_size: 15,
+            editor_background: EditorBackground::default(),
+            editor_custom_color: DEFAULT_CUSTOM_COLOR.into(),
         }
     }
+}
+
+/// 待办编辑区的背景色，只在浅色模式下区分；深色模式下编辑区总是深色背景
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EditorBackground {
+    /// 白色，和界面其他部分一致
+    White,
+    /// 用户按 RGB 设置的颜色（`editor_custom_color`）
+    Custom,
+    /// 护眼米色；认不出的值（手改的文件、新版本的备份）也按它处理，免得整个设置文件读不出来
+    #[default]
+    #[serde(other)]
+    Beige,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -113,12 +136,20 @@ impl Settings {
         *slot = size.clamp(*area.range().start(), *area.range().end());
     }
 
-    /// 手改过的设置文件或备份包里，字号可能超出范围
+    /// 手改过的设置文件或备份包里，字号可能超出范围、颜色可能写错
     fn normalize(&mut self) {
         for area in FontArea::ALL {
             self.set_font_size(area, self.font_size(area));
         }
+        self.editor_custom_color =
+            parse_color(&self.editor_custom_color).unwrap_or_else(|| DEFAULT_CUSTOM_COLOR.into());
     }
+}
+
+/// 认 `#rrggbb`（不区分大小写，`#` 可省略），统一成小写的 `#rrggbb`
+pub fn parse_color(text: &str) -> Option<String> {
+    let hex = text.trim().trim_start_matches('#');
+    (hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| format!("#{}", hex.to_ascii_lowercase()))
 }
 
 pub struct SettingsStore {
@@ -189,6 +220,43 @@ mod tests {
         assert_eq!(s.toggle_shortcut.as_deref(), Some("Ctrl+Alt+Y"));
         assert_eq!(s.font_size(FontArea::Sidebar), 14);
         assert_eq!(s.font_size(FontArea::Editor), 15);
+        assert_eq!(s.editor_background, EditorBackground::Beige);
+        assert_eq!(s.editor_custom_color, DEFAULT_CUSTOM_COLOR);
+    }
+
+    #[test]
+    fn editor_background_roundtrip_and_bad_values() {
+        let tmp = TempRoot::new("background");
+        let store = SettingsStore::load(&tmp.0);
+        let mut next = store.get();
+        next.editor_background = EditorBackground::Custom;
+        next.editor_custom_color = "#FFAA00".into();
+        store.save(next).unwrap();
+        let text = fs::read_to_string(tmp.0.join(SETTINGS_FILE)).unwrap();
+        assert!(text.contains(r#""editorBackground": "custom""#), "{text}");
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.editor_background, EditorBackground::Custom);
+        assert_eq!(s.editor_custom_color, "#ffaa00");
+
+        // 认不出的背景色、写错的颜色不能连累其他设置
+        fs::write(
+            tmp.0.join(SETTINGS_FILE),
+            br#"{"toggleShortcut":"Ctrl+Alt+Y","editorBackground":"green","editorCustomColor":"rgb(1,2,3)"}"#,
+        )
+        .unwrap();
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.editor_background, EditorBackground::Beige);
+        assert_eq!(s.editor_custom_color, DEFAULT_CUSTOM_COLOR);
+        assert_eq!(s.toggle_shortcut.as_deref(), Some("Ctrl+Alt+Y"));
+    }
+
+    #[test]
+    fn colors_are_parsed() {
+        assert_eq!(parse_color("#C7EDCC").as_deref(), Some("#c7edcc"));
+        assert_eq!(parse_color(" c7edcc ").as_deref(), Some("#c7edcc"));
+        assert_eq!(parse_color("#c7edc"), None);
+        assert_eq!(parse_color("#c7edcg"), None);
+        assert_eq!(parse_color(""), None);
     }
 
     #[test]

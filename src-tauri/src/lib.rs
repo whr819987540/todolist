@@ -6,7 +6,7 @@ mod webdav;
 use backup::RemoteBackup;
 use chrono::Local;
 use serde::Serialize;
-use settings::{FontArea, Settings, SettingsStore, ShortcutAction};
+use settings::{EditorBackground, FontArea, Settings, SettingsStore, ShortcutAction};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -405,13 +405,28 @@ fn pause_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>, pau
     settings_info(&settings)
 }
 
-// ----- 字号 -----
+// ----- 外观：字号、编辑区背景色 -----
 
 /// 修改左侧列表或编辑区的字号，超出范围时取最近的边界值
 #[tauri::command]
 fn set_font_size(settings: State<'_, SettingsStore>, area: FontArea, size: u32) -> Cmd<SettingsInfo> {
     let mut next = settings.get();
     next.set_font_size(area, size);
+    settings.save(next)?;
+    Ok(settings_info(&settings))
+}
+
+/// 修改编辑区背景色；custom_color 是「自定义」用的颜色（`#rrggbb`），选别的背景色时也一起保存
+#[tauri::command]
+fn set_editor_background(
+    settings: State<'_, SettingsStore>,
+    background: EditorBackground,
+    custom_color: String,
+) -> Cmd<SettingsInfo> {
+    let color = settings::parse_color(&custom_color).ok_or_else(|| format!("无法识别的颜色：{custom_color}"))?;
+    let mut next = settings.get();
+    next.editor_background = background;
+    next.editor_custom_color = color;
     settings.save(next)?;
     Ok(settings_info(&settings))
 }
@@ -580,6 +595,7 @@ pub fn run() {
             set_shortcut,
             pause_toggle_shortcut,
             set_font_size,
+            set_editor_background,
             get_webdav,
             save_webdav,
             test_webdav,

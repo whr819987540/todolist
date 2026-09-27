@@ -52,6 +52,9 @@ export type ShortcutAction = "toggleWindow" | "toggleDone" | "openExternal";
 /** 可以单独调字号的区域：左侧列表、右侧待办编辑区 */
 export type FontArea = "sidebar" | "editor";
 
+/** 待办编辑区的背景色：护眼米色（默认）、白色或自定义颜色；深色模式下都是深色背景 */
+export type EditorBackground = "beige" | "white" | "custom";
+
 /** 快捷键格式如 "Ctrl+Alt+T"；null 表示不使用 */
 export interface AppSettings {
   /** 全局快捷键：显示主窗口 / 隐藏到托盘 */
@@ -64,6 +67,10 @@ export interface AppSettings {
   sidebarFontSize: number;
   /** 右侧待办正文编辑区的字号（px） */
   editorFontSize: number;
+  /** 右侧待办编辑区的背景色 */
+  editorBackground: EditorBackground;
+  /** 背景色选「自定义」时用的颜色，#rrggbb；选别的背景色时也保留 */
+  editorCustomColor: string;
 }
 
 export interface SettingsInfo {

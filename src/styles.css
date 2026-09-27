@@ -23,6 +23,10 @@
   /* 字号由 settings.tsx 按设置注入，这里是默认值 */
   --fs-sidebar: 14px;
   --fs-editor: 15px;
+  /* 待办编辑区的护眼米色背景，只在浅色模式下使用 */
+  --c-beige: #f7f1e3;
+  --c-beige-bar: #efe7d4;
+  --c-beige-border: rgba(110, 84, 36, 0.14);
 }
 
 * {
@@ -875,6 +879,19 @@ mark {
   display: flex;
   flex-direction: column;
 }
+/* 编辑区背景色（设置 → 外观）：settings.tsx 按设置给根元素标 data-editor-bg、把自定义颜色写进
+   --c-editor-custom，深色模式下都不用。编辑区里的分隔线换成半透明的深色，否则灰线在有颜色的背景上发白；
+   状态栏（--c-editor-bar）比背景略深 */
+:root[data-theme="light"][data-editor-bg="beige"] .editor {
+  --c-border: var(--c-beige-border);
+  --c-editor-bar: var(--c-beige-bar);
+  background: var(--c-beige);
+}
+:root[data-theme="light"][data-editor-bg="custom"] .editor {
+  --c-border: rgba(0, 0, 0, 0.08);
+  --c-editor-bar: color-mix(in srgb, var(--c-editor-custom) 94%, #000);
+  background: var(--c-editor-custom);
+}
 
 .editor-head {
   display: flex;
@@ -951,7 +968,7 @@ mark {
   font-size: 12px;
   color: var(--c-text-3);
   border-top: 1px solid var(--c-border);
-  background: var(--c-bg-sidebar);
+  background: var(--c-editor-bar, var(--c-bg-sidebar));
   white-space: nowrap;
 }
 .statusbar-path {
@@ -1048,10 +1065,79 @@ mark {
   margin-top: 8px;
 }
 
-/* 字号 */
-.font-settings {
-  padding-top: 12px;
+/* 编辑区背景色 */
+.bg-options {
+  display: flex;
+  gap: 12px;
 }
+.bg-option {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 6px 4px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: 8px;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.bg-option:hover {
+  border-color: var(--c-primary);
+}
+.bg-option.selected {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 2px var(--c-primary-bg);
+}
+/* 色块里是浅色模式下编辑区的样子，深色模式下也照样显示 */
+.bg-swatch {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 12px;
+  line-height: 1.8;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bg-swatch.beige {
+  background: var(--c-beige);
+}
+.bg-swatch.white {
+  background: #fff;
+}
+.bg-swatch-text {
+  display: block;
+  color: rgba(0, 0, 0, 0.45);
+}
+.bg-option-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  font-size: 13px;
+}
+.bg-option.selected .bg-option-label {
+  color: var(--c-primary);
+}
+.bg-rgb {
+  margin-top: 12px;
+}
+.bg-rgb-input {
+  width: 96px;
+}
+.bg-rgb-hex {
+  margin-left: 4px;
+  font-family: var(--font-mono);
+  color: var(--c-text-3);
+  user-select: all;
+}
+
+/* 字号 */
 .font-slider {
   flex: 1;
   margin: 0 12px 0 6px;
