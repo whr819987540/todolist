@@ -67,6 +67,7 @@ const RESERVED: Record<string, string> = {
   "Ctrl+Z": "撤销", "Ctrl+Y": "重做", "Ctrl+Shift+Z": "重做",
   "Alt+ArrowLeft": "切换到左侧列表", "Alt+ArrowRight": "切换到右侧编辑区",
   "Alt+ArrowUp": "选中上一项", "Alt+ArrowDown": "选中下一项",
+  "Ctrl+Slash": "切换实时渲染 / 源码模式",
 };
 
 /** 录到的快捷键不能用时返回原因 */

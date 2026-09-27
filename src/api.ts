@@ -56,6 +56,8 @@ export const api = {
     invoke<void>("open_todo_external", { workspace, project, id }),
   revealTodo: (workspace: string, project: string, id: string) =>
     invoke<void>("reveal_todo", { workspace, project, id }),
+  /** 用浏览器 / 邮件程序打开正文里的链接，只接受 http(s) 和 mailto */
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
   openFolder: (workspace?: string, project?: string) =>
     invoke<void>("open_folder", { workspace: workspace ?? null, project: project ?? null }),
   quitApp: () => invoke<void>("quit_app"),

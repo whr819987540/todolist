@@ -12,9 +12,9 @@ import "./styles.css";
 const FONT =
   '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif';
 
-// 只在输入框里保留系统右键菜单（复制/粘贴），其他地方用应用自己的菜单
+// 只在输入框和正文编辑器里保留系统右键菜单（复制/粘贴），其他地方用应用自己的菜单
 document.addEventListener("contextmenu", (e) => {
-  if (!(e.target as HTMLElement).closest("input, textarea")) e.preventDefault();
+  if (!(e.target as HTMLElement).closest("input, textarea, [contenteditable='true']")) e.preventDefault();
 });
 
 // 屏蔽网页相关的浏览器快捷键：刷新、打印、查找、缩放重置等

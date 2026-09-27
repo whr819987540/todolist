@@ -201,6 +201,23 @@ async fn open_folder(
     tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("无法打开文件夹：{e}"))
 }
 
+/// 正文里的链接只允许网页和邮件地址，免得 Ctrl+单击链接就运行了本地程序
+fn is_web_link(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|p| lower.starts_with(p) && lower.len() > p.len())
+}
+
+/// 用系统默认的浏览器 / 邮件程序打开正文里的链接
+#[tauri::command]
+fn open_url(url: String) -> Cmd<()> {
+    if !is_web_link(&url) {
+        return Err("只能打开网页和邮件链接".into());
+    }
+    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| format!("无法打开链接：{e}"))
+}
+
 /// 前端把编辑中的内容写盘后调用，真正退出程序
 #[tauri::command]
 fn quit_app(app: AppHandle) {
@@ -557,6 +574,7 @@ pub fn run() {
             open_todo_external,
             reveal_todo,
             open_folder,
+            open_url,
             quit_app,
             get_settings,
             set_shortcut,
@@ -572,4 +590,19 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_web_link;
+
+    #[test]
+    fn only_web_links_can_be_opened() {
+        for ok in ["https://example.com", "HTTP://a.cn/x?y=1", "mailto:a@b.com"] {
+            assert!(is_web_link(ok), "{ok}");
+        }
+        for bad in ["https://", "file:///C:/Windows/notepad.exe", "C:\\a.exe", "./a.md", "javascript:alert(1)", ""] {
+            assert!(!is_web_link(bad), "{bad}");
+        }
+    }
 }

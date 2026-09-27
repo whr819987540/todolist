@@ -382,7 +382,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
   /** 焦点移到右侧：待办的正文、项目概览的快速添加框，概览页没有输入框时落在右侧区域本身 */
   const focusMain = () => {
     const main = mainRef.current;
-    (main?.querySelector<HTMLElement>(".editor-text, .quick-add input") ?? main)?.focus();
+    (main?.querySelector<HTMLElement>(".cm-content, .quick-add input") ?? main)?.focus();
   };
 
   // 键盘快捷键

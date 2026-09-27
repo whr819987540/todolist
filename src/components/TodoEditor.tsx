@@ -1,7 +1,9 @@
 import {
   CheckCircleFilled,
   CheckOutlined,
+  CodeOutlined,
   ExportOutlined,
+  EyeOutlined,
   LoadingOutlined,
   MoreOutlined,
   UndoOutlined,
@@ -22,11 +24,14 @@ import {
 } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
+import { webUrl } from "../editor/links";
+import type { EditorMode } from "../editor/setup";
 import { registerFlusher, useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useSettings } from "../settings";
-import { shortcutLabel } from "../shortcuts";
+import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
-import { countChars, fullTime, relativeTime, useNow } from "../utils";
+import { countChars, fullTime, relativeTime, useLocalState, useNow } from "../utils";
+import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 
 export interface EditorHandle {
   /** 立即保存所有未保存的修改 */
@@ -63,7 +68,10 @@ const ENCODING_LABELS: Record<TextEncoding, string> = {
   unknown: "编码无法识别（只读）",
 };
 
-/** 右侧的待办详情：标题 + Markdown 纯文本内容，自动保存 */
+const MODE_LABELS: Record<EditorMode, string> = { live: "实时渲染", source: "源码模式" };
+const otherMode = (m: EditorMode): EditorMode => (m === "live" ? "source" : "live");
+
+/** 右侧的待办详情：标题 + Markdown 正文（实时渲染或源码模式），自动保存 */
 export default function TodoEditor(props: Props) {
   const { workspace, project, summary } = props;
   const id = summary.id;
@@ -80,11 +88,12 @@ export default function TodoEditor(props: Props) {
   const [encoding, setEncoding] = useState<TextEncoding>("UTF-8");
   const [status, setStatus] = useState<Status>("saved");
   const [conflict, setConflict] = useState(false);
+  const [mode, setMode] = useLocalState<EditorMode>("editorMode", "live");
   // 认不出编码的文件只读，免得保存时把原文件覆盖成乱码
   const readOnly = encoding === "unknown";
 
   const titleRef = useRef<InputRef>(null);
-  const textRef = useRef<HTMLTextAreaElement>(null);
+  const mdRef = useRef<MarkdownEditorHandle | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const propsRef = useRef(props);
   const messageRef = useRef(message);
@@ -235,16 +244,12 @@ export default function TodoEditor(props: Props) {
   });
 
   const applyDiskContent = (d: TodoDetail) => {
-    const el = textRef.current;
-    const caret = el?.selectionStart ?? 0;
     s.content = s.savedContent = d.content;
     s.mtime = d.mtime;
     setContent(d.content);
     setEncoding(d.encoding);
     refreshStatus();
-    requestAnimationFrame(() => {
-      if (el && document.activeElement === el) el.setSelectionRange(caret, caret);
-    });
+    mdRef.current?.reset(d.content);
   };
 
   const zoomBy = (step: number) => {
@@ -313,12 +318,26 @@ export default function TodoEditor(props: Props) {
     }
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Tab 插入两个空格，而不是跳到下一个控件（execCommand 能保留撤销记录）
-    if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+  const toggleMode = () => setMode(otherMode);
+
+  // Ctrl+/ 切换实时渲染 / 源码模式（同 Typora），焦点在标题上时也能用
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (eventShortcut(e) !== "Ctrl+Slash") return;
       e.preventDefault();
-      document.execCommand("insertText", false, "  ");
+      if (!e.repeat) setMode(otherMode);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setMode]);
+
+  const openLink = (raw: string) => {
+    const url = webUrl(raw);
+    if (!url) {
+      message.warning("只能打开网页和邮件链接");
+      return;
     }
+    api.openUrl(url).catch((e) => message.error(errMsg(e)));
   };
 
   const copyPath = async () => {
@@ -381,7 +400,7 @@ export default function TodoEditor(props: Props) {
           maxLength={200}
           onChange={(e) => onTitleChange(e.target.value)}
           onBlur={() => saveTitle()}
-          onPressEnter={() => textRef.current?.focus()}
+          onPressEnter={() => mdRef.current?.focus()}
         />
         <div className="editor-meta">
           {summary.done ? (
@@ -422,16 +441,16 @@ export default function TodoEditor(props: Props) {
                 title="认不出这条待办正文的编码（不是 UTF-8 或 GBK），为免损坏原文件，这里只读显示；需要修改请用默认程序打开"
               />
             )}
-            <textarea
-              ref={textRef}
-              className="editor-text"
-              spellCheck={false}
+            <MarkdownEditor
+              handleRef={mdRef}
+              initialDoc={content}
+              mode={mode}
               readOnly={readOnly}
-              value={content}
-              placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法（此处按纯文本编辑，右键左侧待办可用默认程序打开）"}
-              onChange={(e) => onContentChange(e.target.value)}
+              placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
+              appShortcuts={[keys?.toggleDoneShortcut, keys?.openExternalShortcut]}
+              onChange={onContentChange}
               onBlur={() => saveContent()}
-              onKeyDown={onKeyDown}
+              onOpenLink={openLink}
             />
           </>
         )}
@@ -445,6 +464,18 @@ export default function TodoEditor(props: Props) {
         <span>{countChars(content)} 字</span>
         <span>{lines} 行</span>
         <span className={readOnly ? "warning-text" : undefined}>Markdown · {ENCODING_LABELS[encoding]}</span>
+        <Tooltip
+          title={
+            <>
+              点击切换到{MODE_LABELS[otherMode(mode)]}（Ctrl + /）
+              <div>按住 Ctrl 单击链接可在浏览器中打开</div>
+            </>
+          }
+        >
+          <span className="statusbar-mode" onClick={toggleMode}>
+            {mode === "live" ? <EyeOutlined /> : <CodeOutlined />} {MODE_LABELS[mode]}
+          </span>
+        </Tooltip>
         {keys && (
           <Tooltip
             title={

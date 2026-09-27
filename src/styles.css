@@ -18,6 +18,8 @@
   --c-fill: rgba(0, 0, 0, 0.02);
   --c-highlight: #ffe58f;
   --font: -apple-system, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  /* 正文里的代码；中文回落到雅黑 */
+  --font-mono: Consolas, "Cascadia Mono", "Microsoft YaHei UI", monospace;
   /* 字号由 settings.tsx 按设置注入，这里是默认值 */
   --fs-sidebar: 14px;
   --fs-editor: 15px;
@@ -927,23 +929,10 @@ mark {
   margin-top: 12px;
 }
 
-.editor-text {
+/* CodeMirror 编辑器的容器；编辑器内部的样式在 src/editor/appearance.ts */
+.editor-cm {
   flex: 1;
   min-height: 0;
-  width: 100%;
-  resize: none;
-  border: none;
-  outline: none;
-  padding: 16px 0 24px;
-  background: transparent;
-  color: var(--c-text);
-  font-family: var(--font);
-  font-size: var(--fs-editor);
-  line-height: 1.8;
-  tab-size: 2;
-}
-.editor-text::placeholder {
-  color: var(--c-text-4);
 }
 
 .editor-loading {
@@ -975,10 +964,12 @@ mark {
   cursor: pointer;
 }
 .statusbar-path:hover,
-.statusbar-font:hover {
+.statusbar-font:hover,
+.statusbar-mode:hover {
   color: var(--c-primary);
 }
-.statusbar-font {
+.statusbar-font,
+.statusbar-mode {
   cursor: pointer;
 }
 
