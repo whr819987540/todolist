@@ -75,6 +75,9 @@ function GeneralSettings() {
           ))}
         </Radio.Group>
       </div>
+      <div className="setting-hint muted">
+        切换待办时，光标和滚动总是回到这条待办上次编辑的地方；正文在外部被大幅修改、找不到原来的位置时回到开头。
+      </div>
     </>
   );
 }

@@ -14,6 +14,7 @@
   - **源码模式**：显示全部 Markdown 标记，只做语法高亮
   - 按 Ctrl+/ 或点状态栏上的「实时渲染 / 源码模式」切换。两种模式都只改变显示，文件按原样保存，不会被重新排版；图片和表格暂时显示原文
   - 按住 Ctrl 单击链接用浏览器打开；回车自动续写列表，Tab 插入两个空格
+  - 切换回某条待办时，光标和滚动回到上次编辑的地方；正文在外部被改过时按光标前后的文字找回位置，被大幅修改、找不到时回到开头
   - 代码块：输入 ```语言 后回车会自动补上结尾的 ```；在代码块里按 Ctrl+Enter，或在文末代码块的最后一行按 ↓，跳出代码块（缺结尾的 ``` 时自动补上）
 - **保存**：在「设置 → 保存」里修改，立即生效
   - auto save（默认关闭）：开启后，编辑器失去焦点、窗口失去焦点（包括隐藏到托盘）时立即保存，有修改时还定时保存（默认 3 分钟，可设 1 秒到 60 分钟；从第一处未保存的修改开始计时，继续输入不会推迟）
@@ -51,7 +52,7 @@ TodoList\
 - WebDAV 密码保存在 Windows 凭据管理器（普通凭据 `webdav.com.whr.todolist`），不写进任何文件，也不会进入备份包
 - 访问 WebDAV 时使用 Windows 的代理设置（或环境变量 `HTTPS_PROXY`），代理例外和 `NO_PROXY` 里的地址直连
 
-界面状态记在 WebView2 的 localStorage 里，不在数据目录：侧栏选中的工作区、折叠状态、宽度、排序，上次停在哪里（开屏「回到上次的位置」用）。
+界面状态记在 WebView2 的 localStorage 里，不在数据目录：侧栏选中的工作区、折叠状态、宽度、排序，上次停在哪里（开屏「回到上次的位置」用），各待办的编辑位置（最多记 300 条，最久没动过的先忘掉）。
 
 测试时可用环境变量 `TODOLIST_DATA_DIR` 指定其他数据目录。
 
@@ -114,7 +115,7 @@ cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
   $env:TAURI_CONFIG='{"identifier":"com.whr.todolist.test"}'; npm run build:debug
   ```
 
-  换了 identifier 的构建在 WebView2 缓存（localStorage 里的侧栏状态、编辑模式、上次的位置）和凭据管理器里的 WebDAV 密码（`webdav.com.whr.todolist.test`）上与安装版分开；全局快捷键仍然会和安装版冲突，测试版里可以改成别的（如 Ctrl+Alt+Y）
+  换了 identifier 的构建在 WebView2 缓存（localStorage 里的侧栏状态、编辑模式、上次的位置、编辑位置）和凭据管理器里的 WebDAV 密码（`webdav.com.whr.todolist.test`）上与安装版分开；全局快捷键仍然会和安装版冲突，测试版里可以改成别的（如 Ctrl+Alt+Y）
 - 运行测试构建时用 `TODOLIST_DATA_DIR` 指向临时目录，不要动真实数据：
 
   ```powershell
@@ -133,14 +134,15 @@ cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 - `src/settings.tsx`：前端的设置状态；字号、编辑区背景色、保存方式改动立即生效，停顿片刻再存盘。字号写进 CSS 变量 `--fs-sidebar` / `--fs-editor`；背景色标在根元素的 `data-editor-bg` 上、自定义颜色写进 `--c-editor-custom`，`styles.css` 在浅色模式下据此给编辑区上色
 - `src/hooks.ts`：窗口焦点监听；隐藏到托盘、退出前要写盘的内容登记在这里（隐藏到托盘时正在编辑的待办受 auto save 开关管，设置总是写盘；退出时都写盘）
 - `src/App.tsx`：首页 / 工作区视图的切换；启动时按开屏设置决定显示首页还是回到上次的位置
-- `src/workspaceState.ts`：记在 localStorage 里的界面状态（选中的工作区、各工作区的折叠状态、上次停在哪里），工作区改名 / 删除时同步
+- `src/workspaceState.ts`：记在 localStorage 里的界面状态（选中的工作区、各工作区的折叠状态、上次停在哪里、各待办的编辑位置），工作区 / 项目改名、删除，待办移动、删除时同步
 - `src/editor/`：基于 CodeMirror 6 的正文编辑器
   - `setup.ts`：组装编辑器（快捷键、Markdown 解析、两种模式的切换）；输入法组合中的改动等上屏后再报告，免得拼音被存盘
   - `appearance.ts`：两种模式共用的外观（语法高亮、标题 / 代码块 / 引用的整行样式）
   - `livePreview.ts`：实时渲染，按语法树隐藏标记、替换成列表符号 / 任务框 / 分隔线，光标处显示原文
   - `links.ts`：解析链接地址、Ctrl+单击打开
   - `codeFences.ts`：代码块自动补结尾、Ctrl+Enter / ↓ 跳出代码块
-- `src/components/`：首页（含搜索）、侧栏树、概览、编辑器（`TodoEditor` 管定时保存、auto save 和冲突，`MarkdownEditor` 包装 CodeMirror）、设置（常规、快捷键、外观、保存、备份与恢复）
+  - `position.ts`：编辑位置（光标、光标在编辑区里的高度、光标前后的原文），打开待办和外部修改后重新加载时据此找回光标和滚动
+- `src/components/`：首页（含搜索）、侧栏树、概览、编辑器（`TodoEditor` 管定时保存、auto save、冲突和记下编辑位置，`MarkdownEditor` 包装 CodeMirror）、设置（常规、快捷键、外观、保存、备份与恢复）
 - `scripts/release.mjs`：改版本号、打包并安装到本机（`npm run release`，`release:fast` 传 `--fast`）
 
 ### 安装到本机与升级

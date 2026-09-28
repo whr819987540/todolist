@@ -7,6 +7,7 @@ import { appearance } from "./appearance";
 import { codeFenceKeymap } from "./codeFences";
 import { ctrlClickLinks } from "./links";
 import { livePreview } from "./livePreview";
+import { type EditPosition, trackPosition } from "./position";
 
 /** live：实时渲染（隐藏标记，光标处显示原文）；source：源码模式（显示全部标记，只做语法高亮） */
 export type EditorMode = "live" | "source";
@@ -20,6 +21,8 @@ export interface EditorOptions {
   onChange: (doc: string) => void;
   onBlur: () => void;
   onOpenLink: (url: string) => void;
+  /** 光标移动、正文改动、滚动之后的编辑位置 */
+  onPosition: (p: EditPosition) => void;
 }
 
 const modeConf = new Compartment();
@@ -109,5 +112,6 @@ export function createExtensions(o: EditorOptions): Extension[] {
     readOnlyConf.of(EditorState.readOnly.of(o.readOnly)),
     ctrlClickLinks(o.onOpenLink),
     changeReporter(o),
+    trackPosition(o.onPosition),
   ];
 }

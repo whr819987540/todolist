@@ -8,9 +8,13 @@ import type { SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { compareName, displayTitle, useLocalState } from "../utils";
 import {
   collapsedKey,
+  forgetProjectState,
+  forgetTodoState,
   forgetWorkspaceState,
+  moveTodoState,
   readJson,
   readOpenWorkspaces,
+  renameProjectState,
   renameWorkspaceState,
   writeJson,
   writeLastView,
@@ -312,6 +316,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
             if (isSelProject(project)) await flushEditor();
             const name = await api.renameProject(ws, project, v);
             if (isSelProject(project)) editorRef.current?.detach();
+            renameProjectState(ws, project, name);
             setCollapsed(ws, (c) => {
               const { [project]: state, ...rest } = c;
               return state === undefined ? rest : { ...rest, [name]: state };
@@ -330,6 +335,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
             editorRef.current?.detach();
             setSel({ workspace: ws });
           }
+          forgetProjectState(ws, project);
           await reload();
           message.success("已移到回收站");
         });
@@ -362,6 +368,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
             editorRef.current?.detach();
             setSel({ workspace: ws, project });
           }
+          forgetTodoState(ws, project, t.id);
           updateTodos(ws, project, (todos) => todos.filter((x) => x.id !== t.id));
           message.success("已移到回收站");
         }),
@@ -371,6 +378,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
           if (isSel) await flushEditor();
           const moved = await api.moveTodo(ws, project, t.id, target);
           if (isSel) editorRef.current?.detach();
+          moveTodoState(ws, project, t.id, target, moved.id);
           await reload();
           expand(ws, target);
           if (isSel) setSel({ workspace: ws, project: target, todoId: moved.id });

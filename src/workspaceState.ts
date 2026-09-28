@@ -1,10 +1,15 @@
-// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态、上次停在哪里。
+// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态、上次停在哪里、各待办的编辑位置。
 // 工作区在首页改名 / 删除时也要跟着更新，所以放在这里供首页和工作区视图共用。
 
 import type { Selection } from "./components/Sidebar";
+import type { EditPosition, TextAnchor } from "./editor/position";
 
 const OPEN_KEY = "openWorkspaces";
 const LAST_VIEW_KEY = "lastView";
+const POSITIONS_KEY = "editPositions";
+
+/** 最多记住这么多条待办的编辑位置，超出时忘掉最久没动过的 */
+const MAX_POSITIONS = 300;
 
 export const collapsedKey = (ws: string) => `collapsed:${ws}`;
 
@@ -46,7 +51,78 @@ export function readLastView(): Selection | null {
 }
 export const writeLastView = (sel: Selection | null) => writeJson(LAST_VIEW_KEY, sel);
 
-/** 工作区改名后，记住的选中和折叠状态跟过去 */
+// ----- 各待办的编辑位置：按 [工作区, 项目, 待办 id] 记，最近记的排在最后 -----
+
+type TodoKey = [workspace: string, project: string, id: string];
+type Positions = Record<string, EditPosition>;
+
+const todoKey = (...k: TodoKey) => JSON.stringify(k);
+
+function readPositions(): Positions {
+  const all = readJson<unknown>(POSITIONS_KEY, {});
+  return all && typeof all === "object" && !Array.isArray(all) ? (all as Positions) : {};
+}
+
+function isAnchor(a: unknown): a is TextAnchor {
+  const x = a as Partial<TextAnchor> | null;
+  return typeof x?.pos === "number" && typeof x.before === "string" && typeof x.after === "string";
+}
+
+function isPosition(p: unknown): p is EditPosition {
+  const x = p as Partial<EditPosition> | null;
+  return isAnchor(x?.cursor) && isAnchor(x.view) && typeof x.view.top === "number";
+}
+
+/** 上次在这条待办里的编辑位置（光标和滚动） */
+export function readEditPosition(workspace: string, project: string, id: string): EditPosition | null {
+  const p = readPositions()[todoKey(workspace, project, id)];
+  return isPosition(p) ? p : null;
+}
+
+export function writeEditPosition(workspace: string, project: string, id: string, p: EditPosition) {
+  const all = readPositions();
+  const key = todoKey(workspace, project, id);
+  // 删了再加，排到最后；超出上限时从最前面（最久没动过的）删
+  delete all[key];
+  all[key] = p;
+  const keys = Object.keys(all);
+  for (const k of keys.slice(0, keys.length - MAX_POSITIONS)) delete all[k];
+  writeJson(POSITIONS_KEY, all);
+}
+
+/** 改名、移动、删除之后，记住的编辑位置跟过去；fn 返回 null 的删掉 */
+function mapPositions(fn: (key: TodoKey) => TodoKey | null) {
+  const all = readPositions();
+  const next: Positions = {};
+  let changed = false;
+  for (const [k, p] of Object.entries(all)) {
+    let to: TodoKey | null = null;
+    try {
+      to = fn(JSON.parse(k) as TodoKey);
+    } catch {
+      /* 认不出的键删掉 */
+    }
+    const nk = to && todoKey(...to);
+    if (nk !== k) changed = true;
+    if (nk) next[nk] = p;
+  }
+  if (changed) writeJson(POSITIONS_KEY, next);
+}
+
+export const renameProjectState = (ws: string, from: string, to: string) =>
+  mapPositions(([w, p, id]) => [w, w === ws && p === from ? to : p, id]);
+
+export const forgetProjectState = (ws: string, project: string) =>
+  mapPositions((k) => (k[0] === ws && k[1] === project ? null : k));
+
+/** 待办移到同一工作区的另一个项目，id 可能因为重名而变 */
+export const moveTodoState = (ws: string, project: string, id: string, target: string, newId: string) =>
+  mapPositions((k) => (k[0] === ws && k[1] === project && k[2] === id ? [ws, target, newId] : k));
+
+export const forgetTodoState = (ws: string, project: string, id: string) =>
+  mapPositions((k) => (k[0] === ws && k[1] === project && k[2] === id ? null : k));
+
+/** 工作区改名后，记住的选中、折叠状态和编辑位置跟过去 */
 export function renameWorkspaceState(from: string, to: string) {
   const collapsed = readJson<Record<string, boolean> | null>(collapsedKey(from), null);
   if (collapsed) {
@@ -54,10 +130,12 @@ export function renameWorkspaceState(from: string, to: string) {
     remove(collapsedKey(from));
   }
   writeOpenWorkspaces(readOpenWorkspaces().map((ws) => (ws === from ? to : ws)));
+  mapPositions(([w, p, id]) => [w === from ? to : w, p, id]);
 }
 
 /** 工作区删除后不再记住它，免得以后新建同名工作区时沿用 */
 export function forgetWorkspaceState(name: string) {
   remove(collapsedKey(name));
   writeOpenWorkspaces(readOpenWorkspaces().filter((ws) => ws !== name));
+  mapPositions((k) => (k[0] === name ? null : k));
 }

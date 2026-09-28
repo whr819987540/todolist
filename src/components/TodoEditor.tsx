@@ -25,12 +25,14 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { webUrl } from "../editor/links";
+import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
 import { registerFlusher, useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
 import { countChars, formatDuration, fullTime, relativeTime, useLocalState, useNow } from "../utils";
+import { readEditPosition, writeEditPosition } from "../workspaceState";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 
 export interface EditorHandle {
@@ -58,6 +60,9 @@ type Status = "saved" | "dirty" | "saving" | "error";
 
 /** Ctrl+滚轮调字号：滚轮转一格（约 100）调 1px，触控板双指缩放的小增量攒够一半再调 */
 const WHEEL_STEP = 50;
+
+/** 光标、滚动停下来多久后记下编辑位置（ms）；离开这条待办、窗口失去焦点时立即记 */
+const POSITION_DELAY = 1000;
 
 const ENCODING_LABELS: Record<TextEncoding, string> = {
   "UTF-8": "UTF-8",
@@ -93,6 +98,8 @@ export default function TodoEditor(props: Props) {
   const [status, setStatus] = useState<Status>("saved");
   const [conflict, setConflict] = useState(false);
   const [mode, setMode] = useLocalState<EditorMode>("editorMode", "live");
+  // 上次在这条待办里的编辑位置：打开时光标和滚动回到那里
+  const [initialPosition] = useState(() => readEditPosition(workspace, project, id));
   // 认不出编码的文件只读，免得保存时把原文件覆盖成乱码
   const readOnly = encoding === "unknown";
 
@@ -121,6 +128,9 @@ export default function TodoEditor(props: Props) {
     /** 定时保存（auto save 开着时）：从第一处未保存的修改开始倒计时 */
     timer: 0,
     chain: Promise.resolve(),
+    /** 还没记下的编辑位置 */
+    position: null as EditPosition | null,
+    positionTimer: 0,
   }).current;
 
   const isDirty = () => s.content !== s.savedContent || s.title !== s.savedTitle;
@@ -197,13 +207,27 @@ export default function TodoEditor(props: Props) {
     });
   };
 
+  /** 记下编辑位置（存在 localStorage），下次打开这条待办时回到这里；改名、移动、删除之后（detached）不再记 */
+  const savePosition = () => {
+    window.clearTimeout(s.positionTimer);
+    if (s.position && !s.detached) writeEditPosition(workspace, project, id, s.position);
+    s.position = null;
+  };
+
+  const onPosition = (p: EditPosition) => {
+    s.position = p;
+    window.clearTimeout(s.positionTimer);
+    s.positionTimer = window.setTimeout(savePosition, POSITION_DELAY);
+  };
+
   const flush = () => {
     stopTimer();
+    savePosition();
     saveTitle();
     return saveContent();
   };
 
-  // 加载正文；卸载（切换到别的待办、返回首页等）时把没保存的写盘，不受 auto save 开关影响
+  // 加载正文；卸载（切换到别的待办、返回首页等）时把没保存的写盘，不受 auto save 开关影响，同时记下编辑位置
   useEffect(() => {
     let cancelled = false;
     api
@@ -257,9 +281,10 @@ export default function TodoEditor(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSave, saveDelaySecs]);
 
-  // auto save：窗口失焦立即保存；重新获得焦点时检查文件是否被外部程序改过
+  // auto save：窗口失焦立即保存（编辑位置总是立即记下）；重新获得焦点时检查文件是否被外部程序改过
   useWindowFocus(async (focused) => {
     if (!focused) {
+      savePosition();
       if (autoSave) flush();
       return;
     }
@@ -479,6 +504,7 @@ export default function TodoEditor(props: Props) {
             <MarkdownEditor
               handleRef={mdRef}
               initialDoc={content}
+              initialPosition={initialPosition}
               mode={mode}
               readOnly={readOnly}
               placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
@@ -486,6 +512,7 @@ export default function TodoEditor(props: Props) {
               onChange={onContentChange}
               onBlur={() => autoSave && saveContent()}
               onOpenLink={openLink}
+              onPosition={onPosition}
             />
           </>
         )}
