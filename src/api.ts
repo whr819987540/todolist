@@ -97,6 +97,8 @@ export const api = {
     invoke<string>("test_webdav", { config, password }),
   /** 返回备份文件名 */
   backupToWebdav: () => invoke<string>("backup_to_webdav"),
+  /** 弹出「另存为」对话框（从上次备份到的文件所在的文件夹打开），返回保存的路径；取消时返回 null */
+  backupToFile: (lastFile: string | null) => invoke<string | null>("backup_to_file", { lastFile }),
   listWebdavBackups: () => invoke<RemoteBackup[]>("list_webdav_backups"),
   restoreFromWebdav: (name: string) => invoke<SettingsInfo>("restore_from_webdav", { name }),
   restoreFromFile: (data: Uint8Array) => invoke<SettingsInfo>("restore_from_file", { data: Array.from(data) }),

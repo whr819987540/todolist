@@ -1215,18 +1215,11 @@ mark {
   justify-content: space-between;
   padding-bottom: 2px;
 }
-.backup-tools {
-  display: flex;
-  gap: 4px;
-}
 .backup-bar {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
-}
-.backup-bar .setting-desc {
-  margin: 0;
 }
 .backup-list {
   max-height: 232px;

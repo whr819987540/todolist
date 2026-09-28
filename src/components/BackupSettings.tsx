@@ -1,30 +1,34 @@
-import { CloudUploadOutlined, FolderOpenOutlined, ReloadOutlined } from "@ant-design/icons";
+import { CloudUploadOutlined, DownloadOutlined, FolderOpenOutlined, ReloadOutlined } from "@ant-design/icons";
 import { App as AntApp, Button, Form, Input, Spin } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useSettings } from "../settings";
 import type { RemoteBackup, SettingsInfo, WebDavConfig, WebDavInfo } from "../types";
-import { fullTime } from "../utils";
+import { fullTime, useLocalState } from "../utils";
 
 type FormValues = WebDavConfig & { password: string };
 
 /** 本地备份包大小上限，与 Rust 端一致；设置备份只有几 KB */
 const MAX_FILE_BYTES = 1024 * 1024;
 
+/** 上次备份到本地的文件（只记在本机），下次「另存为」对话框从它所在的文件夹打开 */
+const LAST_LOCAL_BACKUP_KEY = "lastLocalBackup";
+
 const formatSize = (n: number | null) => (n == null ? "" : n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
 
-/** 设置里的「备份与恢复」：WebDAV 连接、立即备份、从 WebDAV 或本地 zip 恢复 */
+/** 设置里的「备份与恢复」：备份到本地 zip 或 WebDAV，从本地 zip 或 WebDAV 恢复 */
 export default function BackupSettings() {
   const { message, modal } = AntApp.useApp();
   const { setInfo } = useSettings();
   const [form] = Form.useForm<FormValues>();
   const [saved, setSaved] = useState<WebDavInfo | null>(null);
   const [values, setValues] = useState<FormValues | null>(null);
-  const [busy, setBusy] = useState<"test" | "save" | "backup" | null>(null);
+  const [busy, setBusy] = useState<"test" | "save" | "backup" | "file" | null>(null);
   const [backups, setBackups] = useState<RemoteBackup[] | null>(null);
   const [listing, setListing] = useState(false);
   const [listError, setListError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const [lastLocalBackup, setLastLocalBackup] = useLocalState<string | null>(LAST_LOCAL_BACKUP_KEY, null);
 
   const refreshList = useCallback(async () => {
     setListing(true);
@@ -108,6 +112,14 @@ export default function BackupSettings() {
       refreshList();
     });
 
+  const onBackupFile = () =>
+    run("file", async () => {
+      const path = await api.backupToFile(lastLocalBackup);
+      if (!path) return;
+      setLastLocalBackup(path);
+      message.success(`已备份到 ${path}`);
+    });
+
   const restored = (info: SettingsInfo) => {
     setInfo(info);
     const shortcut = info.settings.toggleShortcut;
@@ -182,6 +194,19 @@ export default function BackupSettings() {
 
   return (
     <>
+      <div className="setting-group">本地备份</div>
+      <div className="setting-desc">
+        只含快捷键、字号等设置（.settings.json），不含待办数据和密码；本地和 WebDAV 上的备份文件通用。
+      </div>
+      <div className="backup-bar">
+        <Button icon={<DownloadOutlined />} loading={busy === "file"} onClick={onBackupFile}>
+          备份到本地文件…
+        </Button>
+        <Button icon={<FolderOpenOutlined />} onClick={() => fileRef.current?.click()}>
+          从本地文件恢复…
+        </Button>
+      </div>
+
       <div className="setting-group">WebDAV 服务器</div>
       <div className="setting-desc">
         坚果云地址为 https://dav.jianguoyun.com/dav/，密码填「第三方应用管理」里生成的应用密码；远程目录不存在时自动创建。
@@ -219,17 +244,17 @@ export default function BackupSettings() {
       </Form>
 
       <div className="setting-group backup-head">
-        <span>备份与恢复</span>
-        <span className="backup-tools">
-          {configured && (
-            <Button type="text" size="small" icon={<ReloadOutlined />} loading={listing} onClick={refreshList}>
-              刷新
-            </Button>
-          )}
-          <Button type="text" size="small" icon={<FolderOpenOutlined />} onClick={() => fileRef.current?.click()}>
-            从本地文件恢复…
-          </Button>
-        </span>
+        <span>WebDAV 上的备份</span>
+        <Button
+          type="text"
+          size="small"
+          icon={<ReloadOutlined />}
+          loading={listing}
+          disabled={!configured}
+          onClick={refreshList}
+        >
+          刷新
+        </Button>
       </div>
       <div className="backup-bar">
         <Button
@@ -241,7 +266,6 @@ export default function BackupSettings() {
         >
           立即备份到 WebDAV
         </Button>
-        <span className="setting-desc">只含快捷键、字号等设置（.settings.json），不含待办数据和密码</span>
       </div>
       {list}
       <input ref={fileRef} type="file" accept=".zip,application/zip" hidden onChange={onPickFile} />
