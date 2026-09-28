@@ -1,11 +1,12 @@
-// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态和上次打开的待办、上次停在哪里、
-// 各待办的编辑位置；
+// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态、排序、隐藏已完成和上次打开的待办、
+// 上次停在哪里、各待办的编辑位置；
 // 以及只在这次运行期间记在内存里的各待办的撤销记录。
 // 工作区在首页改名 / 删除时也要跟着更新（后退、前进的记录也在这时一起更新），所以放在这里供首页和工作区视图共用。
 
 import type { Selection } from "./components/Sidebar";
 import type { EditPosition, TextAnchor } from "./editor/position";
 import { mapPlaces } from "./navHistory";
+import type { SortKey } from "./types";
 
 const OPEN_KEY = "openWorkspaces";
 const LAST_VIEW_KEY = "lastView";
@@ -16,6 +17,10 @@ const POSITIONS_KEY = "editPositions";
 const MAX_POSITIONS = 300;
 
 export const collapsedKey = (ws: string) => `collapsed:${ws}`;
+export const listOptionsKey = (ws: string) => `listOptions:${ws}`;
+
+/** 按工作区分别存的 localStorage 键，工作区改名、删除时跟着改 */
+const PER_WORKSPACE_KEYS = [collapsedKey, listOptionsKey];
 
 export function readJson<T>(key: string, fallback: T): T {
   try {
@@ -40,6 +45,25 @@ function remove(key: string) {
   } catch {
     /* 忽略 */
   }
+}
+
+/** 一个工作区在左侧列表（和项目概览）里的排序、是否隐藏已完成 */
+export interface ListOptions {
+  sortKey: SortKey;
+  hideDone: boolean;
+}
+
+const isSortKey = (v: unknown): v is SortKey => v === "created" || v === "updated" || v === "title";
+
+/**
+ * 这个工作区的排序和隐藏已完成。还没单独设置过的，沿用以前不分工作区时的设置（localStorage 的 sortKey / hideDone），
+ * 那也没有就按创建时间排序、显示已完成
+ */
+export function readListOptions(ws: string): ListOptions {
+  const own = readJson<Partial<Record<keyof ListOptions, unknown>> | null>(listOptionsKey(ws), null);
+  const sortKey = own?.sortKey ?? readJson<unknown>("sortKey", null);
+  const hideDone = own?.hideDone ?? readJson<unknown>("hideDone", null);
+  return { sortKey: isSortKey(sortKey) ? sortKey : "created", hideDone: hideDone === true };
 }
 
 /** 上次在侧栏选中的工作区，下次进入时恢复 */
@@ -199,12 +223,13 @@ export const moveTodoState = (ws: string, project: string, id: string, target: s
 export const forgetTodoState = (ws: string, project: string, id: string) =>
   mapTodoState((k) => (k[0] === ws && k[1] === project && k[2] === id ? null : k));
 
-/** 工作区改名后，记住的选中、折叠状态、上次打开的待办、编辑位置和撤销记录跟过去 */
+/** 工作区改名后，记住的选中、折叠状态、排序和隐藏已完成、上次打开的待办、编辑位置和撤销记录跟过去 */
 export function renameWorkspaceState(from: string, to: string) {
-  const collapsed = readJson<Record<string, boolean> | null>(collapsedKey(from), null);
-  if (collapsed) {
-    writeJson(collapsedKey(to), collapsed);
-    remove(collapsedKey(from));
+  for (const key of PER_WORKSPACE_KEYS) {
+    const v = readJson<unknown>(key(from), null);
+    if (v == null) continue;
+    writeJson(key(to), v);
+    remove(key(from));
   }
   writeOpenWorkspaces(readOpenWorkspaces().map((ws) => (ws === from ? to : ws)));
   mapTodoState(([w, p, id]) => [w === from ? to : w, p, id]);
@@ -212,7 +237,7 @@ export function renameWorkspaceState(from: string, to: string) {
 
 /** 工作区删除后不再记住它，免得以后新建同名工作区时沿用 */
 export function forgetWorkspaceState(name: string) {
-  remove(collapsedKey(name));
+  for (const key of PER_WORKSPACE_KEYS) remove(key(name));
   writeOpenWorkspaces(readOpenWorkspaces().filter((ws) => ws !== name));
   mapTodoState((k) => (k[0] === name ? null : k));
 }

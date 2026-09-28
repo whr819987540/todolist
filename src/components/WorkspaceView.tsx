@@ -5,15 +5,18 @@ import { useWindowFocus } from "../hooks";
 import { type How, visit } from "../navHistory";
 import { useSettings } from "../settings";
 import { eventShortcut, sameShortcut } from "../shortcuts";
-import type { SortKey, TodoSummary, WorkspaceTree } from "../types";
+import type { TodoSummary, WorkspaceTree } from "../types";
 import { compareName, displayTitle, useLocalState } from "../utils";
 import {
   collapsedKey,
   forgetProjectState,
   forgetTodoState,
   forgetWorkspaceState,
+  type ListOptions,
+  listOptionsKey,
   moveTodoState,
   readJson,
+  readListOptions,
   readOpenWorkspaces,
   renameProjectState,
   renameWorkspaceState,
@@ -55,28 +58,28 @@ type Collapsed = Record<string, boolean>;
 
 const readCollapsed = (ws: string) => readJson<Collapsed>(collapsedKey(ws), {});
 
-/** 各工作区的折叠状态，分别存在 localStorage 的 collapsed:{工作区} 里 */
-function useCollapsed() {
-  const [map, setMap] = useState<Record<string, Collapsed>>({});
+/**
+ * 按工作区分别存在 localStorage 里的界面状态（折叠状态存在 collapsed:{工作区}，排序和隐藏已完成存在
+ * listOptions:{工作区}），用到哪个工作区才读；key、read 要是固定的函数
+ */
+function usePerWorkspace<T>(key: (ws: string) => string, read: (ws: string) => T) {
+  const [map, setMap] = useState<Record<string, T>>({});
   useEffect(() => {
-    for (const [ws, c] of Object.entries(map)) writeJson(collapsedKey(ws), c);
-  }, [map]);
+    for (const [ws, v] of Object.entries(map)) writeJson(key(ws), v);
+  }, [map, key]);
 
-  const get = (ws: string) => map[ws] ?? readCollapsed(ws);
+  const get = (ws: string) => map[ws] ?? read(ws);
   const set = useCallback(
-    (ws: string, fn: (prev: Collapsed) => Collapsed) => setMap((m) => ({ ...m, [ws]: fn(m[ws] ?? readCollapsed(ws)) })),
+    (ws: string, fn: (prev: T) => T) => setMap((m) => ({ ...m, [ws]: fn(m[ws] ?? read(ws)) })),
+    [read],
+  );
+  /** 工作区改名、删除后，内存里的跟着改（localStorage 里的由 workspaceState 改） */
+  const rename = useCallback(
+    (from: string, to: string) => setMap(({ [from]: v, ...rest }) => (v === undefined ? rest : { ...rest, [to]: v })),
     [],
   );
-  /** 工作区改名后折叠状态跟过去 */
-  const rename = useCallback((from: string, to: string) => {
-    renameWorkspaceState(from, to);
-    setMap(({ [from]: state, ...rest }) => (state ? { ...rest, [to]: state } : rest));
-  }, []);
-  const forget = useCallback((ws: string) => {
-    forgetWorkspaceState(ws);
-    setMap(({ [ws]: _, ...rest }) => rest);
-  }, []);
-  return [get, set, rename, forget] as const;
+  const forget = useCallback((ws: string) => setMap(({ [ws]: _, ...rest }) => rest), []);
+  return { get, set, rename, forget };
 }
 
 export default function WorkspaceView({ initialWorkspace, initialSel, onHome, handleRef }: Props) {
@@ -98,9 +101,10 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   // 用键盘在左侧列表里移到的选中项：这时焦点留在列表，右侧不自动聚焦输入框
   const [kbSel, setKbSel] = useState<Selection | null>(null);
   const [keyword, setKeyword] = useState("");
-  const [collapsedOf, setCollapsed, renameCollapsed, forgetCollapsed] = useCollapsed();
-  const [hideDone, setHideDone] = useLocalState("hideDone", false);
-  const [sortKey, setSortKey] = useLocalState<SortKey>("sortKey", "created");
+  const collapsed = usePerWorkspace(collapsedKey, readCollapsed);
+  const setCollapsed = collapsed.set;
+  const listOptions = usePerWorkspace(listOptionsKey, readListOptions);
+  const setListOptions = (ws: string, patch: Partial<ListOptions>) => listOptions.set(ws, (o) => ({ ...o, ...patch }));
   const [storedWidth, setWidth] = useLocalState("sidebarWidth", 300);
   const width = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, storedWidth));
   const [dialog, openDialog] = useNameDialog();
@@ -248,6 +252,20 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     },
   }));
 
+  /** 工作区改名后，按工作区记的状态（折叠状态、排序等，和记住的选中、编辑位置等）跟过去 */
+  const renameWorkspaceMemory = (from: string, to: string) => {
+    renameWorkspaceState(from, to);
+    collapsed.rename(from, to);
+    listOptions.rename(from, to);
+  };
+
+  /** 工作区删除后不再记住它，免得以后新建同名工作区时沿用 */
+  const forgetWorkspaceMemory = (ws: string) => {
+    forgetWorkspaceState(ws);
+    collapsed.forget(ws);
+    listOptions.forget(ws);
+  };
+
   /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
   const flushEditor = () => editorRef.current?.flush() ?? Promise.resolve();
 
@@ -306,7 +324,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
             if (inSel) await flushEditor();
             const name = await api.renameWorkspace(ws, v);
             if (inSel) editorRef.current?.detach();
-            renameCollapsed(ws, name);
+            renameWorkspaceMemory(ws, name);
             setWorkspaces((list) => sortNames(list.map((w) => (w === ws ? name : w))));
             if (inSel) setSel({ ...sel, workspace: name }, "replace");
             message.success("已重命名");
@@ -321,7 +339,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
             if (inSel) await flushEditor();
             await api.deleteWorkspace(ws);
             if (inSel) editorRef.current?.detach();
-            forgetCollapsed(ws);
+            forgetWorkspaceMemory(ws);
             message.success("已移到回收站");
             const rest = workspaces.filter((w) => w !== ws);
             if (rest.length) changeWorkspaces(rest);
@@ -549,7 +567,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         workspace={selTree.name}
         project={selProject}
         projectNames={selTree.projects.map((p) => p.name)}
-        sortKey={sortKey}
+        sortKey={listOptions.get(selTree.name).sortKey}
         actions={a}
         autoFocus={sel !== kbSel}
       />
@@ -576,14 +594,12 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         handleRef={sidebarRef}
         width={width}
         searchRef={searchRef}
-        collapsedOf={collapsedOf}
+        collapsedOf={collapsed.get}
         setCollapsed={setCollapsed}
         keyword={keyword}
         setKeyword={setKeyword}
-        hideDone={hideDone}
-        setHideDone={setHideDone}
-        sortKey={sortKey}
-        setSortKey={setSortKey}
+        listOptionsOf={listOptions.get}
+        setListOptions={setListOptions}
       />
       <div className="resizer" onMouseDown={startResize} onDoubleClick={() => setWidth(300)} title="拖动调整宽度，双击恢复默认" />
       <main className="main" ref={mainRef} tabIndex={-1}>

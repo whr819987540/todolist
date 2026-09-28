@@ -31,6 +31,7 @@ import {
   sortTodos,
   useNow,
 } from "../utils";
+import type { ListOptions } from "../workspaceState";
 import Highlight from "./Highlight";
 import { projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
 import SettingsButton from "./SettingsButton";
@@ -81,10 +82,9 @@ interface Props {
   setCollapsed: (workspace: string, fn: (prev: Collapsed) => Collapsed) => void;
   keyword: string;
   setKeyword: (v: string) => void;
-  hideDone: boolean;
-  setHideDone: (v: boolean) => void;
-  sortKey: SortKey;
-  setSortKey: (v: SortKey) => void;
+  /** 各工作区的排序和隐藏已完成；侧栏顶部的按钮改的是右侧正在显示的工作区的 */
+  listOptionsOf: (workspace: string) => ListOptions;
+  setListOptions: (workspace: string, patch: Partial<ListOptions>) => void;
 }
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -97,7 +97,7 @@ const countDone = (t: WorkspaceTree) => t.projects.reduce((n, p) => n + p.todos.
 const countAll = (t: WorkspaceTree) => t.projects.reduce((n, p) => n + p.todos.length, 0);
 
 export default function Sidebar(props: Props) {
-  const { trees, sel, actionsFor, collapsedOf, setCollapsed, keyword, hideDone, sortKey } = props;
+  const { trees, sel, actionsFor, collapsedOf, setCollapsed, keyword, listOptionsOf } = props;
   const now = useNow();
   const kw = keyword.trim();
   const multi = trees.length > 1;
@@ -197,11 +197,15 @@ export default function Sidebar(props: Props) {
     },
   };
 
+  // 排序和隐藏已完成作用于右侧正在显示的工作区，选中了多个工作区时在提示里写明是哪个
+  const { sortKey, hideDone } = listOptionsOf(sel.workspace);
+  const ofWs = multi ? `「${sel.workspace}」的` : "";
+  const sortItems = (Object.keys(SORT_LABELS) as SortKey[]).map((k) => ({ key: k, label: SORT_LABELS[k] }));
   const sortMenu: MenuProps = {
     selectable: true,
     selectedKeys: [sortKey],
-    items: (Object.keys(SORT_LABELS) as SortKey[]).map((k) => ({ key: k, label: SORT_LABELS[k] })),
-    onClick: ({ key }) => props.setSortKey(key as SortKey),
+    items: multi ? [{ type: "group", label: `${ofWs}排序`, children: sortItems }] : sortItems,
+    onClick: ({ key }) => props.setListOptions(sel.workspace, { sortKey: key as SortKey }),
   };
 
   return (
@@ -245,17 +249,17 @@ export default function Sidebar(props: Props) {
       <div className="sidebar-bar">
         <span className="sidebar-bar-title">{multi ? "工作区、项目与待办" : "项目与待办"}</span>
         <Dropdown menu={sortMenu} trigger={["click"]}>
-          <Tooltip title={`排序：${SORT_LABELS[sortKey]}`}>
+          <Tooltip title={`${ofWs}排序：${SORT_LABELS[sortKey]}`}>
             <Button type="text" size="small" icon={<SortAscendingOutlined />} />
           </Tooltip>
         </Dropdown>
-        <Tooltip title={hideDone ? "显示已完成" : "隐藏已完成"}>
+        <Tooltip title={`${hideDone ? "显示" : "隐藏"}${ofWs}已完成${multi ? "待办" : ""}`}>
           <Button
             type="text"
             size="small"
             className={hideDone ? "is-active" : undefined}
             icon={hideDone ? <EyeInvisibleOutlined /> : <EyeOutlined />}
-            onClick={() => props.setHideDone(!hideDone)}
+            onClick={() => props.setListOptions(sel.workspace, { hideDone: !hideDone })}
           />
         </Tooltip>
         <Tooltip title={anyProjectOpen ? "全部折叠" : "全部展开"}>
@@ -286,8 +290,7 @@ export default function Sidebar(props: Props) {
             collapsed={collapsedOf(tree.name)}
             setCollapsed={(fn) => setCollapsed(tree.name, fn)}
             keyword={kw}
-            hideDone={hideDone}
-            sortKey={sortKey}
+            {...listOptionsOf(tree.name)}
             now={now}
           />
         ))}
