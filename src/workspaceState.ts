@@ -1,6 +1,6 @@
 // 界面状态：
 // - 记在数据目录 .state.json 里、跟着数据走的：侧栏选中显示的工作区、上次停在哪里、每个工作区上次打开的待办、
-//   各待办的编辑位置；
+//   各待办的编辑位置和编辑模式；
 // - 只记在本机 localStorage 里的：每个工作区的折叠状态、排序和隐藏已完成；
 // - 只在这次运行期间记在内存里的：各待办的撤销记录。
 // 工作区在首页改名 / 删除时也要跟着更新（后退、前进的记录也在这时一起更新），所以放在这里供首页和工作区视图共用。
@@ -8,19 +8,27 @@
 import { api } from "./api";
 import type { Selection } from "./components/Sidebar";
 import type { EditPosition, TextAnchor } from "./editor/position";
+import type { EditorMode } from "./editor/setup";
 import { registerFlusher } from "./hooks";
 import { mapPlaces } from "./navHistory";
 import type { SortKey } from "./types";
 
-/** .state.json 里各项的名字；以前这几项记在 localStorage 里，用的也是这些名字 */
+/** .state.json 里各项的名字 */
 const OPEN_KEY = "openWorkspaces";
 const LAST_VIEW_KEY = "lastView";
 const LAST_TODOS_KEY = "lastTodos";
 const POSITIONS_KEY = "editPositions";
+const MODES_KEY = "editorModes";
+/** 以前记在 localStorage 里的几项（用的也是这些名字），第一次启动时搬进 .state.json */
 const FILE_KEYS = [OPEN_KEY, LAST_VIEW_KEY, LAST_TODOS_KEY, POSITIONS_KEY];
+/** 按待办记的几项：工作区 / 项目改名、待办移动后跟着走 */
+const PER_TODO_KEYS = [POSITIONS_KEY, MODES_KEY];
 
-/** 最多记住这么多条待办的编辑位置，超出时忘掉最久没动过的 */
-const MAX_POSITIONS = 300;
+/** 按待办记的每一项（编辑位置、编辑模式）最多记这么多条待办，超出时忘掉最久没动过的 */
+const MAX_PER_TODO = 300;
+
+/** 编辑模式以前不分待办，只有一个，记在 localStorage 的这里；现在是没切换过的待办用的模式 */
+const LEGACY_MODE_KEY = "editorMode";
 
 /** .state.json 改动后多久写盘（ms），从第一处没写盘的改动算起；隐藏到托盘、退出前立即写 */
 const SAVE_DELAY = 5000;
@@ -190,17 +198,27 @@ export function writeLastTodo(workspace: string, project: string, id: string) {
   writeSaved(LAST_TODOS_KEY, { ...all, [workspace]: [project, id] });
 }
 
-// ----- 各待办的编辑位置：按 [工作区, 项目, 待办 id] 记，最近记的排在最后 -----
+// ----- 各待办的编辑位置、编辑模式：按 [工作区, 项目, 待办 id] 记，最近记的排在最后 -----
 
 /** 按待办记的东西用的键；后退、前进的记录里只到工作区 / 项目一级的，后面是空串 */
 export type TodoKey = [workspace: string, project: string, id: string];
-type Positions = Record<string, EditPosition>;
 
 const todoKey = (...k: TodoKey) => JSON.stringify(k);
 
-function readPositions(): Positions {
-  const all = saved[POSITIONS_KEY];
-  return isObject(all) ? (all as Positions) : {};
+/** .state.json 里按待办记的一项：todoKey → 值 */
+function readPerTodo(name: string): Record<string, unknown> {
+  const all = saved[name];
+  return isObject(all) ? all : {};
+}
+
+/** 记下一条待办的值（删了再加，排到最后；超出上限时从最前面、最久没动过的删）；value 为 undefined 时删掉 */
+function writePerTodo(name: string, key: string, value: unknown) {
+  const all = { ...readPerTodo(name) };
+  delete all[key];
+  if (value !== undefined) all[key] = value;
+  const keys = Object.keys(all);
+  for (const k of keys.slice(0, keys.length - MAX_PER_TODO)) delete all[k];
+  writeSaved(name, all);
 }
 
 function isAnchor(a: unknown): a is TextAnchor {
@@ -220,20 +238,30 @@ function isPosition(p: unknown): p is EditPosition {
 
 /** 上次在这条待办里的编辑位置（光标、选区和滚动） */
 export function readEditPosition(workspace: string, project: string, id: string): EditPosition | null {
-  const p = readPositions()[todoKey(workspace, project, id)];
+  const p = readPerTodo(POSITIONS_KEY)[todoKey(workspace, project, id)];
   return isPosition(p) ? p : null;
 }
 
-export function writeEditPosition(workspace: string, project: string, id: string, p: EditPosition) {
-  const all = { ...readPositions() };
-  const key = todoKey(workspace, project, id);
-  // 删了再加，排到最后；超出上限时从最前面（最久没动过的）删
-  delete all[key];
-  all[key] = p;
-  const keys = Object.keys(all);
-  for (const k of keys.slice(0, keys.length - MAX_POSITIONS)) delete all[k];
-  writeSaved(POSITIONS_KEY, all);
+export const writeEditPosition = (workspace: string, project: string, id: string, p: EditPosition) =>
+  writePerTodo(POSITIONS_KEY, todoKey(workspace, project, id), p);
+
+const isMode = (m: unknown): m is EditorMode => m === "live" || m === "source";
+
+/** 没切换过的待办用的编辑模式：实时渲染；以前不分待办时选了源码模式的，沿用源码模式 */
+function defaultMode(): EditorMode {
+  const legacy = readJson<unknown>(LEGACY_MODE_KEY, null);
+  return isMode(legacy) ? legacy : "live";
 }
+
+/** 这条待办的编辑模式（实时渲染 / 源码模式） */
+export function readEditorMode(workspace: string, project: string, id: string): EditorMode {
+  const m = readPerTodo(MODES_KEY)[todoKey(workspace, project, id)];
+  return isMode(m) ? m : defaultMode();
+}
+
+/** 只记和默认不一样的，切回默认模式时删掉 */
+export const writeEditorMode = (workspace: string, project: string, id: string, mode: EditorMode) =>
+  writePerTodo(MODES_KEY, todoKey(workspace, project, id), mode === defaultMode() ? undefined : mode);
 
 // ----- 各待办的撤销记录：只在这次运行期间记在内存里，切到别的待办再切回来时接着用 -----
 
@@ -264,7 +292,10 @@ export function takeUndo(workspace: string, project: string, id: string, doc: st
   return snap?.doc === doc ? snap.history : null;
 }
 
-/** 改名、移动、删除之后，记住的编辑位置、各工作区上次打开的待办、撤销记录和后退、前进的记录跟过去；fn 返回 null 的删掉 */
+/**
+ * 改名、移动、删除之后，记住的编辑位置、编辑模式、各工作区上次打开的待办、撤销记录和后退、前进的记录跟过去；
+ * fn 返回 null 的删掉
+ */
 function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
   const move = (k: string) => {
     try {
@@ -274,15 +305,16 @@ function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
       return null; // 认不出的键删掉
     }
   };
-  const all = readPositions();
-  const next: Positions = {};
-  let changed = false;
-  for (const [k, p] of Object.entries(all)) {
-    const nk = move(k);
-    if (nk !== k) changed = true;
-    if (nk) next[nk] = p;
+  for (const name of PER_TODO_KEYS) {
+    const next: Record<string, unknown> = {};
+    let changed = false;
+    for (const [k, v] of Object.entries(readPerTodo(name))) {
+      const nk = move(k);
+      if (nk !== k) changed = true;
+      if (nk) next[nk] = v;
+    }
+    if (changed) writeSaved(name, next);
   }
-  if (changed) writeSaved(POSITIONS_KEY, next);
   const lastBefore = readLastTodos();
   const last: LastTodos = {};
   for (const [ws, v] of Object.entries(lastBefore)) {

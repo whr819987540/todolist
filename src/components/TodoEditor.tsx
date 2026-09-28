@@ -31,8 +31,15 @@ import { registerFlusher, useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
-import { countChars, formatDuration, fullTime, relativeTime, useLocalState, useNow } from "../utils";
-import { keepUndo, readEditPosition, takeUndo, writeEditPosition } from "../workspaceState";
+import { countChars, formatDuration, fullTime, relativeTime, useNow } from "../utils";
+import {
+  keepUndo,
+  readEditorMode,
+  readEditPosition,
+  takeUndo,
+  writeEditorMode,
+  writeEditPosition,
+} from "../workspaceState";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 
 export interface EditorHandle {
@@ -97,7 +104,8 @@ export default function TodoEditor(props: Props) {
   const [encoding, setEncoding] = useState<TextEncoding>("UTF-8");
   const [status, setStatus] = useState<Status>("saved");
   const [conflict, setConflict] = useState(false);
-  const [mode, setMode] = useLocalState<EditorMode>("editorMode", "live");
+  // 实时渲染 / 源码模式，每条待办分别记住
+  const [mode, setMode] = useState(() => readEditorMode(workspace, project, id));
   // 上次在这条待办里的编辑位置：打开时光标（选区）和滚动回到那里
   const [initialPosition] = useState(() => readEditPosition(workspace, project, id));
   // 这次运行期间上次打开时留下的撤销记录，正文在外部被改过时不用
@@ -378,18 +386,27 @@ export default function TodoEditor(props: Props) {
     }
   };
 
-  const toggleMode = () => setMode(otherMode);
+  /** 切换这条待办的编辑模式并记下；改名、移动、删除之后（detached）不再记 */
+  const toggleMode = () => {
+    const next = otherMode(mode);
+    setMode(next);
+    if (!s.detached) writeEditorMode(workspace, project, id, next);
+  };
+  const toggleModeRef = useRef(toggleMode);
+  useEffect(() => {
+    toggleModeRef.current = toggleMode;
+  });
 
   // Ctrl+/ 切换实时渲染 / 源码模式（同 Typora），焦点在标题上时也能用
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (eventShortcut(e) !== "Ctrl+Slash") return;
       e.preventDefault();
-      if (!e.repeat) setMode(otherMode);
+      if (!e.repeat) toggleModeRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setMode]);
+  }, []);
 
   const openLink = (raw: string) => {
     const url = webUrl(raw);
@@ -552,7 +569,7 @@ export default function TodoEditor(props: Props) {
         <Tooltip
           title={
             <>
-              点击切换到{MODE_LABELS[otherMode(mode)]}（Ctrl + /）
+              点击切换到{MODE_LABELS[otherMode(mode)]}（Ctrl + /），每条待办分别记住
               <div>按住 Ctrl 单击链接可在浏览器中打开</div>
             </>
           }
