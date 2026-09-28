@@ -1,4 +1,5 @@
-// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态、上次停在哪里、各待办的编辑位置；
+// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态和上次打开的待办、上次停在哪里、
+// 各待办的编辑位置；
 // 以及只在这次运行期间记在内存里的各待办的撤销记录。
 // 工作区在首页改名 / 删除时也要跟着更新，所以放在这里供首页和工作区视图共用。
 
@@ -7,6 +8,7 @@ import type { EditPosition, TextAnchor } from "./editor/position";
 
 const OPEN_KEY = "openWorkspaces";
 const LAST_VIEW_KEY = "lastView";
+const LAST_TODOS_KEY = "lastTodos";
 const POSITIONS_KEY = "editPositions";
 
 /** 最多记住这么多条待办的编辑位置，超出时忘掉最久没动过的 */
@@ -51,6 +53,28 @@ export function readLastView(): Selection | null {
   return { workspace: v.workspace, project: str(v.project), todoId: str(v.todoId) };
 }
 export const writeLastView = (sel: Selection | null) => writeJson(LAST_VIEW_KEY, sel);
+
+/** 各工作区上次打开的待办：工作区 → [项目, 待办 id] */
+type LastTodos = Record<string, [project: string, id: string]>;
+
+function readLastTodos(): LastTodos {
+  const all = readJson<unknown>(LAST_TODOS_KEY, {});
+  return all && typeof all === "object" && !Array.isArray(all) ? (all as LastTodos) : {};
+}
+
+/** 这个工作区上次打开的待办，从首页进入工作区时直接打开它 */
+export function readLastTodo(workspace: string): Omit<Selection, "workspace"> | null {
+  const v = readLastTodos()[workspace];
+  if (!Array.isArray(v) || typeof v[0] !== "string" || typeof v[1] !== "string" || !v[0] || !v[1]) return null;
+  return { project: v[0], todoId: v[1] };
+}
+
+export function writeLastTodo(workspace: string, project: string, id: string) {
+  const all = readLastTodos();
+  const v = all[workspace];
+  if (v?.[0] === project && v[1] === id) return;
+  writeJson(LAST_TODOS_KEY, { ...all, [workspace]: [project, id] });
+}
 
 // ----- 各待办的编辑位置：按 [工作区, 项目, 待办 id] 记，最近记的排在最后 -----
 
@@ -120,7 +144,7 @@ export function takeUndo(workspace: string, project: string, id: string, doc: st
   return snap?.doc === doc ? snap.history : null;
 }
 
-/** 改名、移动、删除之后，记住的编辑位置和撤销记录跟过去；fn 返回 null 的删掉 */
+/** 改名、移动、删除之后，记住的编辑位置、各工作区上次打开的待办和撤销记录跟过去；fn 返回 null 的删掉 */
 function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
   const move = (k: string) => {
     try {
@@ -139,6 +163,13 @@ function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
     if (nk) next[nk] = p;
   }
   if (changed) writeJson(POSITIONS_KEY, next);
+  const lastBefore = readLastTodos();
+  const last: LastTodos = {};
+  for (const [ws, v] of Object.entries(lastBefore)) {
+    const to = Array.isArray(v) ? fn([ws, v[0], v[1]]) : null;
+    if (to) last[to[0]] = [to[1], to[2]];
+  }
+  if (JSON.stringify(last) !== JSON.stringify(lastBefore)) writeJson(LAST_TODOS_KEY, last);
   for (const [k, snap] of [...undos]) {
     const nk = move(k);
     if (nk === k) continue;
@@ -160,7 +191,7 @@ export const moveTodoState = (ws: string, project: string, id: string, target: s
 export const forgetTodoState = (ws: string, project: string, id: string) =>
   mapTodoState((k) => (k[0] === ws && k[1] === project && k[2] === id ? null : k));
 
-/** 工作区改名后，记住的选中、折叠状态、编辑位置和撤销记录跟过去 */
+/** 工作区改名后，记住的选中、折叠状态、上次打开的待办、编辑位置和撤销记录跟过去 */
 export function renameWorkspaceState(from: string, to: string) {
   const collapsed = readJson<Record<string, boolean> | null>(collapsedKey(from), null);
   if (collapsed) {

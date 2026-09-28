@@ -17,6 +17,7 @@ import {
   renameProjectState,
   renameWorkspaceState,
   writeJson,
+  writeLastTodo,
   writeLastView,
   writeOpenWorkspaces,
 } from "../workspaceState";
@@ -181,6 +182,12 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
   const selProject = selTree?.projects.find((p) => p.name === sel.project);
   const selTodo = selProject?.todos.find((t) => t.id === sel.todoId);
 
+  // 记下各工作区上次打开的待办：从首页进入工作区时直接打开它
+  const selTodoId = selTodo?.id;
+  useEffect(() => {
+    if (sel.project && selTodoId) writeLastTodo(sel.workspace, sel.project, selTodoId);
+  }, [sel.workspace, sel.project, selTodoId]);
+
   const updateTodos = useCallback(
     (ws: string, project: string, fn: (todos: TodoSummary[]) => TodoSummary[]) => {
       setLoaded((ts) =>
@@ -203,7 +210,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
 
   const expand = (ws: string, key: string) => setCollapsed(ws, (c) => (c[key] ? { ...c, [key]: false } : c));
 
-  // 从首页搜索结果直接打开某个项目 / 待办时，展开它所在的分支
+  // 进来时直接打开某个项目 / 待办（首页的搜索结果、工作区上次打开的待办、开屏回到上次的位置），展开它所在的分支
   const initialProject = initialSel.project;
   useEffect(() => {
     if (initialProject)

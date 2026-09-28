@@ -8,7 +8,7 @@ import WorkspaceView from "./components/WorkspaceView";
 import { flushAll } from "./hooks";
 import { useSaveOptions } from "./settings";
 import { compareName } from "./utils";
-import { readLastView, readOpenWorkspaces, writeLastView } from "./workspaceState";
+import { readLastTodo, readLastView, readOpenWorkspaces, writeLastView } from "./workspaceState";
 
 /** 从首页进入某个工作区（可直接打开其中的项目 / 待办）；进去后可以在侧栏再选中其他工作区 */
 type Entry = Omit<Selection, "workspace">;
@@ -62,8 +62,10 @@ export default function App() {
   }, [view]);
 
   const goHome = useCallback(() => setView(HOME), []);
+  // 从首页点进工作区（没指定项目 / 待办）时，直接打开上次在这个工作区打开的待办
   const enter = useCallback(
-    (workspace: string, sel: Entry = {}) => setView({ name: "workspace", workspace, sel }),
+    (workspace: string, sel?: Entry) =>
+      setView({ name: "workspace", workspace, sel: sel ?? readLastTodo(workspace) ?? {} }),
     [],
   );
 
