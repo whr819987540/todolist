@@ -2,7 +2,7 @@ import { App as AntApp } from "antd";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, errMsg } from "./api";
 import { registerFlusher } from "./hooks";
-import type { AppSettings, EditorBackground, FontArea, SettingsInfo } from "./types";
+import type { AppSettings, EditorBackground, FontArea, SettingsInfo, ThemeMode } from "./types";
 
 /** 字号的可调范围（px），与 settings.rs 的 FontArea::range 一致 */
 export const FONT_LIMITS: Record<FontArea, { min: number; max: number }> = {
@@ -26,25 +26,51 @@ type SaveOptions = Pick<AppSettings, "autoSave" | "saveDelaySecs">;
 const DEFAULT_SAVE_OPTIONS: SaveOptions = { autoSave: false, saveDelaySecs: 180 };
 
 /** 改了立即生效、稍后存盘的设置：外观、保存方式 */
-type Pending = Pick<AppSettings, "sidebarFontSize" | "editorFontSize" | "editorBackground" | "editorCustomColor"> &
+type Pending = Pick<
+  AppSettings,
+  "theme" | "sidebarFontSize" | "editorFontSize" | "editorBackground" | "editorCustomColor"
+> &
   SaveOptions;
 
 /** 拖动滑块、滚动滚轮、输入数字时设置会连续变化，停下来片刻再存盘 */
 const SAVE_DELAY = 300;
 
+/** 以前主题只记在本机（localStorage）；搬进设置文件后记下这个标记，只搬一次 */
+const THEME_MIGRATED_KEY = "themeInSettings";
+
 const SettingsContext = createContext<{
   info: SettingsInfo | null;
   setInfo: (info: SettingsInfo) => void;
+  /** 立即生效，稍后存盘 */
+  setTheme: (theme: ThemeMode) => void;
   /** 立即生效，稍后存盘；超出范围时取边界值。返回调整后的字号 */
   setFontSize: (area: FontArea, size: number | ((cur: number) => number)) => number;
   /** 立即生效，稍后存盘；不传 customColor（#rrggbb）时保留原来的自定义颜色 */
   setEditorBackground: (background: EditorBackground, customColor?: string) => void;
   /** 立即生效，稍后存盘；间隔超出范围时取边界值 */
   setSaveOptions: (patch: Partial<SaveOptions>) => void;
-}>({ info: null, setInfo: () => {}, setFontSize: () => 0, setEditorBackground: () => {}, setSaveOptions: () => {} });
+}>({
+  info: null,
+  setInfo: () => {},
+  setTheme: () => {},
+  setFontSize: () => 0,
+  setEditorBackground: () => {},
+  setSaveOptions: () => {},
+});
 
-/** 应用设置（保存在数据目录的 .settings.json）：启动时读一次，设置界面修改后更新 */
-export function SettingsProvider({ children }: { children: React.ReactNode }) {
+/**
+ * 应用设置（保存在数据目录的 .settings.json）：启动时读一次，设置界面修改后更新。
+ * 主题由外层（main.tsx 的 Root，在 antd 的主题配置外面）应用：theme 是正在用的主题，设置读出来、改了之后交给 onTheme
+ */
+export function SettingsProvider({
+  theme,
+  onTheme,
+  children,
+}: {
+  theme: ThemeMode;
+  onTheme: (theme: ThemeMode) => void;
+  children: React.ReactNode;
+}) {
   const { message } = AntApp.useApp();
   const [info, setRawInfo] = useState<SettingsInfo | null>(null);
   const infoRef = useRef(info);
@@ -66,6 +92,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const fields = Object.keys(saving) as (keyof Pending)[];
     if (!fields.length) return;
     try {
+      if (saving.theme) await api.setTheme(saving.theme);
       for (const area of FONT_AREAS) {
         const size = saving[FONT_FIELDS[area]];
         if (size != null) await api.setFontSize(area, size);
@@ -100,6 +127,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     [flushPending],
   );
 
+  const setTheme = useCallback((next: ThemeMode) => apply({ theme: next }), [apply]);
+
   const setFontSize = useCallback(
     (area: FontArea, size: number | ((cur: number) => number)) => {
       const field = FONT_FIELDS[area];
@@ -130,9 +159,31 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     [apply],
   );
 
+  // 启动时本机缓存着的主题：以前主题只记在本机，设置文件里的还是默认值时搬过去
+  const cachedTheme = useRef(theme);
   useEffect(() => {
-    api.getSettings().then(setInfo).catch(() => {});
-  }, [setInfo]);
+    api
+      .getSettings()
+      .then((loaded) => {
+        setInfo(loaded);
+        try {
+          if (localStorage.getItem(THEME_MIGRATED_KEY)) return;
+          localStorage.setItem(THEME_MIGRATED_KEY, "1");
+        } catch {
+          return;
+        }
+        const { defaults } = loaded;
+        if (loaded.settings.theme === defaults.theme && cachedTheme.current !== defaults.theme)
+          setTheme(cachedTheme.current);
+      })
+      .catch(() => {});
+  }, [setInfo, setTheme]);
+
+  // 主题交给外层应用（设置读出来之前外层用本机缓存的）
+  const themeSetting = info?.settings.theme;
+  useLayoutEffect(() => {
+    if (themeSetting) onTheme(themeSetting);
+  }, [themeSetting, onTheme]);
 
   // 字号通过 CSS 变量作用到侧栏列表和编辑区，styles.css 里有加载前的默认值；编辑区背景色标在
   // 根元素的 data-editor-bg 上（index.html 里是加载前的默认值），自定义颜色写进 CSS 变量 --c-editor-custom
@@ -149,8 +200,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [sidebarFontSize, editorFontSize, editorBackground, editorCustomColor]);
 
   const value = useMemo(
-    () => ({ info, setInfo, setFontSize, setEditorBackground, setSaveOptions }),
-    [info, setInfo, setFontSize, setEditorBackground, setSaveOptions],
+    () => ({ info, setInfo, setTheme, setFontSize, setEditorBackground, setSaveOptions }),
+    [info, setInfo, setTheme, setFontSize, setEditorBackground, setSaveOptions],
   );
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
 }

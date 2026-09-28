@@ -2,13 +2,38 @@ import { DesktopOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button, Dropdown, Tooltip, theme } from "antd";
 import { createContext, useContext, useEffect, useLayoutEffect, useState } from "react";
+import { useSettings } from "./settings";
+import type { ThemeMode } from "./types";
 
-export type ThemeMode = "system" | "light" | "dark";
+export type { ThemeMode };
 
-export const ThemeContext = createContext<{ mode: ThemeMode; setMode: (m: ThemeMode) => void }>({
-  mode: "system",
-  setMode: () => {},
-});
+/** 正在用的主题：设置读出来之前是本机缓存的 */
+export const ThemeContext = createContext<ThemeMode>("system");
+
+/**
+ * 主题存在设置文件里；本机（localStorage）另记一份，启动时设置还没读出来就先用它，免得界面闪一下。
+ * 以前主题只记在这里，第一次读到设置时由 SettingsProvider 搬进设置文件
+ */
+const CACHE_KEY = "theme";
+
+const isThemeMode = (v: unknown): v is ThemeMode => v === "system" || v === "light" || v === "dark";
+
+export function readThemeCache(): ThemeMode {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null");
+    return isThemeMode(v) ? v : "system";
+  } catch {
+    return "system";
+  }
+}
+
+export function writeThemeCache(mode: ThemeMode) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(mode));
+  } catch {
+    /* 忽略 */
+  }
+}
 
 const query = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -64,26 +89,26 @@ export function CssVars({ dark }: { dark: boolean }) {
   return null;
 }
 
-const ICONS: Record<ThemeMode, React.ReactNode> = {
-  system: <DesktopOutlined />,
-  light: <SunOutlined />,
-  dark: <MoonOutlined />,
-};
+export const THEME_ITEMS: { value: ThemeMode; icon: React.ReactNode; label: string }[] = [
+  { value: "system", icon: <DesktopOutlined />, label: "跟随系统" },
+  { value: "light", icon: <SunOutlined />, label: "浅色模式" },
+  { value: "dark", icon: <MoonOutlined />, label: "深色模式" },
+];
 
+const ICONS = Object.fromEntries(THEME_ITEMS.map((t) => [t.value, t.icon])) as Record<ThemeMode, React.ReactNode>;
+
+/** 切换主题的按钮，改的是设置文件里的主题（和设置的「外观」里是同一个） */
 export function ThemeButton({ type = "default" }: { type?: "default" | "text" }) {
-  const { mode, setMode } = useContext(ThemeContext);
+  const mode = useContext(ThemeContext);
+  const { setTheme } = useSettings();
   return (
     <Dropdown
       trigger={["click"]}
       menu={{
         selectable: true,
         selectedKeys: [mode],
-        items: [
-          { key: "system", icon: ICONS.system, label: "跟随系统" },
-          { key: "light", icon: ICONS.light, label: "浅色模式" },
-          { key: "dark", icon: ICONS.dark, label: "深色模式" },
-        ],
-        onClick: ({ key }) => setMode(key as ThemeMode),
+        items: THEME_ITEMS.map((t) => ({ key: t.value, icon: t.icon, label: t.label })),
+        onClick: ({ key }) => setTheme(key as ThemeMode),
       }}
     >
       <Tooltip title="外观">

@@ -6,7 +6,7 @@ mod webdav;
 use backup::RemoteBackup;
 use chrono::Local;
 use serde::Serialize;
-use settings::{EditorBackground, FontArea, Settings, SettingsStore, ShortcutAction, StartupView};
+use settings::{EditorBackground, FontArea, Settings, SettingsStore, ShortcutAction, StartupView, Theme};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -405,7 +405,16 @@ fn pause_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>, pau
     settings_info(&settings)
 }
 
-// ----- 外观：字号、编辑区背景色 -----
+// ----- 外观：主题、字号、编辑区背景色 -----
+
+/// 修改界面主题：浅色、深色或跟随系统
+#[tauri::command]
+fn set_theme(settings: State<'_, SettingsStore>, theme: Theme) -> Cmd<SettingsInfo> {
+    let mut next = settings.get();
+    next.theme = theme;
+    settings.save(next)?;
+    Ok(settings_info(&settings))
+}
 
 /// 修改左侧列表或编辑区的字号，超出范围时取最近的边界值
 #[tauri::command]
@@ -617,6 +626,7 @@ pub fn run() {
             get_settings,
             set_shortcut,
             pause_toggle_shortcut,
+            set_theme,
             set_font_size,
             set_editor_background,
             set_save_options,

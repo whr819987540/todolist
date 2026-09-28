@@ -42,6 +42,8 @@ pub struct Settings {
     pub auto_save: bool,
     /// 打开软件时显示首页还是回到上次的位置
     pub startup_view: StartupView,
+    /// 界面主题：浅色、深色或跟随系统
+    pub theme: Theme,
 }
 
 impl Default for Settings {
@@ -57,8 +59,21 @@ impl Default for Settings {
             save_delay_secs: 180,
             auto_save: false,
             startup_view: StartupView::default(),
+            theme: Theme::default(),
         }
     }
+}
+
+/// 界面主题，窗口标题栏跟着切换
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Theme {
+    Light,
+    Dark,
+    /// 跟随 Windows 的深浅色设置；认不出的值也按它处理
+    #[default]
+    #[serde(other)]
+    System,
 }
 
 /// 打开软件时显示的界面
@@ -251,6 +266,24 @@ mod tests {
         assert_eq!(s.save_delay_secs, 180);
         assert!(!s.auto_save);
         assert_eq!(s.startup_view, StartupView::Home);
+        assert_eq!(s.theme, Theme::System);
+    }
+
+    #[test]
+    fn theme_roundtrip_and_bad_values() {
+        let tmp = TempRoot::new("theme");
+        let store = SettingsStore::load(&tmp.0);
+        let mut next = store.get();
+        next.theme = Theme::Dark;
+        store.save(next).unwrap();
+        let text = fs::read_to_string(tmp.0.join(SETTINGS_FILE)).unwrap();
+        assert!(text.contains(r#""theme": "dark""#), "{text}");
+        assert_eq!(SettingsStore::load(&tmp.0).get().theme, Theme::Dark);
+
+        fs::write(tmp.0.join(SETTINGS_FILE), br#"{"toggleShortcut":"Ctrl+Alt+Y","theme":"sepia"}"#).unwrap();
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.theme, Theme::System);
+        assert_eq!(s.toggle_shortcut.as_deref(), Some("Ctrl+Alt+Y"));
     }
 
     #[test]

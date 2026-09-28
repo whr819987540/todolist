@@ -1,12 +1,11 @@
 import { App as AntApp, ConfigProvider, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SettingsProvider } from "./settings";
-import { CssVars, ThemeContext, useSystemDark, useWindowTheme, type ThemeMode } from "./theme";
-import { useLocalState } from "./utils";
+import { CssVars, readThemeCache, ThemeContext, useSystemDark, useWindowTheme, writeThemeCache } from "./theme";
 import "./styles.css";
 
 const FONT =
@@ -33,13 +32,15 @@ document.addEventListener("keydown", (e) => {
 });
 
 function Root() {
-  const [mode, setMode] = useLocalState<ThemeMode>("theme", "system");
+  // 主题存在设置文件里，由 SettingsProvider 读出来交给这里；读出来之前先用本机缓存的
+  const [mode, setMode] = useState(readThemeCache);
   const systemDark = useSystemDark();
   const dark = mode === "dark" || (mode === "system" && systemDark);
   useWindowTheme(mode);
+  useEffect(() => writeThemeCache(mode), [mode]);
 
   return (
-    <ThemeContext.Provider value={{ mode, setMode }}>
+    <ThemeContext.Provider value={mode}>
       <ConfigProvider
         locale={zhCN}
         theme={{
@@ -54,7 +55,7 @@ function Root() {
         <AntApp className="app-root" message={{ top: 56, maxCount: 3 }}>
           <CssVars dark={dark} />
           <ErrorBoundary>
-            <SettingsProvider>
+            <SettingsProvider theme={mode} onTheme={setMode}>
               <App />
             </SettingsProvider>
           </ErrorBoundary>

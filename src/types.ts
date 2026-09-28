@@ -58,6 +58,9 @@ export type EditorBackground = "beige" | "white" | "custom";
 /** 打开软件时显示首页（默认），还是回到上次的位置（侧栏选中的工作区、右侧打开的待办） */
 export type StartupView = "home" | "lastPosition";
 
+/** 界面主题：跟随系统（默认）、浅色、深色 */
+export type ThemeMode = "system" | "light" | "dark";
+
 /** 快捷键格式如 "Ctrl+Alt+T"；null 表示不使用 */
 export interface AppSettings {
   /** 全局快捷键：显示主窗口 / 隐藏到托盘 */
@@ -80,6 +83,8 @@ export interface AppSettings {
   autoSave: boolean;
   /** 打开软件时显示的界面，下次启动时生效 */
   startupView: StartupView;
+  /** 界面主题，窗口标题栏跟着切换 */
+  theme: ThemeMode;
 }
 
 export interface SettingsInfo {

@@ -7,6 +7,7 @@ import type {
   SettingsInfo,
   ShortcutAction,
   StartupView,
+  ThemeMode,
   TodoDetail,
   TodoSummary,
   WebDavConfig,
@@ -69,6 +70,7 @@ export const api = {
   setShortcut: (action: ShortcutAction, shortcut: string | null) =>
     invoke<SettingsInfo>("set_shortcut", { action, shortcut }),
   pauseToggleShortcut: (paused: boolean) => invoke<SettingsInfo>("pause_toggle_shortcut", { paused }),
+  setTheme: (theme: ThemeMode) => invoke<SettingsInfo>("set_theme", { theme }),
   /** 超出范围时后端取最近的边界值 */
   setFontSize: (area: FontArea, size: number) => invoke<SettingsInfo>("set_font_size", { area, size }),
   /** customColor 是「自定义」用的颜色（#rrggbb），选别的背景色时也一起保存 */

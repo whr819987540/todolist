@@ -1,10 +1,11 @@
 import { CheckCircleFilled, ExclamationCircleFilled, SettingOutlined } from "@ant-design/icons";
-import { App as AntApp, Button, InputNumber, Modal, Radio, Select, Slider, Switch, Tabs, Tooltip } from "antd";
+import { App as AntApp, Button, InputNumber, Modal, Radio, Segmented, Select, Slider, Switch, Tabs, Tooltip } from "antd";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { FONT_FIELDS, FONT_LIMITS, SAVE_DELAY_LIMITS, useSettings } from "../settings";
 import { checkShortcut, eventShortcut, keyLabel, keyName, modifiers, shortcutLabel } from "../shortcuts";
-import type { EditorBackground, FontArea, ShortcutAction, StartupView } from "../types";
+import { THEME_ITEMS } from "../theme";
+import type { EditorBackground, FontArea, ShortcutAction, StartupView, ThemeMode } from "../types";
 import BackupSettings from "./BackupSettings";
 
 /** 设置按钮，点击打开设置对话框 */
@@ -168,12 +169,26 @@ function ShortcutSettings() {
   );
 }
 
-/** 外观：编辑区背景色和字号，修改后立即生效，不用点保存 */
+/** 外观：主题、编辑区背景色和字号，修改后立即生效，不用点保存 */
 function AppearanceSettings() {
-  const { info } = useSettings();
+  const { info, setTheme } = useSettings();
   if (!info) return <div className="setting-item" />;
   return (
     <>
+      <div className="setting-group">主题</div>
+      <div className="setting-item">
+        <div className="setting-desc">窗口标题栏跟着切换；首页和侧栏顶部的主题按钮改的也是这里。</div>
+        <Segmented<ThemeMode>
+          className="theme-options"
+          value={info.settings.theme}
+          options={THEME_ITEMS.map((t) => ({
+            value: t.value,
+            icon: t.icon,
+            label: t.value === info.defaults.theme ? `${t.label}（默认）` : t.label,
+          }))}
+          onChange={setTheme}
+        />
+      </div>
       <div className="setting-group">编辑区背景色</div>
       <EditorBackgroundSetting defaultValue={info.defaults.editorBackground} />
       <div className="setting-group">字号</div>
