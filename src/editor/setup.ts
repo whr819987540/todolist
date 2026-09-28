@@ -1,7 +1,7 @@
-import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { Compartment, EditorState, type Extension, Prec } from "@codemirror/state";
-import { type Command, EditorView, keymap, placeholder } from "@codemirror/view";
+import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { eventShortcut, sameShortcut } from "../shortcuts";
 import { appearance } from "./appearance";
 import { codeFenceKeymap } from "./codeFences";
@@ -36,15 +36,6 @@ export const setReadOnly = (readOnly: boolean) => readOnlyConf.reconfigure(Edito
 
 /** 应用自己的区域切换键（WorkspaceView）：编辑器里默认是移动行 / 按语法移动光标，这里让给应用 */
 const APP_KEYS = ["Alt+ArrowLeft", "Alt+ArrowRight", "Alt+ArrowUp", "Alt+ArrowDown"];
-
-/** Tab 插入两个空格；选中多行时整体缩进。只读时什么也不做，但同样不让焦点跳出编辑器 */
-const insertTab: Command = (view) => {
-  const { state } = view;
-  if (state.readOnly) return true;
-  if (state.selection.ranges.some((r) => !r.empty)) return indentMore(view);
-  view.dispatch(state.update(state.replaceSelection("  "), { scrollIntoView: true, userEvent: "input" }));
-  return true;
-};
 
 /**
  * 报告正文改动和失去焦点。输入法组合（拼音还没上屏）期间拼音也在文档里，这时的改动不报告，
@@ -93,13 +84,12 @@ export function createExtensions(o: EditorOptions): Extension[] {
         },
       }),
     ),
-    // 编辑快捷键：Ctrl+B 加粗等，同 Typora
+    // 编辑快捷键：Ctrl+B 加粗、Tab 缩进列表等，同 Typora
     editBindings,
     history(),
     // 跳出代码块；要先于 Markdown 自带的回车续写列表
     Prec.highest(codeFenceKeymap),
     keymap.of([
-      { key: "Tab", run: insertTab, shift: indentLess },
       // Ctrl+/ 留给切换模式
       ...defaultKeymap.filter((b) => b.key !== "Mod-/"),
       ...historyKeymap,

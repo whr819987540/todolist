@@ -17,6 +17,7 @@ import {
   toggleList,
   toggleQuote,
 } from "./formatting";
+import { indent, outdent } from "./lists";
 
 /** key 是按下的组合（同一条命令有几个按键时用来区分，如 Ctrl+1～6） */
 type EditCommand = (view: EditorView, key: string) => boolean;
@@ -37,6 +38,8 @@ const COMMANDS: Record<EditCommandId, EditCommand> = {
   orderedList: (v) => toggleList(v, true),
   bulletList: (v) => toggleList(v, false),
   codeBlock: toggleCodeBlock,
+  indent,
+  outdent,
   selectWord,
   deleteWord,
   selectLine,

@@ -91,7 +91,7 @@ function dispatchChanges(view: EditorView, changes: ChangeSpec[]) {
 }
 
 /** 选区覆盖的各行，按顺序、不重复；选区结束在某行行首时不算那一行 */
-function selectedLines(state: EditorState): Line[] {
+export function selectedLines(state: EditorState): Line[] {
   const { doc } = state;
   const lines: Line[] = [];
   let last = 0;
