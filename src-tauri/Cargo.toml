@@ -52,3 +52,11 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# 本机测试用的快速构建（npm run build:fast）：优化级别同 release，但不做 LTO、多代码单元并行、增量编译，
+# 二次构建快很多；产物在 target/release-fast/，不打安装包
+[profile.release-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

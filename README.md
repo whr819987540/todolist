@@ -80,10 +80,45 @@ TodoList\
 ```bash
 npm install
 npm run tauri dev       # 开发调试
-npm run tauri build     # 打包，安装包在 src-tauri/target/release/bundle/nsis/
+npm run build:debug     # 不打安装包的 debug 版 exe，见下文「本机测试用的构建」
+npm run build:fast      # 不打安装包、不做 LTO 的优化版 exe，见下文
+npm run tauri build     # 正式打包，安装包在 src-tauri/target/release/bundle/nsis/
 npm run release         # 打包并安装到本机，见下文
+npm run release:fast    # 同上，但用 release-fast profile 构建，快很多
 cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 ```
+
+### 本机测试用的构建
+
+`npm run tauri build` 慢在三处：release 配置开了 `lto = true`、`codegen-units = 1`（最耗时），前端要重新 `tsc && vite build`，最后还要打 NSIS 安装包。测试时按需要跳过：
+
+| 命令 | 产物 | 适用 |
+| --- | --- | --- |
+| `npm run tauri dev` | 不产出独立 exe，连 Vite 开发服务器（:1420） | 日常改功能：前端改动热更新，不用重新编译；Rust 增量编译 |
+| `npm run build:debug` | `src-tauri/target/debug/todo-list.exe` | 要一个能直接双击运行的 exe（前端已打包进去，不需要 Vite）；未优化，性能与正式版不同 |
+| `npm run build:fast` | `src-tauri/target/release-fast/todo-list.exe` | 接近正式版的性能：用 `Cargo.toml` 里的 `release-fast` profile，优化级别同 release，但不做 LTO、16 个代码单元并行、增量编译 |
+| `cd src-tauri && cargo test` | — | 只改了存储、备份、WebDAV 等 Rust 逻辑，不用启动界面 |
+| `npm run release:fast` | 安装包，装到本机 | 频繁装到本机试用，见下文「安装到本机与升级」 |
+| `npm run tauri build` / `npm run release` | 安装包 | 发布前完整跑一次 |
+
+参考耗时（本机）：`build:fast` 首次约 2 分钟，之后只改 Rust 代码时几秒到十几秒；`build:debug` 约 30 秒。三种构建的目录（`debug`、`release-fast`、`release`）互不覆盖。
+
+测试构建的注意事项：
+
+- 这些 exe 和安装版是同一个应用（identifier `com.whr.todolist`），单实例插件会把新启动的那个交给已在运行的安装版（把它的窗口调到前台），新启动的自己悄悄退出。要么先从托盘「退出」安装版，要么构建时换一个测试用的 identifier，两者就能同时运行：
+
+  ```powershell
+  $env:TAURI_CONFIG='{"identifier":"com.whr.todolist.test"}'; npm run build:debug
+  ```
+
+  换了 identifier 的构建在 WebView2 缓存（localStorage 里的侧栏状态、编辑模式）和凭据管理器里的 WebDAV 密码（`webdav.com.whr.todolist.test`）上与安装版分开；全局快捷键仍然会和安装版冲突，测试版里可以改成别的（如 Ctrl+Alt+Y）
+- 运行测试构建时用 `TODOLIST_DATA_DIR` 指向临时目录，不要动真实数据：
+
+  ```powershell
+  $env:TODOLIST_DATA_DIR="$env:TEMP\todolist-test"; .\src-tauri\target\release-fast\todo-list.exe
+  ```
+
+  设置文件也在这个目录里。注意删除操作仍然进系统回收站
 
 代码结构：
 
@@ -102,19 +137,22 @@ cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
   - `links.ts`：解析链接地址、Ctrl+单击打开
   - `codeFences.ts`：代码块自动补结尾、Ctrl+Enter / ↓ 跳出代码块
 - `src/components/`：首页（含搜索）、侧栏树、概览、编辑器（`TodoEditor` 管定时保存、auto save 和冲突，`MarkdownEditor` 包装 CodeMirror）、设置（快捷键、外观、保存、备份与恢复）
-- `scripts/release.mjs`：改版本号、打包并安装到本机（`npm run release`）
+- `scripts/release.mjs`：改版本号、打包并安装到本机（`npm run release`，`release:fast` 传 `--fast`）
 
 ### 安装到本机与升级
 
 ```bash
 npm run release              # 用当前版本号打包并安装
 npm run release -- patch     # 先升版本号（0.1.0 → 0.1.1）再打包安装；也可以是 minor、major 或 0.2.0 这样的具体版本
+npm run release:fast         # 同 release，但用 release-fast profile 构建（不做 LTO），参数用法一样
 ```
+
+`release:fast` 编出来的程序性能接近正式版、体积稍大，适合频繁装到本机试用；安装包在 `src-tauri/target/release-fast/bundle/nsis/`。
 
 `scripts/release.mjs` 依次：
 
 1. 带了版本参数时，改 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 里的版本号（`Cargo.lock` 在构建时自动更新），这几个文件的改动要一起提交
-2. `npm run tauri build`
+2. `npm run tauri build`（`release:fast` 用 `npm run tauri -- build -- --profile release-fast`）
 3. 如果程序正在运行，提示从托盘「退出」并等它退出后再继续。安装程序会直接结束所有名为 `todo-list.exe` 的进程，先正常退出才能保证正在编辑的内容已保存
 4. 运行安装包（只显示进度条，不用点下一步），装完自动启动。已经装过时按升级处理：直接覆盖，不先卸载旧版，也不会重建你删掉的快捷方式
 

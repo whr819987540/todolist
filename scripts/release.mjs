@@ -1,5 +1,6 @@
 // 构建安装包并安装到本机（已安装时按升级覆盖）
 // 用法：npm run release [-- <x.y.z | patch | minor | major>]，带参数时先改版本号
+//       npm run release:fast [-- ...]：同上，但用 Cargo.toml 的 release-fast profile 构建（不做 LTO，快很多）
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -9,7 +10,11 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const confPath = join(root, "src-tauri", "tauri.conf.json");
 const cargoPath = join(root, "src-tauri", "Cargo.toml");
-const bundleDir = join(root, "src-tauri", "target", "release", "bundle", "nsis");
+// --fast 由 npm run release:fast 传入
+const cliArgs = process.argv.slice(2);
+const fast = cliArgs.includes("--fast");
+const profile = fast ? "release-fast" : "release";
+const bundleDir = join(root, "src-tauri", "target", profile, "bundle", "nsis");
 
 function fail(msg) {
   console.error(`\n✖ ${msg}`);
@@ -46,10 +51,10 @@ function isInstalled(productName) {
 }
 
 // 1. 改版本号：npm 负责 package.json / package-lock.json，其余两处同步过去；Cargo.lock 构建时自动更新
-const bump = process.argv[2];
+const bump = cliArgs.find((a) => a !== "--fast");
 if (bump) {
   if (!/^(\d+\.\d+\.\d+|patch|minor|major)$/.test(bump)) {
-    fail(`版本号参数不对：${bump}\n  用法：npm run release [-- <x.y.z | patch | minor | major>]`);
+    fail(`版本号参数不对：${bump}\n  用法：npm run release${fast ? ":fast" : ""} [-- <x.y.z | patch | minor | major>]`);
   }
   run(`npm version ${bump} --no-git-tag-version`);
   const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -63,8 +68,8 @@ const exe = `${mainBinaryName}.exe`;
 
 // 2. 构建
 run(
-  "npm run tauri build",
-  `\n  如果提示拒绝访问（os error 5），先退出正在运行的 src-tauri\\target\\release\\${exe} 再重试`,
+  fast ? "npm run tauri -- build -- --profile release-fast" : "npm run tauri build",
+  `\n  如果提示拒绝访问（os error 5），先退出正在运行的 src-tauri\\target\\${profile}\\${exe} 再重试`,
 );
 const setup = readdirSync(bundleDir).find(
   (f) => f.startsWith(`${productName}_${version}_`) && f.endsWith("-setup.exe"),
