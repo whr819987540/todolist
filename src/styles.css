@@ -1309,3 +1309,32 @@ kbd {
   border-bottom-width: 2px;
   border-radius: 4px;
 }
+
+/* 编辑快捷键列表：两列，每项左边是操作、右边是按键 */
+.edit-shortcuts {
+  margin-top: 12px;
+}
+.edit-shortcuts-title {
+  font-size: 12px;
+  color: var(--c-text-2);
+  margin-bottom: 6px;
+}
+.edit-shortcuts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 24px;
+  row-gap: 6px;
+}
+.edit-shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+.edit-shortcut-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}

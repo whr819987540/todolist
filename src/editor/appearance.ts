@@ -63,6 +63,7 @@ const theme = EditorView.theme({
 
   // 以下只在实时渲染模式出现（livePreview.ts）
   ".cm-md-link": { textDecoration: "underline", textUnderlineOffset: "3px" },
+  ".cm-md-u": { textDecoration: "underline", textUnderlineOffset: "3px" },
   // 列表符号和任务框占同样的宽度，文字对齐
   ".cm-md-bullet": { display: "inline-block", width: "1.5em", color: "var(--c-text-2)" },
   ".cm-md-task": {

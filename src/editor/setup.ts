@@ -5,6 +5,7 @@ import { type Command, EditorView, keymap, placeholder } from "@codemirror/view"
 import { eventShortcut, sameShortcut } from "../shortcuts";
 import { appearance } from "./appearance";
 import { codeFenceKeymap } from "./codeFences";
+import { editBindings } from "./editBindings";
 import { ctrlClickLinks } from "./links";
 import { livePreview } from "./livePreview";
 import { type EditPosition, trackPosition } from "./position";
@@ -92,6 +93,8 @@ export function createExtensions(o: EditorOptions): Extension[] {
         },
       }),
     ),
+    // 编辑快捷键：Ctrl+B 加粗等，同 Typora
+    editBindings,
     history(),
     // 跳出代码块；要先于 Markdown 自带的回车续写列表
     Prec.highest(codeFenceKeymap),

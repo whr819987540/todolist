@@ -2,6 +2,7 @@ import { CheckCircleFilled, ExclamationCircleFilled, SettingOutlined } from "@an
 import { App as AntApp, Button, InputNumber, Modal, Radio, Segmented, Select, Slider, Switch, Tabs, Tooltip } from "antd";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
+import { EDIT_SHORTCUT_GROUPS } from "../editShortcuts";
 import { FONT_FIELDS, FONT_LIMITS, SAVE_DELAY_LIMITS, useSettings } from "../settings";
 import { checkShortcut, eventShortcut, keyLabel, keyName, modifiers, shortcutLabel } from "../shortcuts";
 import { THEME_ITEMS } from "../theme";
@@ -165,7 +166,38 @@ function ShortcutSettings() {
       {ITEMS.slice(0, 1).map(row)}
       <div className="setting-group">应用内快捷键</div>
       {ITEMS.slice(1).map(row)}
+      <div className="setting-group">编辑快捷键</div>
+      <EditShortcutList />
     </>
+  );
+}
+
+/** 编辑快捷键：正文里的 Markdown 编辑操作，同 Typora，不能修改，这里只列出来 */
+function EditShortcutList() {
+  return (
+    <div className="setting-item">
+      <div className="setting-desc">在待办正文里使用，按键与 Typora 相同，不能修改；上面的快捷键不能设成这些组合。</div>
+      {EDIT_SHORTCUT_GROUPS.map((g) => (
+        <div className="edit-shortcuts" key={g.title}>
+          <div className="edit-shortcuts-title">{g.title}</div>
+          <div className="edit-shortcuts-grid">
+            {g.items.map((item) => (
+              <div className="edit-shortcut" key={item.label}>
+                <span>{item.label}</span>
+                <span className="edit-shortcut-keys">
+                  {(item.shown ?? item.keys).map((k, i) => (
+                    <Fragment key={k}>
+                      {i > 0 && <span className="keys-plus">/</span>}
+                      <Keys parts={k.split("+")} />
+                    </Fragment>
+                  ))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

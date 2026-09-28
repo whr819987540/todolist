@@ -89,6 +89,7 @@ class RuleWidget extends WidgetType {
 const hidden = Decoration.replace({});
 const rule = Decoration.replace({ widget: new RuleWidget() });
 const taskDone = Decoration.mark({ class: "cm-md-task-done" });
+const underline = Decoration.mark({ class: "cm-md-u" });
 
 function buildPreview(view: EditorView, sel: readonly SelectionRange[] | null): DecorationSet {
   const { state } = view;
@@ -163,6 +164,20 @@ function buildPreview(view: EditorView, sel: readonly SelectionRange[] | null): 
           case "Escape":
             if (!touches(node.from, node.to)) hide(node.from, node.from + 1);
             return;
+
+          case "HTMLTag": {
+            // <u>…</u>（Ctrl+U 加的下划线）：藏起两个标签，中间加下划线；其他 HTML 标签照原样显示
+            if (!/^<u>$/i.test(doc.sliceString(node.from, node.to))) return false;
+            let close = node.nextSibling;
+            while (close && !(close.name === "HTMLTag" && /^<\/u>$/i.test(doc.sliceString(close.from, close.to)))) {
+              close = close.nextSibling;
+            }
+            if (!close || touches(node.from, close.to)) return false;
+            hide(node.from, node.to);
+            hide(close.from, close.to);
+            if (close.from > node.to) out.push(underline.range(node.to, close.from));
+            return false;
+          }
 
           case "QuoteMark":
             if (!touchesLines(node.from, node.to)) hide(node.from, node.to + (isSpace(node.to) ? 1 : 0));
