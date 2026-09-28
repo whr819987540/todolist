@@ -1,7 +1,10 @@
-// 侧栏的界面状态存在 localStorage：选中显示的工作区、每个工作区的折叠状态。
+// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态、上次停在哪里。
 // 工作区在首页改名 / 删除时也要跟着更新，所以放在这里供首页和工作区视图共用。
 
+import type { Selection } from "./components/Sidebar";
+
 const OPEN_KEY = "openWorkspaces";
+const LAST_VIEW_KEY = "lastView";
 
 export const collapsedKey = (ws: string) => `collapsed:${ws}`;
 
@@ -33,6 +36,15 @@ function remove(key: string) {
 /** 上次在侧栏选中的工作区，下次进入时恢复 */
 export const readOpenWorkspaces = () => readJson<string[]>(OPEN_KEY, []);
 export const writeOpenWorkspaces = (list: string[]) => writeJson(OPEN_KEY, list);
+
+/** 上次停在哪里：null 是首页，否则是工作区里右侧显示的内容。设置里选了开屏「回到上次的位置」时用 */
+export function readLastView(): Selection | null {
+  const v = readJson<Partial<Record<keyof Selection, unknown>> | null>(LAST_VIEW_KEY, null);
+  if (typeof v?.workspace !== "string") return null;
+  const str = (x: unknown) => (typeof x === "string" && x ? x : undefined);
+  return { workspace: v.workspace, project: str(v.project), todoId: str(v.todoId) };
+}
+export const writeLastView = (sel: Selection | null) => writeJson(LAST_VIEW_KEY, sel);
 
 /** 工作区改名后，记住的选中和折叠状态跟过去 */
 export function renameWorkspaceState(from: string, to: string) {

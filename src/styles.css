@@ -1065,6 +1065,14 @@ mark {
   margin-top: 8px;
 }
 
+/* 开屏 */
+.startup-options.ant-radio-group {
+  gap: 10px;
+}
+.startup-options .setting-desc {
+  margin: 2px 0 0;
+}
+
 /* 编辑区背景色 */
 .bg-options {
   display: flex;

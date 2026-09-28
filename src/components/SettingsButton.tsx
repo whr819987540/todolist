@@ -1,10 +1,10 @@
 import { CheckCircleFilled, ExclamationCircleFilled, SettingOutlined } from "@ant-design/icons";
-import { App as AntApp, Button, InputNumber, Modal, Select, Slider, Switch, Tabs, Tooltip } from "antd";
+import { App as AntApp, Button, InputNumber, Modal, Radio, Select, Slider, Switch, Tabs, Tooltip } from "antd";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { FONT_FIELDS, FONT_LIMITS, SAVE_DELAY_LIMITS, useSettings } from "../settings";
 import { checkShortcut, eventShortcut, keyLabel, keyName, modifiers, shortcutLabel } from "../shortcuts";
-import type { EditorBackground, FontArea, ShortcutAction } from "../types";
+import type { EditorBackground, FontArea, ShortcutAction, StartupView } from "../types";
 import BackupSettings from "./BackupSettings";
 
 /** 设置按钮，点击打开设置对话框 */
@@ -19,6 +19,7 @@ export default function SettingsButton({ type = "default" }: { type?: "default" 
         <Tabs
           className="settings-tabs"
           items={[
+            { key: "general", label: "常规", children: <GeneralSettings /> },
             { key: "shortcuts", label: "快捷键", children: <ShortcutSettings /> },
             { key: "appearance", label: "外观", children: <AppearanceSettings /> },
             { key: "save", label: "保存", children: <SaveSettings /> },
@@ -26,6 +27,54 @@ export default function SettingsButton({ type = "default" }: { type?: "default" 
           ]}
         />
       </Modal>
+    </>
+  );
+}
+
+const STARTUP_ITEMS: { value: StartupView; label: string; desc: string }[] = [
+  { value: "home", label: "显示首页", desc: "列出全部工作区。" },
+  {
+    value: "lastPosition",
+    label: "回到上次的位置",
+    desc: "恢复上次左侧选中的工作区和右侧打开的待办；上次停在首页时仍显示首页。",
+  },
+];
+
+/** 常规：打开软件时显示的界面，下次启动时生效 */
+function GeneralSettings() {
+  const { message } = AntApp.useApp();
+  const { info, setInfo } = useSettings();
+  if (!info) return <div className="setting-item" />;
+
+  const change = async (view: StartupView) => {
+    try {
+      setInfo(await api.setStartupView(view));
+    } catch (e) {
+      message.error(errMsg(e));
+    }
+  };
+
+  return (
+    <>
+      <div className="setting-group">启动</div>
+      <div className="setting-item">
+        <div className="setting-label">打开软件时</div>
+        <div className="setting-desc">下次打开软件时生效；从托盘恢复窗口时总是保持原来的样子。</div>
+        <Radio.Group
+          className="startup-options"
+          vertical
+          value={info.settings.startupView}
+          onChange={(e) => change(e.target.value)}
+        >
+          {STARTUP_ITEMS.map((item) => (
+            <Radio key={item.value} value={item.value}>
+              {item.label}
+              {item.value === info.defaults.startupView && <span className="muted">（默认）</span>}
+              <div className="setting-desc">{item.desc}</div>
+            </Radio>
+          ))}
+        </Radio.Group>
+      </div>
     </>
   );
 }

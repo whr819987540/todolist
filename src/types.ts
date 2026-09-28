@@ -55,6 +55,9 @@ export type FontArea = "sidebar" | "editor";
 /** 待办编辑区的背景色：护眼米色（默认）、白色或自定义颜色；深色模式下都是深色背景 */
 export type EditorBackground = "beige" | "white" | "custom";
 
+/** 打开软件时显示首页（默认），还是回到上次的位置（侧栏选中的工作区、右侧打开的待办） */
+export type StartupView = "home" | "lastPosition";
+
 /** 快捷键格式如 "Ctrl+Alt+T"；null 表示不使用 */
 export interface AppSettings {
   /** 全局快捷键：显示主窗口 / 隐藏到托盘 */
@@ -75,6 +78,8 @@ export interface AppSettings {
   saveDelaySecs: number;
   /** auto save：定时保存，以及编辑器失去焦点、窗口失去焦点时立即保存；关掉时只在 Ctrl+S、切换待办和从托盘退出时保存 */
   autoSave: boolean;
+  /** 打开软件时显示的界面，下次启动时生效 */
+  startupView: StartupView;
 }
 
 export interface SettingsInfo {

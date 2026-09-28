@@ -13,6 +13,7 @@ import {
   readOpenWorkspaces,
   renameWorkspaceState,
   writeJson,
+  writeLastView,
   writeOpenWorkspaces,
 } from "../workspaceState";
 import { useNameDialog } from "./NameDialog";
@@ -103,6 +104,11 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
   useEffect(() => {
     writeOpenWorkspaces(workspaces);
   }, [workspaces]);
+
+  // 记下右侧显示的内容：设置里选了开屏「回到上次的位置」时，下次打开软件回到这里
+  useEffect(() => {
+    writeLastView(sel);
+  }, [sel]);
 
   const reload = useCallback(async () => {
     if (workspaces === restoredList.current && workspaces.length > 1) {

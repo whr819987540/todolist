@@ -96,7 +96,7 @@ pub fn unpack(data: &[u8]) -> Result<Settings> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::EditorBackground;
+    use crate::settings::{EditorBackground, StartupView};
 
     fn time() -> DateTime<Local> {
         Local.with_ymd_and_hms(2026, 9, 26, 15, 30, 12).unwrap()
@@ -121,6 +121,7 @@ mod tests {
             editor_custom_color: "#112233".into(),
             save_delay_secs: 45,
             auto_save: true,
+            startup_view: StartupView::LastPosition,
             ..Default::default()
         };
         let data = pack(&settings, time()).unwrap();
@@ -134,6 +135,7 @@ mod tests {
         assert_eq!(back.editor_custom_color, "#112233");
         assert_eq!(back.save_delay_secs, 45);
         assert!(back.auto_save);
+        assert_eq!(back.startup_view, StartupView::LastPosition);
     }
 
     #[test]

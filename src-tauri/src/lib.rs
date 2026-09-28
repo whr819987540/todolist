@@ -6,7 +6,7 @@ mod webdav;
 use backup::RemoteBackup;
 use chrono::Local;
 use serde::Serialize;
-use settings::{EditorBackground, FontArea, Settings, SettingsStore, ShortcutAction};
+use settings::{EditorBackground, FontArea, Settings, SettingsStore, ShortcutAction, StartupView};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -443,6 +443,17 @@ fn set_save_options(settings: State<'_, SettingsStore>, auto_save: bool, save_de
     Ok(settings_info(&settings))
 }
 
+// ----- 启动 -----
+
+/// 修改打开软件时显示首页还是回到上次的位置，下次启动时生效
+#[tauri::command]
+fn set_startup_view(settings: State<'_, SettingsStore>, view: StartupView) -> Cmd<SettingsInfo> {
+    let mut next = settings.get();
+    next.startup_view = view;
+    settings.save(next)?;
+    Ok(settings_info(&settings))
+}
+
 // ----- 设置备份（WebDAV） -----
 
 #[tauri::command]
@@ -609,6 +620,7 @@ pub fn run() {
             set_font_size,
             set_editor_background,
             set_save_options,
+            set_startup_view,
             get_webdav,
             save_webdav,
             test_webdav,

@@ -40,6 +40,8 @@ pub struct Settings {
     /// auto save：定时保存，以及编辑器失去焦点、窗口失去焦点时立即保存；
     /// 关掉时只在 Ctrl+S、切换待办和从托盘退出时保存
     pub auto_save: bool,
+    /// 打开软件时显示首页还是回到上次的位置
+    pub startup_view: StartupView,
 }
 
 impl Default for Settings {
@@ -54,8 +56,21 @@ impl Default for Settings {
             editor_custom_color: DEFAULT_CUSTOM_COLOR.into(),
             save_delay_secs: 180,
             auto_save: false,
+            startup_view: StartupView::default(),
         }
     }
+}
+
+/// 打开软件时显示的界面
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StartupView {
+    /// 回到上次的位置：侧栏选中的工作区、右侧打开的待办（记在前端的 localStorage 里）
+    LastPosition,
+    /// 首页；认不出的值也按它处理
+    #[default]
+    #[serde(other)]
+    Home,
 }
 
 /// 待办编辑区的背景色，只在浅色模式下区分；深色模式下编辑区总是深色背景
@@ -235,6 +250,24 @@ mod tests {
         assert_eq!(s.editor_custom_color, DEFAULT_CUSTOM_COLOR);
         assert_eq!(s.save_delay_secs, 180);
         assert!(!s.auto_save);
+        assert_eq!(s.startup_view, StartupView::Home);
+    }
+
+    #[test]
+    fn startup_view_roundtrip_and_bad_values() {
+        let tmp = TempRoot::new("startup");
+        let store = SettingsStore::load(&tmp.0);
+        let mut next = store.get();
+        next.startup_view = StartupView::LastPosition;
+        store.save(next).unwrap();
+        let text = fs::read_to_string(tmp.0.join(SETTINGS_FILE)).unwrap();
+        assert!(text.contains(r#""startupView": "lastPosition""#), "{text}");
+        assert_eq!(SettingsStore::load(&tmp.0).get().startup_view, StartupView::LastPosition);
+
+        fs::write(tmp.0.join(SETTINGS_FILE), br#"{"toggleShortcut":"Ctrl+Alt+Y","startupView":"somewhere"}"#).unwrap();
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.startup_view, StartupView::Home);
+        assert_eq!(s.toggle_shortcut.as_deref(), Some("Ctrl+Alt+Y"));
     }
 
     #[test]

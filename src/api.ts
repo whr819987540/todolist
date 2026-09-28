@@ -6,6 +6,7 @@ import type {
   SaveResult,
   SettingsInfo,
   ShortcutAction,
+  StartupView,
   TodoDetail,
   TodoSummary,
   WebDavConfig,
@@ -76,6 +77,7 @@ export const api = {
   /** 超出范围的间隔后端取最近的边界值 */
   setSaveOptions: (autoSave: boolean, saveDelaySecs: number) =>
     invoke<SettingsInfo>("set_save_options", { autoSave, saveDelaySecs }),
+  setStartupView: (view: StartupView) => invoke<SettingsInfo>("set_startup_view", { view }),
 
   getWebdav: () => invoke<WebDavInfo>("get_webdav"),
   /** password 为 null 时保留原来的密码 */

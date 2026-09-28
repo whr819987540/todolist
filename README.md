@@ -5,6 +5,7 @@
 ## 功能
 
 - **三级结构**：首页列出全部工作区；进入工作区后左侧是可折叠的树（工作区、项目两级都能折叠），右侧显示概览或待办内容
+- **开屏**：打开软件时默认显示首页；在「设置 → 常规」里可改成「回到上次的位置」，恢复上次左侧选中的工作区和右侧打开的待办（下次启动时生效）
 - **同时查看多个工作区**：点侧栏顶部的工作区名，勾选要显示的工作区（可多选、全选，或「仅显示」某一个），左侧会同时列出这些工作区的项目和待办；选中的工作区会记住，下次进入时恢复
 - **键盘操作**：Alt+← / → 在左侧列表和右侧编辑区之间切换，Alt+↑ / ↓ 在左侧的工作区、项目、待办之间上下移动
 - **待办条目**：左侧显示标题；没有标题时显示正文开头（按侧栏宽度自动截断）。每条带完成勾选框、创建时间、最新修改时间，悬停可看完整时间
@@ -38,7 +39,7 @@ TodoList\
     {项目}\
       .todos.json            标题、完成状态、创建/修改/完成时间
       20260926-153012.md     待办正文，一条待办一个文件
-  .settings.json             应用设置（快捷键、字号、编辑区背景色、保存方式），设置备份的内容就是这个文件
+  .settings.json             应用设置（快捷键、字号、编辑区背景色、保存方式、开屏方式），设置备份的内容就是这个文件
   .webdav.json               WebDAV 服务器地址、用户名、远程目录（密码存在 Windows 凭据管理器）
 ```
 
@@ -49,6 +50,8 @@ TodoList\
 - 删除的工作区 / 项目 / 待办进入 Windows 回收站
 - WebDAV 密码保存在 Windows 凭据管理器（普通凭据 `webdav.com.whr.todolist`），不写进任何文件，也不会进入备份包
 - 访问 WebDAV 时使用 Windows 的代理设置（或环境变量 `HTTPS_PROXY`），代理例外和 `NO_PROXY` 里的地址直连
+
+界面状态记在 WebView2 的 localStorage 里，不在数据目录：侧栏选中的工作区、折叠状态、宽度、排序，上次停在哪里（开屏「回到上次的位置」用）。
 
 测试时可用环境变量 `TODOLIST_DATA_DIR` 指定其他数据目录。
 
@@ -111,7 +114,7 @@ cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
   $env:TAURI_CONFIG='{"identifier":"com.whr.todolist.test"}'; npm run build:debug
   ```
 
-  换了 identifier 的构建在 WebView2 缓存（localStorage 里的侧栏状态、编辑模式）和凭据管理器里的 WebDAV 密码（`webdav.com.whr.todolist.test`）上与安装版分开；全局快捷键仍然会和安装版冲突，测试版里可以改成别的（如 Ctrl+Alt+Y）
+  换了 identifier 的构建在 WebView2 缓存（localStorage 里的侧栏状态、编辑模式、上次的位置）和凭据管理器里的 WebDAV 密码（`webdav.com.whr.todolist.test`）上与安装版分开；全局快捷键仍然会和安装版冲突，测试版里可以改成别的（如 Ctrl+Alt+Y）
 - 运行测试构建时用 `TODOLIST_DATA_DIR` 指向临时目录，不要动真实数据：
 
   ```powershell
@@ -123,20 +126,21 @@ cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 代码结构：
 
 - `src-tauri/src/store.rs`：文件存储、元数据对齐、名称校验
-- `src-tauri/src/settings.rs`：应用设置（快捷键、字号、编辑区背景色、保存方式）的读写和字号、保存间隔的范围
+- `src-tauri/src/settings.rs`：应用设置（快捷键、字号、编辑区背景色、保存方式、开屏方式）的读写和字号、保存间隔的范围
 - `src-tauri/src/backup.rs`：设置备份包的打包、解包和命名
 - `src-tauri/src/webdav.rs`：WebDAV 连接配置、密码存取、客户端（含代理处理）
 - `src-tauri/src/lib.rs`：Tauri 命令、打开外部程序和链接、系统托盘、全局快捷键、窗口图标
 - `src/settings.tsx`：前端的设置状态；字号、编辑区背景色、保存方式改动立即生效，停顿片刻再存盘。字号写进 CSS 变量 `--fs-sidebar` / `--fs-editor`；背景色标在根元素的 `data-editor-bg` 上、自定义颜色写进 `--c-editor-custom`，`styles.css` 在浅色模式下据此给编辑区上色
 - `src/hooks.ts`：窗口焦点监听；隐藏到托盘、退出前要写盘的内容登记在这里（隐藏到托盘时正在编辑的待办受 auto save 开关管，设置总是写盘；退出时都写盘）
-- `src/workspaceState.ts`：侧栏记在 localStorage 里的状态（选中的工作区、各工作区的折叠状态），工作区改名 / 删除时同步
+- `src/App.tsx`：首页 / 工作区视图的切换；启动时按开屏设置决定显示首页还是回到上次的位置
+- `src/workspaceState.ts`：记在 localStorage 里的界面状态（选中的工作区、各工作区的折叠状态、上次停在哪里），工作区改名 / 删除时同步
 - `src/editor/`：基于 CodeMirror 6 的正文编辑器
   - `setup.ts`：组装编辑器（快捷键、Markdown 解析、两种模式的切换）；输入法组合中的改动等上屏后再报告，免得拼音被存盘
   - `appearance.ts`：两种模式共用的外观（语法高亮、标题 / 代码块 / 引用的整行样式）
   - `livePreview.ts`：实时渲染，按语法树隐藏标记、替换成列表符号 / 任务框 / 分隔线，光标处显示原文
   - `links.ts`：解析链接地址、Ctrl+单击打开
   - `codeFences.ts`：代码块自动补结尾、Ctrl+Enter / ↓ 跳出代码块
-- `src/components/`：首页（含搜索）、侧栏树、概览、编辑器（`TodoEditor` 管定时保存、auto save 和冲突，`MarkdownEditor` 包装 CodeMirror）、设置（快捷键、外观、保存、备份与恢复）
+- `src/components/`：首页（含搜索）、侧栏树、概览、编辑器（`TodoEditor` 管定时保存、auto save 和冲突，`MarkdownEditor` 包装 CodeMirror）、设置（常规、快捷键、外观、保存、备份与恢复）
 - `scripts/release.mjs`：改版本号、打包并安装到本机（`npm run release`，`release:fast` 传 `--fast`）
 
 ### 安装到本机与升级
