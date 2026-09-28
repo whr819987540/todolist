@@ -1,4 +1,5 @@
-// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态、上次停在哪里、各待办的编辑位置。
+// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态、上次停在哪里、各待办的编辑位置；
+// 以及只在这次运行期间记在内存里的各待办的撤销记录。
 // 工作区在首页改名 / 删除时也要跟着更新，所以放在这里供首页和工作区视图共用。
 
 import type { Selection } from "./components/Sidebar";
@@ -90,39 +91,76 @@ export function writeEditPosition(workspace: string, project: string, id: string
   writeJson(POSITIONS_KEY, all);
 }
 
-/** 改名、移动、删除之后，记住的编辑位置跟过去；fn 返回 null 的删掉 */
-function mapPositions(fn: (key: TodoKey) => TodoKey | null) {
+// ----- 各待办的撤销记录：只在这次运行期间记在内存里，切到别的待办再切回来时接着用 -----
+
+/** 一条待办的撤销记录（CodeMirror 的 history 序列化后的样子），连同当时的正文 */
+export interface UndoSnapshot {
+  doc: string;
+  history: unknown;
+}
+
+/** 最多给这么多条待办留撤销记录，超出时忘掉最久没打开的 */
+const MAX_UNDOS = 50;
+
+/** 按 todoKey 记，最近留的排在最后 */
+const undos = new Map<string, UndoSnapshot>();
+
+export function keepUndo(workspace: string, project: string, id: string, snap: UndoSnapshot) {
+  const key = todoKey(workspace, project, id);
+  undos.delete(key);
+  undos.set(key, snap);
+  for (const k of [...undos.keys()].slice(0, undos.size - MAX_UNDOS)) undos.delete(k);
+}
+
+/** 取出这条待办留着的撤销记录；正文和留下时不一样（在外部被改过）的作废，返回 null */
+export function takeUndo(workspace: string, project: string, id: string, doc: string): unknown {
+  const key = todoKey(workspace, project, id);
+  const snap = undos.get(key);
+  undos.delete(key);
+  return snap?.doc === doc ? snap.history : null;
+}
+
+/** 改名、移动、删除之后，记住的编辑位置和撤销记录跟过去；fn 返回 null 的删掉 */
+function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
+  const move = (k: string) => {
+    try {
+      const to = fn(JSON.parse(k) as TodoKey);
+      return to && todoKey(...to);
+    } catch {
+      return null; // 认不出的键删掉
+    }
+  };
   const all = readPositions();
   const next: Positions = {};
   let changed = false;
   for (const [k, p] of Object.entries(all)) {
-    let to: TodoKey | null = null;
-    try {
-      to = fn(JSON.parse(k) as TodoKey);
-    } catch {
-      /* 认不出的键删掉 */
-    }
-    const nk = to && todoKey(...to);
+    const nk = move(k);
     if (nk !== k) changed = true;
     if (nk) next[nk] = p;
   }
   if (changed) writeJson(POSITIONS_KEY, next);
+  for (const [k, snap] of [...undos]) {
+    const nk = move(k);
+    if (nk === k) continue;
+    undos.delete(k);
+    if (nk) undos.set(nk, snap);
+  }
 }
 
 export const renameProjectState = (ws: string, from: string, to: string) =>
-  mapPositions(([w, p, id]) => [w, w === ws && p === from ? to : p, id]);
+  mapTodoState(([w, p, id]) => [w, w === ws && p === from ? to : p, id]);
 
 export const forgetProjectState = (ws: string, project: string) =>
-  mapPositions((k) => (k[0] === ws && k[1] === project ? null : k));
+  mapTodoState((k) => (k[0] === ws && k[1] === project ? null : k));
 
 /** 待办移到同一工作区的另一个项目，id 可能因为重名而变 */
 export const moveTodoState = (ws: string, project: string, id: string, target: string, newId: string) =>
-  mapPositions((k) => (k[0] === ws && k[1] === project && k[2] === id ? [ws, target, newId] : k));
+  mapTodoState((k) => (k[0] === ws && k[1] === project && k[2] === id ? [ws, target, newId] : k));
 
 export const forgetTodoState = (ws: string, project: string, id: string) =>
-  mapPositions((k) => (k[0] === ws && k[1] === project && k[2] === id ? null : k));
+  mapTodoState((k) => (k[0] === ws && k[1] === project && k[2] === id ? null : k));
 
-/** 工作区改名后，记住的选中、折叠状态和编辑位置跟过去 */
+/** 工作区改名后，记住的选中、折叠状态、编辑位置和撤销记录跟过去 */
 export function renameWorkspaceState(from: string, to: string) {
   const collapsed = readJson<Record<string, boolean> | null>(collapsedKey(from), null);
   if (collapsed) {
@@ -130,12 +168,12 @@ export function renameWorkspaceState(from: string, to: string) {
     remove(collapsedKey(from));
   }
   writeOpenWorkspaces(readOpenWorkspaces().map((ws) => (ws === from ? to : ws)));
-  mapPositions(([w, p, id]) => [w === from ? to : w, p, id]);
+  mapTodoState(([w, p, id]) => [w === from ? to : w, p, id]);
 }
 
 /** 工作区删除后不再记住它，免得以后新建同名工作区时沿用 */
 export function forgetWorkspaceState(name: string) {
   remove(collapsedKey(name));
   writeOpenWorkspaces(readOpenWorkspaces().filter((ws) => ws !== name));
-  mapPositions((k) => (k[0] === name ? null : k));
+  mapTodoState((k) => (k[0] === name ? null : k));
 }

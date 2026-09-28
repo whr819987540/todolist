@@ -32,13 +32,13 @@ import { FONT_LIMITS, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
 import { countChars, formatDuration, fullTime, relativeTime, useLocalState, useNow } from "../utils";
-import { readEditPosition, writeEditPosition } from "../workspaceState";
+import { keepUndo, readEditPosition, takeUndo, writeEditPosition } from "../workspaceState";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 
 export interface EditorHandle {
   /** 立即保存所有未保存的修改（Ctrl+S、重命名 / 移动等操作前），不受 auto save 开关影响 */
   flush(): Promise<void>;
-  /** 待办已被删除/移走：之后不再尝试保存 */
+  /** 待办已被删除/移走：之后不再尝试保存。撤销记录先按原来的位置留下，由 workspaceState 跟到新位置 */
   detach(): void;
 }
 
@@ -100,6 +100,8 @@ export default function TodoEditor(props: Props) {
   const [mode, setMode] = useLocalState<EditorMode>("editorMode", "live");
   // 上次在这条待办里的编辑位置：打开时光标和滚动回到那里
   const [initialPosition] = useState(() => readEditPosition(workspace, project, id));
+  // 这次运行期间上次打开时留下的撤销记录，正文在外部被改过时不用
+  const [initialHistory, setInitialHistory] = useState<unknown>(null);
   // 认不出编码的文件只读，免得保存时把原文件覆盖成乱码
   const readOnly = encoding === "unknown";
 
@@ -237,6 +239,7 @@ export default function TodoEditor(props: Props) {
         s.content = s.savedContent = d.content;
         s.mtime = d.mtime;
         s.loaded = true;
+        setInitialHistory(takeUndo(workspace, project, id, d.content));
         setContent(d.content);
         setPath(d.path);
         setEncoding(d.encoding);
@@ -253,6 +256,8 @@ export default function TodoEditor(props: Props) {
     props.handleRef.current = {
       flush,
       detach: () => {
+        const snap = mdRef.current?.snapshot();
+        if (snap) keepUndo(workspace, project, id, snap);
         s.detached = true;
         stopTimer();
       },
@@ -505,6 +510,7 @@ export default function TodoEditor(props: Props) {
               handleRef={mdRef}
               initialDoc={content}
               initialPosition={initialPosition}
+              initialHistory={initialHistory}
               mode={mode}
               readOnly={readOnly}
               placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
@@ -513,6 +519,7 @@ export default function TodoEditor(props: Props) {
               onBlur={() => autoSave && saveContent()}
               onOpenLink={openLink}
               onPosition={onPosition}
+              onDestroy={(snap) => snap && !s.detached && keepUndo(workspace, project, id, snap)}
             />
           </>
         )}
