@@ -451,17 +451,18 @@ impl Store {
         Ok(())
     }
 
-    /// 把待办移动到同一工作区下的另一个项目。目标项目里若有同名文件会换一个新 id。
+    /// 把待办移动到另一个项目（可以在别的工作区里）。目标项目里若有同名文件会换一个新 id。
     pub fn move_todo(
         &self,
         ws: &str,
         project: &str,
         id: &str,
+        target_ws: &str,
         target: &str,
     ) -> Result<TodoSummary> {
         let _g = self.guard();
         let src_dir = self.project_dir(ws, project)?;
-        let dst_dir = self.project_dir(ws, target)?;
+        let dst_dir = self.project_dir(target_ws, target)?;
         if src_dir == dst_dir {
             return Err("已经在该项目中".into());
         }
@@ -980,12 +981,33 @@ mod tests {
         assert_eq!(infos.len(), 1);
         assert_eq!((infos[0].project_count, infos[0].todo_count, infos[0].done_count), (2, 1, 1));
 
-        let moved = s.move_todo("工作 空间", "项目A", &t.id, "项目B").unwrap();
+        let moved = s.move_todo("工作 空间", "项目A", &t.id, "工作 空间", "项目B").unwrap();
         assert_eq!(moved.title, "买牛奶");
         assert!(moved.done);
         let d = s.read_todo("工作 空间", "项目B", &moved.id).unwrap();
         assert_eq!(d.content, "# 标题\n- 第一项\n正文");
         assert!(s.read_todo("工作 空间", "项目A", &t.id).is_err());
+    }
+
+    #[test]
+    fn move_todo_to_other_workspace() {
+        let (_tmp, s) = store("move-todo");
+        s.create_workspace("甲").unwrap();
+        s.create_workspace("乙").unwrap();
+        s.create_project("甲", "p").unwrap();
+        s.create_project("乙", "q").unwrap();
+        let t = s.create_todo("甲", "p", "跨工作区").unwrap();
+        s.save_todo_content("甲", "p", &t.id, "正文", None, false).unwrap();
+        // 目标项目里已有同名文件：换一个新 id，标题和正文不变
+        fs::write(s.project_path("乙", "q").unwrap().join(format!("{}.md", t.id)), "别的").unwrap();
+
+        assert!(s.move_todo("甲", "p", &t.id, "甲", "p").is_err());
+        let moved = s.move_todo("甲", "p", &t.id, "乙", "q").unwrap();
+        assert_ne!(moved.id, t.id);
+        assert_eq!(moved.title, "跨工作区");
+        assert_eq!(s.read_todo("乙", "q", &moved.id).unwrap().content, "正文");
+        assert_eq!(s.read_todo("乙", "q", &t.id).unwrap().content, "别的");
+        assert!(s.load_workspace("甲").unwrap().projects[0].todos.is_empty());
     }
 
     #[test]

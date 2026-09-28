@@ -25,6 +25,7 @@ import {
   writeLastView,
   writeOpenWorkspaces,
 } from "../workspaceState";
+import { useDragMove } from "./DragMove";
 import { useNameDialog } from "./NameDialog";
 import { ProjectOverview, WorkspaceOverview } from "./Overview";
 import Sidebar, { WS_KEY, type Selection, type SidebarHandle } from "./Sidebar";
@@ -426,17 +427,17 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
           updateTodos(ws, project, (todos) => todos.filter((x) => x.id !== t.id));
           message.success("已移到回收站");
         }),
-      moveTodo: (project, t, target) =>
+      moveTodo: (project, t, target, targetWs = ws) =>
         run(async () => {
           const isSel = isSelTodo(project, t.id);
           if (isSel) await flushEditor();
-          const moved = await api.moveTodo(ws, project, t.id, target);
+          const moved = await api.moveTodo(ws, project, t.id, targetWs, target);
           if (isSel) editorRef.current?.detach();
-          moveTodoState(ws, project, t.id, target, moved.id);
+          moveTodoState(ws, project, t.id, [targetWs, target, moved.id]);
           await reload();
-          expand(ws, target);
-          if (isSel) setSel({ workspace: ws, project: target, todoId: moved.id }, "replace");
-          message.success(`已移动到「${target}」`);
+          reveal(targetWs, target);
+          if (isSel) setSel({ workspace: targetWs, project: target, todoId: moved.id }, "replace");
+          message.success(`已移动到「${targetWs === ws ? target : `${targetWs} / ${target}`}」`);
         }),
       openExternal: (project, t) =>
         run(async () => {
@@ -446,6 +447,14 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       revealTodo: (project, t) => run(() => api.revealTodo(ws, project, t.id)),
     };
   };
+
+  // 把待办拖到左侧的另一个项目上
+  const drag = useDragMove({
+    expand: (ws) => expand(ws, WS_KEY),
+    onDrop: (item, target) => {
+      if (target.project) actionsFor(item.workspace).moveTodo(item.project, item.todo, target.project, target.workspace);
+    },
+  });
 
   /** 焦点移到右侧：待办的正文、项目概览的快速添加框，概览页没有输入框时落在右侧区域本身 */
   const focusMain = () => {
@@ -570,6 +579,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         sortKey={listOptions.get(selTree.name).sortKey}
         actions={a}
         autoFocus={sel !== kbSel}
+        drag={drag}
       />
     );
   } else {
@@ -600,12 +610,14 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         setKeyword={setKeyword}
         listOptionsOf={listOptions.get}
         setListOptions={setListOptions}
+        drag={drag}
       />
       <div className="resizer" onMouseDown={startResize} onDoubleClick={() => setWidth(300)} title="拖动调整宽度，双击恢复默认" />
       <main className="main" ref={mainRef} tabIndex={-1}>
         {main}
       </main>
       {dialog}
+      {drag.ghost}
     </div>
   );
 }

@@ -318,8 +318,10 @@ function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
   const lastBefore = readLastTodos();
   const last: LastTodos = {};
   for (const [ws, v] of Object.entries(lastBefore)) {
+    // 工作区本身改名后跟过去；待办（或它所在的项目）移到了别的工作区的，不再是这个工作区上次打开的
+    const self = fn([ws, "", ""]);
     const to = Array.isArray(v) ? fn([ws, v[0], v[1]]) : null;
-    if (to) last[to[0]] = [to[1], to[2]];
+    if (self && to && to[0] === self[0]) last[to[0]] = [to[1], to[2]];
   }
   writeSaved(LAST_TODOS_KEY, last);
   for (const [k, snap] of [...undos]) {
@@ -337,9 +339,9 @@ export const renameProjectState = (ws: string, from: string, to: string) =>
 export const forgetProjectState = (ws: string, project: string) =>
   mapTodoState((k) => (k[0] === ws && k[1] === project ? null : k));
 
-/** 待办移到同一工作区的另一个项目，id 可能因为重名而变 */
-export const moveTodoState = (ws: string, project: string, id: string, target: string, newId: string) =>
-  mapTodoState((k) => (k[0] === ws && k[1] === project && k[2] === id ? [ws, target, newId] : k));
+/** 待办移到另一个项目（可以在别的工作区里），id 可能因为重名而变 */
+export const moveTodoState = (ws: string, project: string, id: string, to: TodoKey) =>
+  mapTodoState((k) => (k[0] === ws && k[1] === project && k[2] === id ? to : k));
 
 export const forgetTodoState = (ws: string, project: string, id: string) =>
   mapTodoState((k) => (k[0] === ws && k[1] === project && k[2] === id ? null : k));

@@ -165,9 +165,10 @@ async fn move_todo(
     workspace: String,
     project: String,
     id: String,
-    target: String,
+    target_workspace: String,
+    target_project: String,
 ) -> Cmd<TodoSummary> {
-    store.move_todo(&workspace, &project, &id, &target)
+    store.move_todo(&workspace, &project, &id, &target_workspace, &target_project)
 }
 
 // ----- 界面状态（数据目录的 .state.json） -----

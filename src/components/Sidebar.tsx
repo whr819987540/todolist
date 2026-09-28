@@ -32,6 +32,7 @@ import {
   useNow,
 } from "../utils";
 import type { ListOptions } from "../workspaceState";
+import { type DragMove, isDraggingTodo, isDropTarget } from "./DragMove";
 import Highlight from "./Highlight";
 import { projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
 import SettingsButton from "./SettingsButton";
@@ -85,6 +86,8 @@ interface Props {
   /** 各工作区的排序和隐藏已完成；侧栏顶部的按钮改的是右侧正在显示的工作区的 */
   listOptionsOf: (workspace: string) => ListOptions;
   setListOptions: (workspace: string, patch: Partial<ListOptions>) => void;
+  /** 拖动待办到别的项目 */
+  drag: DragMove;
 }
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -292,6 +295,7 @@ export default function Sidebar(props: Props) {
             keyword={kw}
             {...listOptionsOf(tree.name)}
             now={now}
+            drag={props.drag}
           />
         ))}
       </div>
@@ -314,6 +318,7 @@ function WorkspaceBranch(p: {
   hideDone: boolean;
   sortKey: SortKey;
   now: number;
+  drag: DragMove;
 }) {
   const { tree, actions: a, collapsed, keyword: kw, hideDone, sortKey } = p;
   const projectNames = useMemo(() => tree.projects.map((x) => x.name), [tree]);
@@ -340,7 +345,7 @@ function WorkspaceBranch(p: {
   const toggle = (key: string) => p.setCollapsed((c) => ({ ...c, [key]: !c[key] }));
 
   return (
-    <div className="ws-branch" role="treeitem" aria-expanded={isOpen(WS_KEY)}>
+    <div className="ws-branch" role="treeitem" aria-expanded={isOpen(WS_KEY)} data-drop-ws={tree.name}>
       <Dropdown menu={workspaceMenu(a)} trigger={["contextMenu"]}>
         <div
           className={`tree-row ws-row${sel && !sel.project ? " selected" : ""}`}
@@ -384,6 +389,7 @@ function WorkspaceBranch(p: {
               keyword={kw}
               now={p.now}
               hideDone={hideDone}
+              drag={p.drag}
             />
           ))}
           {tree.projects.length === 0 && (
@@ -416,6 +422,7 @@ function ProjectBranch(p: {
   keyword: string;
   now: number;
   hideDone: boolean;
+  drag: DragMove;
 }) {
   const { project, todos, sel, actions: a } = p;
   const undone = project.todos.filter((t) => !t.done).length;
@@ -423,7 +430,12 @@ function ProjectBranch(p: {
   const hiddenDone = p.hideDone ? project.todos.length - undone : 0;
 
   return (
-    <div role="treeitem" aria-expanded={p.open}>
+    <div
+      role="treeitem"
+      aria-expanded={p.open}
+      data-drop-project={project.name}
+      className={isDropTarget(p.drag.state, p.workspace, project.name) ? "drop-target" : undefined}
+    >
       <Dropdown menu={projectMenu(a, project.name)} trigger={["contextMenu"]}>
         <div
           className={`tree-row project-row${selected ? " selected" : ""}`}
@@ -463,6 +475,7 @@ function ProjectBranch(p: {
               projectNames={p.projectNames}
               keyword={p.keyword}
               now={p.now}
+              drag={p.drag}
             />
           ))}
           {todos.length === 0 && !p.keyword && (
@@ -491,8 +504,10 @@ function TodoRow(p: {
   projectNames: string[];
   keyword: string;
   now: number;
+  drag: DragMove;
 }) {
   const { todo: t, actions: a } = p;
+  const dragged = isDraggingTodo(p.drag.state, p.workspace, p.project, t.id);
   const { text, fromContent } = displayTitle(t);
 
   const tip = (
@@ -502,7 +517,7 @@ function TodoRow(p: {
       <div>创建时间：{fullTime(t.createdAt)}</div>
       <div>修改时间：{fullTime(t.updatedAt)}</div>
       {t.done && t.doneAt && <div>完成时间：{fullTime(t.doneAt)}</div>}
-      <div className="todo-tip-hint">右键可用默认程序打开</div>
+      <div className="todo-tip-hint">右键可用默认程序打开，拖到其他项目上可移动过去</div>
     </div>
   );
 
@@ -513,8 +528,9 @@ function TodoRow(p: {
           role="treeitem"
           aria-selected={p.selected}
           data-sel={selKey({ workspace: p.workspace, project: p.project, todoId: t.id })}
-          className={`tree-row todo-row${p.selected ? " selected" : ""}${t.done ? " done" : ""}`}
+          className={`tree-row todo-row${p.selected ? " selected" : ""}${t.done ? " done" : ""}${dragged ? " drag-source" : ""}`}
           style={{ paddingLeft: 44 }}
+          onMouseDown={(e) => p.drag.start(e, { kind: "todo", workspace: p.workspace, project: p.project, todo: t })}
           onClick={() => a.selectTodo(p.project, t.id)}
         >
           <span

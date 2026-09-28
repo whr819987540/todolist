@@ -52,8 +52,9 @@ export const api = {
     invoke<TodoSummary>("set_todo_done", { workspace, project, id, done }),
   deleteTodo: (workspace: string, project: string, id: string) =>
     invoke<void>("delete_todo", { workspace, project, id }),
-  moveTodo: (workspace: string, project: string, id: string, target: string) =>
-    invoke<TodoSummary>("move_todo", { workspace, project, id, target }),
+  /** 移到另一个项目，可以在别的工作区里；返回移过去后的摘要（id 可能因为重名而变） */
+  moveTodo: (workspace: string, project: string, id: string, targetWorkspace: string, targetProject: string) =>
+    invoke<TodoSummary>("move_todo", { workspace, project, id, targetWorkspace, targetProject }),
 
   /** 数据目录的 .state.json 里的界面状态（JSON 文本），还没有这个文件时是 null */
   readUiState: () => invoke<string | null>("read_ui_state"),

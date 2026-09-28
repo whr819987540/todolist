@@ -10,6 +10,7 @@ import { Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "a
 import { useState } from "react";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime, sortTodos, useNow } from "../utils";
+import { type DragMove, isDraggingTodo } from "./DragMove";
 import { projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
 
 const percent = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0);
@@ -105,6 +106,8 @@ export function ProjectOverview(p: {
   actions: Actions;
   /** 打开时聚焦快速添加框（用键盘在左侧列表里移过来时不聚焦） */
   autoFocus: boolean;
+  /** 待办可以拖到左侧的其他项目上 */
+  drag: DragMove;
 }) {
   const { project, actions: a } = p;
   const now = useNow();
@@ -130,7 +133,11 @@ export function ProjectOverview(p: {
     const { text, fromContent } = displayTitle(t);
     return (
       <Dropdown key={t.id} menu={todoMenu(a, project.name, t, p.projectNames)} trigger={["contextMenu"]}>
-        <div className={`list-row${t.done ? " done" : ""}`} onClick={() => a.selectTodo(project.name, t.id)}>
+        <div
+          className={`list-row${t.done ? " done" : ""}${isDraggingTodo(p.drag.state, p.workspace, project.name, t.id) ? " drag-source" : ""}`}
+          onMouseDown={(e) => p.drag.start(e, { kind: "todo", workspace: p.workspace, project: project.name, todo: t })}
+          onClick={() => a.selectTodo(project.name, t.id)}
+        >
           <span
             className={`check${t.done ? " checked" : ""}`}
             role="checkbox"

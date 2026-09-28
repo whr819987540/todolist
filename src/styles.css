@@ -716,6 +716,81 @@ mark {
   margin-top: 2px;
 }
 
+/* ---------------- 拖动移动 ---------------- */
+
+/* 拖动中：不选中文字，不弹悬停提示、不显示行上的按钮；不能放下的地方显示禁止光标 */
+body.drag-moving,
+body.drag-moving * {
+  cursor: default !important;
+  user-select: none !important;
+}
+body.drag-moving.drag-nodrop,
+body.drag-moving.drag-nodrop * {
+  cursor: no-drop !important;
+}
+body.drag-moving .ant-tooltip {
+  display: none !important;
+}
+body.drag-moving .tree-row:hover .row-actions {
+  display: none;
+}
+body.drag-moving .tree-row:hover .row-count {
+  display: block;
+}
+
+/* 正在拖的行 */
+.drag-source {
+  opacity: 0.45;
+}
+
+/* 指针下可以放下的项目：连同其中的待办整块框起来 */
+.drop-target {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--c-primary) 7%, transparent);
+  outline: 1.5px solid var(--c-primary);
+  outline-offset: -3px;
+}
+.drop-target > .tree-row .row-label {
+  color: var(--c-primary);
+}
+
+/* 跟着指针的说明：拖的是什么、会移到哪里 */
+.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2000;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--c-bg-elevated, var(--c-bg));
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.12),
+    0 3px 6px -4px rgba(0, 0, 0, 0.16);
+  font-size: 13px;
+  line-height: 20px;
+  pointer-events: none;
+}
+.drag-ghost-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--c-text);
+}
+.drag-ghost-name > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drag-ghost-hint {
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+.drag-ghost.ok .drag-ghost-hint {
+  color: var(--c-primary);
+}
+
 /* 圆形完成勾选框 */
 .check {
   flex: none;
@@ -834,6 +909,8 @@ mark {
   padding: 11px 16px;
   cursor: pointer;
   border-top: 1px solid var(--c-border);
+  /* 按住拖动时不选中文字 */
+  user-select: none;
 }
 .list-row:first-child {
   border-top: none;
