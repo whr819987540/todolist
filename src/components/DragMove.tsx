@@ -1,33 +1,31 @@
-import { FileTextOutlined } from "@ant-design/icons";
+import { FileTextOutlined, FolderFilled } from "@ant-design/icons";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { TodoSummary } from "../types";
+import type { TodoSummary, WorkspaceTree } from "../types";
 import { displayTitle } from "../utils";
 
-// 拖动移动：在左侧列表或项目概览里按住待办，拖到左侧的另一个项目上（可以是别的工作区的）松开。
+// 拖动移动：在左侧列表或概览里按住待办，拖到左侧的另一个项目上（可以是别的工作区的）松开；
+// 按住项目，拖到左侧的另一个工作区上松开。
 // 用鼠标事件自己实现，不用 HTML5 拖放：WebView2 里拖放默认被 Tauri 接管（给拖文件进窗口用），
 // 自己做也好控制放下的位置、跟着指针的说明和自动滚动。
 // 能放下的地方是侧栏里标了 data-drop-ws（工作区）、data-drop-project（项目）的节点。
 
-/** 拖动中的东西 */
-export interface DragItem {
-  kind: "todo";
-  workspace: string;
-  project: string;
-  todo: TodoSummary;
-}
+/** 拖动中的东西：待办拖到别的项目，项目拖到别的工作区 */
+export type DragItem =
+  | { kind: "todo"; workspace: string; project: string; todo: TodoSummary }
+  | { kind: "project"; workspace: string; project: string };
 
-/** 放下的地方 */
+/** 放下的地方：待办放在项目上，项目放在工作区上 */
 export interface DropTarget {
   workspace: string;
   project?: string;
 }
 
-/** ok：可以放下；none：指针不在能放的地方，或者就在原处 */
-export type DropStatus = "ok" | "none";
+/** ok：可以放下；refused：指针下的地方放不下（工作区里已有同名项目）；none：指针不在能放的地方，或者就在原处 */
+export type DropStatus = "ok" | "refused" | "none";
 
 export interface DragState {
   item: DragItem;
-  /** 指针下的项目 */
+  /** 指针下的项目（拖待办时）或工作区（拖项目时） */
   target: DropTarget | null;
   status: DropStatus;
   /** 跟着指针显示的说明：移到哪里，或者该往哪里拖 */
@@ -52,21 +50,29 @@ const SCROLL_STEP = 14;
 
 /** 正在拖的是不是这条待办 */
 export const isDraggingTodo = (s: DragState | null, workspace: string, project: string, id: string) =>
-  s?.item.workspace === workspace && s.item.project === project && s.item.todo.id === id;
+  s?.item.kind === "todo" && s.item.workspace === workspace && s.item.project === project && s.item.todo.id === id;
 
-/** 这里是不是指针下可以放下的地方 */
-export const isDropTarget = (s: DragState | null, workspace: string, project?: string) =>
-  s?.status === "ok" && s.target?.workspace === workspace && s.target.project === project;
+/** 正在拖的是不是这个项目 */
+export const isDraggingProject = (s: DragState | null, workspace: string, project: string) =>
+  s?.item.kind === "project" && s.item.workspace === workspace && s.item.project === project;
+
+/** 指针下放下的地方加的样式：能放下时高亮，放不下时标红；不是指针下的地方返回 undefined */
+export function dropClass(s: DragState | null, workspace: string, project?: string): string | undefined {
+  if (!s || s.status === "none" || s.target?.workspace !== workspace || s.target.project !== project) return undefined;
+  return s.status === "ok" ? "drop-target" : "drop-refused";
+}
 
 const sameTarget = (a: DropTarget | null, b: DropTarget | null) =>
   a?.workspace === b?.workspace && a?.project === b?.project;
 
-/** 指针下能放下的项目；collapsed 是指针下折叠起来的工作区 */
-function hitTest(x: number, y: number): { target: DropTarget | null; collapsed?: string } {
+/** 指针下能放下的项目（工作区）；collapsed 是拖待办时指针下折叠起来的工作区 */
+function hitTest(x: number, y: number, item: DragItem): { target: DropTarget | null; collapsed?: string } {
   const el = document.elementFromPoint(x, y);
   const wsEl = el?.closest<HTMLElement>(".sidebar [data-drop-ws]");
   if (!el || !wsEl) return { target: null };
   const workspace = wsEl.dataset.dropWs!;
+  // 项目放在工作区里的哪一行上都算放在这个工作区上
+  if (item.kind === "project") return { target: { workspace } };
   const project = el.closest<HTMLElement>("[data-drop-project]")?.dataset.dropProject;
   return {
     target: project ? { workspace, project } : null,
@@ -74,7 +80,17 @@ function hitTest(x: number, y: number): { target: DropTarget | null; collapsed?:
   };
 }
 
-function judge(item: DragItem, target: DropTarget | null): { status: DropStatus; hint: string } {
+function judge(item: DragItem, target: DropTarget | null, trees: WorkspaceTree[]): { status: DropStatus; hint: string } {
+  if (item.kind === "project") {
+    if (!target)
+      return { status: "none", hint: trees.length > 1 ? "拖到左侧的其他工作区上" : "要移到其他工作区，先在侧栏顶部选中它" };
+    if (target.workspace === item.workspace) return { status: "none", hint: "已在这个工作区里" };
+    // 项目是文件夹，Windows 上名字不区分大小写
+    const name = item.project.toLowerCase();
+    if (trees.find((t) => t.name === target.workspace)?.projects.some((p) => p.name.toLowerCase() === name))
+      return { status: "refused", hint: `「${target.workspace}」里已有同名项目` };
+    return { status: "ok", hint: `移动到工作区「${target.workspace}」` };
+  }
   if (!target?.project) return { status: "none", hint: "拖到左侧的项目上" };
   if (target.workspace === item.workspace && target.project === item.project)
     return { status: "none", hint: "已在这个项目里" };
@@ -94,6 +110,8 @@ function swallowClick() {
 
 /** 拖动移动。返回的 ghost 是跟着指针的说明，要渲染出来 */
 export function useDragMove(opts: {
+  /** 侧栏里显示的工作区，看目标工作区里有没有同名项目 */
+  trees: WorkspaceTree[];
   /** 展开折叠起来的工作区 */
   expand(workspace: string): void;
   onDrop(item: DragItem, target: DropTarget): void;
@@ -133,13 +151,13 @@ export function useDragMove(opts: {
     let frame = 0;
 
     const update = () => {
-      const { target, collapsed } = hitTest(pointer.current.x, pointer.current.y);
+      const { target, collapsed } = hitTest(pointer.current.x, pointer.current.y, item);
       if (collapsed !== expandWs) {
         window.clearTimeout(expandTimer);
         expandWs = collapsed;
         if (collapsed) expandTimer = window.setTimeout(() => optsRef.current.expand(collapsed), EXPAND_DELAY);
       }
-      const { status, hint } = judge(item, target);
+      const { status, hint } = judge(item, target, optsRef.current.trees);
       document.body.classList.toggle("drag-nodrop", status !== "ok");
       if (current && current.status === status && current.hint === hint && sameTarget(current.target, target)) return;
       current = { item, target, status, hint };
@@ -217,11 +235,12 @@ export function useDragMove(opts: {
     window.addEventListener("blur", stop);
   };
 
-  const ghost = state && (
+  const item = state?.item;
+  const ghost = state && item && (
     <div ref={ghostRef} className={`drag-ghost ${state.status}`}>
       <div className="drag-ghost-name">
-        <FileTextOutlined />
-        <span>{displayTitle(state.item.todo).text}</span>
+        {item.kind === "todo" ? <FileTextOutlined /> : <FolderFilled className="project-icon" />}
+        <span>{item.kind === "todo" ? displayTitle(item.todo).text : item.project}</span>
       </div>
       <div className="drag-ghost-hint">{state.hint}</div>
     </div>

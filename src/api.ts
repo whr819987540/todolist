@@ -32,6 +32,9 @@ export const api = {
     invoke<string>("rename_project", { workspace, name, newName }),
   deleteProject: (workspace: string, name: string) =>
     invoke<void>("delete_project", { workspace, name }),
+  /** 连同其中的待办移到另一个工作区，项目名不变 */
+  moveProject: (workspace: string, name: string, targetWorkspace: string) =>
+    invoke<void>("move_project", { workspace, name, targetWorkspace }),
 
   createTodo: (workspace: string, project: string, title: string) =>
     invoke<TodoSummary>("create_todo", { workspace, project, title }),

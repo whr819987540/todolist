@@ -14,6 +14,7 @@ import {
   forgetWorkspaceState,
   type ListOptions,
   listOptionsKey,
+  moveProjectState,
   moveTodoState,
   readJson,
   readListOptions,
@@ -395,6 +396,21 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
           message.success("已移到回收站");
         });
       },
+      moveProject: (project, targetWs) =>
+        run(async () => {
+          const isSel = isSelProject(project);
+          if (isSel) await flushEditor();
+          await api.moveProject(ws, project, targetWs);
+          if (isSel) editorRef.current?.detach();
+          moveProjectState(ws, project, targetWs);
+          // 折叠状态跟过去；目标工作区展开，看得到移过去的项目
+          const folded = !!collapsed.get(ws)[project];
+          setCollapsed(ws, ({ [project]: _, ...rest }) => rest);
+          setCollapsed(targetWs, (c) => ({ ...c, [WS_KEY]: false, [project]: folded }));
+          await reload();
+          if (isSel) setSel({ ...sel, workspace: targetWs }, "replace");
+          message.success(`已移动到工作区「${targetWs}」`);
+        }),
       openProjectFolder: (project) => run(() => api.openFolder(ws, project)),
 
       newTodo: (project, title = "", open = true) =>
@@ -448,11 +464,14 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     };
   };
 
-  // 把待办拖到左侧的另一个项目上
+  // 把待办拖到左侧的另一个项目上、项目拖到另一个工作区上
   const drag = useDragMove({
+    trees: trees ?? [],
     expand: (ws) => expand(ws, WS_KEY),
     onDrop: (item, target) => {
-      if (target.project) actionsFor(item.workspace).moveTodo(item.project, item.todo, target.project, target.workspace);
+      const a = actionsFor(item.workspace);
+      if (item.kind === "project") a.moveProject(item.project, target.workspace);
+      else if (target.project) a.moveTodo(item.project, item.todo, target.project, target.workspace);
     },
   });
 
@@ -583,7 +602,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       />
     );
   } else {
-    main = <WorkspaceOverview tree={selTree} actions={a} />;
+    main = <WorkspaceOverview tree={selTree} actions={a} drag={drag} />;
   }
 
   return (

@@ -305,6 +305,22 @@ impl Store {
         self.move_to_trash(&pdir)
     }
 
+    /// 把项目连同其中的待办移到另一个工作区，项目名不变；目标工作区里已有同名项目时不移动
+    pub fn move_project(&self, ws: &str, name: &str, target: &str) -> Result<()> {
+        let _g = self.guard();
+        let pdir = self.project_dir(ws, name)?;
+        let dst_ws = self.ws_dir(target)?;
+        if dst_ws == self.ws_dir(ws)? {
+            return Err("已经在该工作区中".into());
+        }
+        // Windows 不区分大小写，exists 也会认出只差大小写的同名项目
+        let dst = dst_ws.join(name);
+        if dst.exists() {
+            return Err(format!("工作区「{target}」中已有同名项目「{name}」"));
+        }
+        fs::rename(&pdir, &dst).map_err(|e| format!("移动失败，可能有文件正被其他程序占用：{e}"))
+    }
+
     // ----- 待办 -----
 
     pub fn create_todo(&self, ws: &str, project: &str, title: &str) -> Result<TodoSummary> {
@@ -987,6 +1003,32 @@ mod tests {
         let d = s.read_todo("工作 空间", "项目B", &moved.id).unwrap();
         assert_eq!(d.content, "# 标题\n- 第一项\n正文");
         assert!(s.read_todo("工作 空间", "项目A", &t.id).is_err());
+    }
+
+    #[test]
+    fn move_project_to_other_workspace() {
+        let (_tmp, s) = store("move-project");
+        s.create_workspace("甲").unwrap();
+        s.create_workspace("乙").unwrap();
+        s.create_project("甲", "项目").unwrap();
+        s.create_project("甲", "重名").unwrap();
+        s.create_project("乙", "重名").unwrap();
+        let t = s.create_todo("甲", "项目", "带着走").unwrap();
+        s.set_todo_done("甲", "项目", &t.id, true).unwrap();
+
+        assert!(s.move_project("甲", "项目", "甲").is_err());
+        assert!(s.move_project("甲", "重名", "乙").is_err());
+        assert!(s.move_project("甲", "不存在", "乙").is_err());
+        assert!(s.move_project("甲", "项目", "丙").is_err());
+        s.move_project("甲", "项目", "乙").unwrap();
+
+        let names = |ws: &str| s.load_workspace(ws).unwrap().projects.into_iter().map(|p| p.name).collect::<Vec<_>>();
+        assert_eq!(names("甲"), ["重名"]);
+        let mut b = names("乙");
+        b.sort();
+        assert_eq!(b, ["重名", "项目"]);
+        let moved = s.read_todo("乙", "项目", &t.id).unwrap();
+        assert_eq!((moved.summary.title.as_str(), moved.summary.done), ("带着走", true));
     }
 
     #[test]

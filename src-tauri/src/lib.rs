@@ -97,6 +97,16 @@ async fn delete_project(store: State<'_, Store>, workspace: String, name: String
     store.delete_project(&workspace, &name)
 }
 
+#[tauri::command]
+async fn move_project(
+    store: State<'_, Store>,
+    workspace: String,
+    name: String,
+    target_workspace: String,
+) -> Cmd<()> {
+    store.move_project(&workspace, &name, &target_workspace)
+}
+
 // ----- 待办 -----
 
 #[tauri::command]
@@ -678,6 +688,7 @@ pub fn run() {
             create_project,
             rename_project,
             delete_project,
+            move_project,
             create_todo,
             read_todo,
             save_todo_content,

@@ -10,7 +10,7 @@ import { Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "a
 import { useState } from "react";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime, sortTodos, useNow } from "../utils";
-import { type DragMove, isDraggingTodo } from "./DragMove";
+import { type DragMove, isDraggingProject, isDraggingTodo } from "./DragMove";
 import { projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
 
 const percent = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0);
@@ -19,8 +19,8 @@ function latest(todos: TodoSummary[]): number {
   return todos.reduce((m, t) => Math.max(m, t.updatedAt), 0);
 }
 
-/** 未选中项目时右侧显示的工作区概览 */
-export function WorkspaceOverview({ tree, actions: a }: { tree: WorkspaceTree; actions: Actions }) {
+/** 未选中项目时右侧显示的工作区概览；项目卡片可以拖到左侧的其他工作区上 */
+export function WorkspaceOverview({ tree, actions: a, drag }: { tree: WorkspaceTree; actions: Actions; drag: DragMove }) {
   const now = useNow();
   const all = tree.projects.flatMap((p) => p.todos);
   const done = all.filter((t) => t.done).length;
@@ -70,7 +70,11 @@ export function WorkspaceOverview({ tree, actions: a }: { tree: WorkspaceTree; a
             const last = latest(p.todos);
             return (
               <Dropdown key={p.name} menu={projectMenu(a, p.name)} trigger={["contextMenu"]}>
-                <div className="card project-card" onClick={() => a.selectProject(p.name)}>
+                <div
+                  className={`card project-card${isDraggingProject(drag.state, tree.name, p.name) ? " drag-source" : ""}`}
+                  onMouseDown={(e) => drag.start(e, { kind: "project", workspace: tree.name, project: p.name })}
+                  onClick={() => a.selectProject(p.name)}
+                >
                   <div className="card-head">
                     <FolderFilled className="project-icon big" />
                     <span className="card-name" title={p.name}>

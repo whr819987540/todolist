@@ -32,7 +32,7 @@ import {
   useNow,
 } from "../utils";
 import type { ListOptions } from "../workspaceState";
-import { type DragMove, isDraggingTodo, isDropTarget } from "./DragMove";
+import { type DragMove, dropClass, isDraggingProject, isDraggingTodo } from "./DragMove";
 import Highlight from "./Highlight";
 import { projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
 import SettingsButton from "./SettingsButton";
@@ -86,7 +86,7 @@ interface Props {
   /** 各工作区的排序和隐藏已完成；侧栏顶部的按钮改的是右侧正在显示的工作区的 */
   listOptionsOf: (workspace: string) => ListOptions;
   setListOptions: (workspace: string, patch: Partial<ListOptions>) => void;
-  /** 拖动待办到别的项目 */
+  /** 拖动待办到别的项目、项目到别的工作区 */
   drag: DragMove;
 }
 
@@ -345,7 +345,12 @@ function WorkspaceBranch(p: {
   const toggle = (key: string) => p.setCollapsed((c) => ({ ...c, [key]: !c[key] }));
 
   return (
-    <div className="ws-branch" role="treeitem" aria-expanded={isOpen(WS_KEY)} data-drop-ws={tree.name}>
+    <div
+      className={["ws-branch", dropClass(p.drag.state, tree.name)].filter(Boolean).join(" ")}
+      role="treeitem"
+      aria-expanded={isOpen(WS_KEY)}
+      data-drop-ws={tree.name}
+    >
       <Dropdown menu={workspaceMenu(a)} trigger={["contextMenu"]}>
         <div
           className={`tree-row ws-row${sel && !sel.project ? " selected" : ""}`}
@@ -434,13 +439,21 @@ function ProjectBranch(p: {
       role="treeitem"
       aria-expanded={p.open}
       data-drop-project={project.name}
-      className={isDropTarget(p.drag.state, p.workspace, project.name) ? "drop-target" : undefined}
+      className={
+        [
+          dropClass(p.drag.state, p.workspace, project.name),
+          isDraggingProject(p.drag.state, p.workspace, project.name) && "drag-source",
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
     >
       <Dropdown menu={projectMenu(a, project.name)} trigger={["contextMenu"]}>
         <div
           className={`tree-row project-row${selected ? " selected" : ""}`}
           data-sel={selKey({ workspace: p.workspace, project: project.name })}
           style={{ paddingLeft: 22 }}
+          onMouseDown={(e) => p.drag.start(e, { kind: "project", workspace: p.workspace, project: project.name })}
           onClick={() => {
             a.selectProject(project.name);
             if (!p.open) p.onToggle();

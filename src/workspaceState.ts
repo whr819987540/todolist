@@ -336,6 +336,10 @@ function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
 export const renameProjectState = (ws: string, from: string, to: string) =>
   mapTodoState(([w, p, id]) => [w, w === ws && p === from ? to : p, id]);
 
+/** 项目移到另一个工作区（项目名不变） */
+export const moveProjectState = (ws: string, project: string, target: string) =>
+  mapTodoState(([w, p, id]) => [w === ws && p === project ? target : w, p, id]);
+
 export const forgetProjectState = (ws: string, project: string) =>
   mapTodoState((k) => (k[0] === ws && k[1] === project ? null : k));
 

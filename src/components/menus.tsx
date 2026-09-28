@@ -27,6 +27,8 @@ export interface Actions {
   newProject(): void;
   renameProject(project: string): void;
   deleteProject(project: string): void;
+  /** 连同其中的待办移到另一个工作区 */
+  moveProject(project: string, targetWorkspace: string): void;
   openProjectFolder(project: string): void;
 
   /** open=true 时创建后立即打开并聚焦标题；返回是否创建成功（失败时已弹出提示） */

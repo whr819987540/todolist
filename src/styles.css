@@ -289,6 +289,10 @@ mark {
   transition: box-shadow 0.2s, border-color 0.2s, transform 0.2s;
   min-width: 0;
 }
+.project-card {
+  /* 按住拖动时不选中文字 */
+  user-select: none;
+}
 .card:hover {
   border-color: var(--c-primary-bg-hover);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
@@ -753,6 +757,13 @@ body.drag-moving .tree-row:hover .row-count {
 .drop-target > .tree-row .row-label {
   color: var(--c-primary);
 }
+/* 放不下（目标工作区里已有同名项目） */
+.drop-refused {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--c-error) 6%, transparent);
+  outline: 1.5px dashed var(--c-error);
+  outline-offset: -3px;
+}
 
 /* 跟着指针的说明：拖的是什么、会移到哪里 */
 .drag-ghost {
@@ -789,6 +800,9 @@ body.drag-moving .tree-row:hover .row-count {
 }
 .drag-ghost.ok .drag-ghost-hint {
   color: var(--c-primary);
+}
+.drag-ghost.refused .drag-ghost-hint {
+  color: var(--c-error);
 }
 
 /* 圆形完成勾选框 */
