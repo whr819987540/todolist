@@ -1,18 +1,12 @@
 import { CloudUploadOutlined, DownloadOutlined, FolderOpenOutlined, ReloadOutlined } from "@ant-design/icons";
 import { App as AntApp, Button, Form, Input, Spin } from "antd";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, errMsg } from "../api";
 import { useSettings } from "../settings";
 import type { RemoteBackup, SettingsInfo, WebDavConfig, WebDavInfo } from "../types";
-import { fullTime, useLocalState } from "../utils";
+import { fullTime } from "../utils";
 
 type FormValues = WebDavConfig & { password: string };
-
-/** 本地备份包大小上限，与 Rust 端一致；设置备份只有几 KB */
-const MAX_FILE_BYTES = 1024 * 1024;
-
-/** 上次备份到本地的文件（只记在本机），下次「另存为」对话框从它所在的文件夹打开 */
-const LAST_LOCAL_BACKUP_KEY = "lastLocalBackup";
 
 const formatSize = (n: number | null) => (n == null ? "" : n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
 
@@ -23,12 +17,10 @@ export default function BackupSettings() {
   const [form] = Form.useForm<FormValues>();
   const [saved, setSaved] = useState<WebDavInfo | null>(null);
   const [values, setValues] = useState<FormValues | null>(null);
-  const [busy, setBusy] = useState<"test" | "save" | "backup" | "file" | null>(null);
+  const [busy, setBusy] = useState<"test" | "save" | "backup" | "file" | "pick" | null>(null);
   const [backups, setBackups] = useState<RemoteBackup[] | null>(null);
   const [listing, setListing] = useState(false);
   const [listError, setListError] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [lastLocalBackup, setLastLocalBackup] = useLocalState<string | null>(LAST_LOCAL_BACKUP_KEY, null);
 
   const refreshList = useCallback(async () => {
     setListing(true);
@@ -114,10 +106,8 @@ export default function BackupSettings() {
 
   const onBackupFile = () =>
     run("file", async () => {
-      const path = await api.backupToFile(lastLocalBackup);
-      if (!path) return;
-      setLastLocalBackup(path);
-      message.success(`已备份到 ${path}`);
+      const path = await api.backupToFile();
+      if (path) message.success(`已备份到 ${path}`);
     });
 
   const restored = (info: SettingsInfo) => {
@@ -143,18 +133,13 @@ export default function BackupSettings() {
       },
     });
 
-  const onPickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // 允许再次选择同一个文件
-    if (!file) return;
-    if (file.size > MAX_FILE_BYTES) {
-      message.error("文件超过 1 MB，不是本软件的设置备份");
-      return;
-    }
-    confirmRestore(`本地文件「${file.name}」`, async () =>
-      api.restoreFromFile(new Uint8Array(await file.arrayBuffer())),
-    );
-  };
+  const onRestoreFile = () =>
+    run("pick", async () => {
+      const path = await api.pickBackupFile();
+      if (!path) return;
+      const name = path.slice(path.lastIndexOf("\\") + 1);
+      confirmRestore(`本地文件「${name}」`, () => api.restoreFromFile(path));
+    });
 
   const configured = !!saved?.config.url;
 
@@ -196,13 +181,13 @@ export default function BackupSettings() {
     <>
       <div className="setting-group">本地备份</div>
       <div className="setting-desc">
-        只含快捷键、字号等设置（.settings.json），不含待办数据和密码；本地和 WebDAV 上的备份文件通用。
+        只含快捷键、字号等设置（.settings.json），不含待办数据和密码；默认存在数据目录里，本地和 WebDAV 上的备份文件通用。
       </div>
       <div className="backup-bar">
         <Button icon={<DownloadOutlined />} loading={busy === "file"} onClick={onBackupFile}>
           备份到本地文件…
         </Button>
-        <Button icon={<FolderOpenOutlined />} onClick={() => fileRef.current?.click()}>
+        <Button icon={<FolderOpenOutlined />} loading={busy === "pick"} onClick={onRestoreFile}>
           从本地文件恢复…
         </Button>
       </div>
@@ -268,7 +253,6 @@ export default function BackupSettings() {
         </Button>
       </div>
       {list}
-      <input ref={fileRef} type="file" accept=".zip,application/zip" hidden onChange={onPickFile} />
     </>
   );
 }

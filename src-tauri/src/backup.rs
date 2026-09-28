@@ -7,6 +7,7 @@ use crate::webdav::RemoteFile;
 use chrono::{DateTime, Datelike, Local, NaiveDateTime, TimeZone, Timelike};
 use serde::Serialize;
 use std::io::{Cursor, Read, Write};
+use std::path::Path;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -14,6 +15,8 @@ const PREFIX: &str = "TodoList-settings-";
 const TIME_FORMAT: &str = "%Y%m%d-%H%M%S";
 /// 设置文件的大小上限，超过说明不是本软件的备份
 const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
+/// 本地备份包的大小上限；设置备份只有几 KB
+const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -93,6 +96,16 @@ pub fn unpack(data: &[u8]) -> Result<Settings> {
     serde_json::from_slice(strip_bom(&buf)).map_err(|e| format!("备份里的设置文件内容无效：{e}"))
 }
 
+/// 从本地的备份包读出设置
+pub fn read_file(path: &Path) -> Result<Settings> {
+    let len = std::fs::metadata(path).map_err(|e| format!("读取备份文件失败：{e}"))?.len();
+    if len > MAX_FILE_BYTES {
+        return Err("文件超过 1 MB，不是本软件的设置备份".into());
+    }
+    let data = std::fs::read(path).map_err(|e| format!("读取备份文件失败：{e}"))?;
+    unpack(&data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +166,25 @@ mod tests {
         assert!(unpack(&zip_with("readme.txt", b"hi")).unwrap_err().contains("没有找到"));
         assert!(unpack(&zip_with(".settings.json", b"not json")).unwrap_err().contains("内容无效"));
         assert!(unpack(b"not a zip").unwrap_err().contains("不是有效的 zip"));
+    }
+
+    #[test]
+    fn reads_local_file_and_rejects_large_ones() {
+        let dir = std::env::temp_dir().join(format!("todolist-backup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(file_name(time()));
+        let settings = Settings {
+            editor_font_size: 22,
+            ..Default::default()
+        };
+        std::fs::write(&file, pack(&settings, time()).unwrap()).unwrap();
+        assert_eq!(read_file(&file).unwrap().editor_font_size, 22);
+
+        let big = dir.join("big.zip");
+        std::fs::write(&big, vec![0u8; MAX_FILE_BYTES as usize + 1]).unwrap();
+        assert!(read_file(&big).unwrap_err().contains("超过 1 MB"));
+        assert!(read_file(&dir.join("missing.zip")).unwrap_err().contains("读取备份文件失败"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

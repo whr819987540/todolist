@@ -15,7 +15,7 @@ use store::{Store, TodoDetail, TodoSummary, WorkspaceInfo, WorkspaceTree, SaveRe
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent};
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_window_state::StateFlags;
 use webdav::{WebDav, WebDavConfig, WebDavInfo, WebDavStore};
@@ -534,26 +534,29 @@ async fn backup_to_webdav(settings: State<'_, SettingsStore>, webdav: State<'_, 
     Ok(name)
 }
 
-/// 弹出「另存为」对话框，把当前设置打包存到选好的位置；返回保存的路径，取消时返回 null。
-/// last_file 是上次备份到的文件，从它所在的文件夹打开（文件夹还在时）；Windows 自己不一定记得这个对话框上次的位置
+/// 本地备份、恢复用的文件对话框：挂在主窗口上，只列 zip，总是从数据目录打开
+fn backup_file_dialog(window: &WebviewWindow, store: &Store, title: &str) -> FileDialogBuilder<tauri::Wry> {
+    window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title(title)
+        .add_filter("设置备份", &["zip"])
+        .set_directory(store.root())
+}
+
+/// 弹出「另存为」对话框，把当前设置打包存到选好的位置；返回保存的路径，取消时返回 null
 #[tauri::command]
 async fn backup_to_file(
     window: WebviewWindow,
+    store: State<'_, Store>,
     settings: State<'_, SettingsStore>,
-    last_file: Option<String>,
 ) -> Cmd<Option<String>> {
     let now = Local::now();
-    let mut dialog = window
-        .dialog()
-        .file()
-        .set_parent(&window)
-        .set_title("备份设置到本地")
+    let picked = backup_file_dialog(&window, &store, "备份设置到本地")
         .set_file_name(backup::file_name(now))
-        .add_filter("设置备份", &["zip"]);
-    if let Some(dir) = last_file.as_deref().and_then(|f| Path::new(f).parent()).filter(|d| d.is_dir()) {
-        dialog = dialog.set_directory(dir);
-    }
-    let Some(path) = dialog.blocking_save_file() else { return Ok(None) };
+        .blocking_save_file();
+    let Some(path) = picked else { return Ok(None) };
     let path = path.into_path().map_err(|e| format!("无法保存到这个位置：{e}"))?;
     let data = backup::pack(&settings.get(), now)?;
     std::fs::write(&path, data).map_err(|e| format!("保存备份失败：{e}"))?;
@@ -573,17 +576,26 @@ async fn restore_from_webdav(
     name: String,
 ) -> Cmd<SettingsInfo> {
     let data = webdav.connect()?.download(&name).await?;
-    restore_settings(&app, &settings, &data)
+    restore_settings(&app, &settings, backup::unpack(&data)?)
 }
 
-/// 从本地选择的备份包恢复（前端读出文件内容传过来）
+/// 弹出「打开」对话框选择本地的备份包，返回选中的路径；取消时返回 null。恢复前前端要先确认，再调 restore_from_file
 #[tauri::command]
-fn restore_from_file(app: AppHandle, settings: State<'_, SettingsStore>, data: Vec<u8>) -> Cmd<SettingsInfo> {
-    restore_settings(&app, &settings, &data)
+async fn pick_backup_file(window: WebviewWindow, store: State<'_, Store>) -> Cmd<Option<String>> {
+    let Some(path) = backup_file_dialog(&window, &store, "从本地文件恢复设置").blocking_pick_file() else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|e| format!("无法打开这个文件：{e}"))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 
-fn restore_settings(app: &AppHandle, settings: &SettingsStore, zip: &[u8]) -> Cmd<SettingsInfo> {
-    let next = backup::unpack(zip)?;
+/// 从本地的备份包恢复（路径来自 pick_backup_file）
+#[tauri::command]
+fn restore_from_file(app: AppHandle, settings: State<'_, SettingsStore>, path: String) -> Cmd<SettingsInfo> {
+    restore_settings(&app, &settings, backup::read_file(Path::new(&path))?)
+}
+
+fn restore_settings(app: &AppHandle, settings: &SettingsStore, next: Settings) -> Cmd<SettingsInfo> {
     check_shortcuts(&next)?;
     settings.save(next.clone())?;
     // 全局快捷键被占用不影响恢复，设置界面会提示
@@ -693,6 +705,7 @@ pub fn run() {
             test_webdav,
             backup_to_webdav,
             backup_to_file,
+            pick_backup_file,
             list_webdav_backups,
             restore_from_webdav,
             restore_from_file,

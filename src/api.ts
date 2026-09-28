@@ -97,11 +97,13 @@ export const api = {
     invoke<string>("test_webdav", { config, password }),
   /** 返回备份文件名 */
   backupToWebdav: () => invoke<string>("backup_to_webdav"),
-  /** 弹出「另存为」对话框（从上次备份到的文件所在的文件夹打开），返回保存的路径；取消时返回 null */
-  backupToFile: (lastFile: string | null) => invoke<string | null>("backup_to_file", { lastFile }),
+  /** 弹出「另存为」对话框（从数据目录打开），返回保存的路径；取消时返回 null */
+  backupToFile: () => invoke<string | null>("backup_to_file"),
   listWebdavBackups: () => invoke<RemoteBackup[]>("list_webdav_backups"),
   restoreFromWebdav: (name: string) => invoke<SettingsInfo>("restore_from_webdav", { name }),
-  restoreFromFile: (data: Uint8Array) => invoke<SettingsInfo>("restore_from_file", { data: Array.from(data) }),
+  /** 弹出「打开」对话框（从数据目录打开）选择本地的备份包，返回路径；取消时返回 null */
+  pickBackupFile: () => invoke<string | null>("pick_backup_file"),
+  restoreFromFile: (path: string) => invoke<SettingsInfo>("restore_from_file", { path }),
 };
 
 /** invoke 失败时 reject 的是 Rust 端返回的中文错误字符串 */
