@@ -14,6 +14,9 @@ pub const SETTINGS_FILE: &str = ".settings.json";
 /// 编辑区自定义背景色的默认值：豆沙绿
 const DEFAULT_CUSTOM_COLOR: &str = "#c7edcc";
 
+/// 定时保存的可调范围（秒）：1 秒到 1 小时；前端 settings.tsx 的 SAVE_DELAY_LIMITS 与此一致
+pub const SAVE_DELAY_RANGE: RangeInclusive<u32> = 1..=3600;
+
 /// 快捷键格式如 `Ctrl+Alt+T`，None 表示不使用；文件里缺的字段取默认值
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -32,6 +35,11 @@ pub struct Settings {
     pub editor_background: EditorBackground,
     /// 背景色选「自定义」时用的颜色，`#rrggbb`；选别的背景色时也保留，再选「自定义」还是它
     pub editor_custom_color: String,
+    /// auto save 开着时，待办的标题或正文改动后多久自动保存（秒），从第一处未保存的修改算起
+    pub save_delay_secs: u32,
+    /// auto save：定时保存，以及编辑器失去焦点、窗口失去焦点时立即保存；
+    /// 关掉时只在 Ctrl+S、切换待办和从托盘退出时保存
+    pub auto_save: bool,
 }
 
 impl Default for Settings {
@@ -44,6 +52,8 @@ impl Default for Settings {
             editor_font_size: 15,
             editor_background: EditorBackground::default(),
             editor_custom_color: DEFAULT_CUSTOM_COLOR.into(),
+            save_delay_secs: 180,
+            auto_save: false,
         }
     }
 }
@@ -136,11 +146,12 @@ impl Settings {
         *slot = size.clamp(*area.range().start(), *area.range().end());
     }
 
-    /// 手改过的设置文件或备份包里，字号可能超出范围、颜色可能写错
+    /// 手改过的设置文件或备份包里，字号、保存间隔可能超出范围，颜色可能写错
     fn normalize(&mut self) {
         for area in FontArea::ALL {
             self.set_font_size(area, self.font_size(area));
         }
+        self.save_delay_secs = self.save_delay_secs.clamp(*SAVE_DELAY_RANGE.start(), *SAVE_DELAY_RANGE.end());
         self.editor_custom_color =
             parse_color(&self.editor_custom_color).unwrap_or_else(|| DEFAULT_CUSTOM_COLOR.into());
     }
@@ -222,6 +233,29 @@ mod tests {
         assert_eq!(s.font_size(FontArea::Editor), 15);
         assert_eq!(s.editor_background, EditorBackground::Beige);
         assert_eq!(s.editor_custom_color, DEFAULT_CUSTOM_COLOR);
+        assert_eq!(s.save_delay_secs, 180);
+        assert!(!s.auto_save);
+    }
+
+    #[test]
+    fn save_options_roundtrip_and_clamp() {
+        let tmp = TempRoot::new("save");
+        let store = SettingsStore::load(&tmp.0);
+        let mut next = store.get();
+        next.auto_save = true;
+        next.save_delay_secs = 30;
+        store.save(next).unwrap();
+        let text = fs::read_to_string(tmp.0.join(SETTINGS_FILE)).unwrap();
+        assert!(text.contains(r#""autoSave": true"#), "{text}");
+        assert!(text.contains(r#""saveDelaySecs": 30"#), "{text}");
+        let s = SettingsStore::load(&tmp.0).get();
+        assert!(s.auto_save);
+        assert_eq!(s.save_delay_secs, 30);
+
+        fs::write(tmp.0.join(SETTINGS_FILE), br#"{"saveDelaySecs":0}"#).unwrap();
+        assert_eq!(SettingsStore::load(&tmp.0).get().save_delay_secs, 1);
+        fs::write(tmp.0.join(SETTINGS_FILE), br#"{"saveDelaySecs":99999}"#).unwrap();
+        assert_eq!(SettingsStore::load(&tmp.0).get().save_delay_secs, 3600);
     }
 
     #[test]

@@ -27,14 +27,14 @@ import { api, errMsg } from "../api";
 import { webUrl } from "../editor/links";
 import type { EditorMode } from "../editor/setup";
 import { registerFlusher, useWindowFocus } from "../hooks";
-import { FONT_LIMITS, useSettings } from "../settings";
+import { FONT_LIMITS, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
-import { countChars, fullTime, relativeTime, useLocalState, useNow } from "../utils";
+import { countChars, formatDuration, fullTime, relativeTime, useLocalState, useNow } from "../utils";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 
 export interface EditorHandle {
-  /** 立即保存所有未保存的修改 */
+  /** 立即保存所有未保存的修改（Ctrl+S、重命名 / 移动等操作前），不受 auto save 开关影响 */
   flush(): Promise<void>;
   /** 待办已被删除/移走：之后不再尝试保存 */
   detach(): void;
@@ -56,8 +56,6 @@ interface Props {
 
 type Status = "saved" | "dirty" | "saving" | "error";
 
-const CONTENT_DELAY = 800;
-const TITLE_DELAY = 500;
 /** Ctrl+滚轮调字号：滚轮转一格（约 100）调 1px，触控板双指缩放的小增量攒够一半再调 */
 const WHEEL_STEP = 50;
 
@@ -71,13 +69,19 @@ const ENCODING_LABELS: Record<TextEncoding, string> = {
 const MODE_LABELS: Record<EditorMode, string> = { live: "实时渲染", source: "源码模式" };
 const otherMode = (m: EditorMode): EditorMode => (m === "live" ? "source" : "live");
 
-/** 右侧的待办详情：标题 + Markdown 正文（实时渲染或源码模式），自动保存 */
+/**
+ * 右侧的待办详情：标题 + Markdown 正文（实时渲染或源码模式）。
+ * Ctrl+S、切换待办、从托盘退出时总是保存；auto save 开着时，有未保存的修改后还按设置的间隔定时保存，
+ * 编辑器或窗口失去焦点时也立即保存
+ */
 export default function TodoEditor(props: Props) {
   const { workspace, project, summary } = props;
   const id = summary.id;
   const { message } = AntApp.useApp();
   const { info: settingsInfo, setFontSize } = useSettings();
   const keys = settingsInfo?.settings;
+  const saveOptions = useSaveOptions();
+  const { autoSave, saveDelaySecs } = saveOptions;
   const now = useNow();
 
   const [loading, setLoading] = useState(true);
@@ -97,9 +101,11 @@ export default function TodoEditor(props: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const propsRef = useRef(props);
   const messageRef = useRef(message);
+  const saveOptionsRef = useRef(saveOptions);
   useEffect(() => {
     propsRef.current = props;
     messageRef.current = message;
+    saveOptionsRef.current = saveOptions;
   });
 
   // 保存相关的可变状态放在 ref 里，异步回调和卸载时都能拿到最新值
@@ -112,13 +118,34 @@ export default function TodoEditor(props: Props) {
     loaded: false,
     detached: false,
     conflict: false,
-    contentTimer: 0,
-    titleTimer: 0,
+    /** 定时保存（auto save 开着时）：从第一处未保存的修改开始倒计时 */
+    timer: 0,
     chain: Promise.resolve(),
   }).current;
 
+  const isDirty = () => s.content !== s.savedContent || s.title !== s.savedTitle;
+
+  const stopTimer = () => {
+    window.clearTimeout(s.timer);
+    s.timer = 0;
+  };
+
+  /** auto save 开着且有未保存的修改时开始倒计时；倒计时中继续修改不往后推，最多隔设置的间隔就存一次 */
+  const schedule = () => {
+    const { autoSave, saveDelaySecs } = saveOptionsRef.current;
+    if (!autoSave || s.timer || s.detached || !isDirty()) return;
+    s.timer = window.setTimeout(() => {
+      s.timer = 0;
+      flush();
+    }, saveDelaySecs * 1000);
+  };
+
+  /** 更新保存状态；有未保存的修改时按需开始定时保存 */
   const refreshStatus = () => {
-    setStatus(s.content === s.savedContent && s.title === s.savedTitle ? "saved" : "dirty");
+    const dirty = isDirty();
+    setStatus(dirty ? "dirty" : "saved");
+    if (dirty) schedule();
+    else stopTimer();
   };
 
   const enqueue = (job: () => Promise<void>) => {
@@ -127,7 +154,6 @@ export default function TodoEditor(props: Props) {
   };
 
   const saveContent = (force = false) => {
-    window.clearTimeout(s.contentTimer);
     return enqueue(async () => {
       if (!s.loaded || s.detached || (s.conflict && !force)) return;
       const text = s.content;
@@ -155,7 +181,6 @@ export default function TodoEditor(props: Props) {
   };
 
   const saveTitle = () => {
-    window.clearTimeout(s.titleTimer);
     return enqueue(async () => {
       if (s.detached) return;
       const t = s.title;
@@ -173,11 +198,12 @@ export default function TodoEditor(props: Props) {
   };
 
   const flush = () => {
+    stopTimer();
     saveTitle();
     return saveContent();
   };
 
-  // 加载正文；卸载（切换到别的待办）时把没保存的写盘
+  // 加载正文；卸载（切换到别的待办、返回首页等）时把没保存的写盘，不受 auto save 开关影响
   useEffect(() => {
     let cancelled = false;
     api
@@ -199,13 +225,12 @@ export default function TodoEditor(props: Props) {
         setLoadError(errMsg(e));
         setLoading(false);
       });
-    const unregister = registerFlusher(flush);
+    const unregister = registerFlusher(flush, true);
     props.handleRef.current = {
       flush,
       detach: () => {
         s.detached = true;
-        window.clearTimeout(s.contentTimer);
-        window.clearTimeout(s.titleTimer);
+        stopTimer();
       },
     };
     return () => {
@@ -225,10 +250,17 @@ export default function TodoEditor(props: Props) {
     }
   }, [summary.title, s]);
 
-  // 窗口失焦立即保存；重新获得焦点时检查文件是否被外部程序改过
+  // 开关 auto save、改了定时保存的间隔：重新计时，关掉时停止定时保存
+  useEffect(() => {
+    stopTimer();
+    schedule();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSave, saveDelaySecs]);
+
+  // auto save：窗口失焦立即保存；重新获得焦点时检查文件是否被外部程序改过
   useWindowFocus(async (focused) => {
     if (!focused) {
-      flush();
+      if (autoSave) flush();
       return;
     }
     if (!s.loaded || s.detached || s.conflict || s.content !== s.savedContent) return;
@@ -290,16 +322,14 @@ export default function TodoEditor(props: Props) {
     s.content = text;
     setContent(text);
     refreshStatus();
-    window.clearTimeout(s.contentTimer);
-    s.contentTimer = window.setTimeout(() => saveContent(), CONTENT_DELAY);
   };
 
-  const onTitleChange = (text: string) => {
-    s.title = text;
+  /** composing：输入法组合中（拼音还没上屏），这时只更新输入框，不算修改 */
+  const onTitleChange = (text: string, composing = false) => {
     setTitle(text);
+    if (composing) return;
+    s.title = text;
     refreshStatus();
-    window.clearTimeout(s.titleTimer);
-    s.titleTimer = window.setTimeout(saveTitle, TITLE_DELAY);
   };
 
   const resolveConflict = async (keepMine: boolean) => {
@@ -398,8 +428,13 @@ export default function TodoEditor(props: Props) {
           placeholder="无标题（左侧将显示正文开头）"
           value={title}
           maxLength={200}
-          onChange={(e) => onTitleChange(e.target.value)}
-          onBlur={() => saveTitle()}
+          onChange={(e) => onTitleChange(e.target.value, (e.nativeEvent as InputEvent).isComposing)}
+          onCompositionEnd={(e) => {
+            onTitleChange(e.currentTarget.value);
+            // 组合中失去焦点的，上屏后补上失去焦点时的保存
+            if (autoSave && document.activeElement !== e.currentTarget) saveTitle();
+          }}
+          onBlur={() => autoSave && saveTitle()}
           onPressEnter={() => mdRef.current?.focus()}
         />
         <div className="editor-meta">
@@ -449,7 +484,7 @@ export default function TodoEditor(props: Props) {
               placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
               appShortcuts={[keys?.toggleDoneShortcut, keys?.openExternalShortcut]}
               onChange={onContentChange}
-              onBlur={() => saveContent()}
+              onBlur={() => autoSave && saveContent()}
               onOpenLink={openLink}
             />
           </>
@@ -457,10 +492,26 @@ export default function TodoEditor(props: Props) {
       </div>
 
       <footer className="statusbar">
-        <span className={`save-state ${status}`}>
-          {status === "saving" ? <LoadingOutlined /> : <span className="dot" />}
-          {{ saved: "已保存", dirty: "未保存", saving: "正在保存…", error: "保存失败" }[status]}
-        </span>
+        <Tooltip
+          title={
+            autoSave ? (
+              <>
+                auto save 已开启：修改后 {formatDuration(saveDelaySecs)}内自动保存，失去焦点、切换待办时也会保存
+                <div>按 Ctrl+S 立即保存</div>
+              </>
+            ) : (
+              <>
+                auto save 已关闭：按 Ctrl+S 保存，切换待办、从托盘退出时也会保存
+                <div>可在设置的「保存」里开启</div>
+              </>
+            )
+          }
+        >
+          <span className={`save-state ${status}`}>
+            {status === "saving" ? <LoadingOutlined /> : <span className="dot" />}
+            {{ saved: "已保存", dirty: "未保存", saving: "正在保存…", error: "保存失败" }[status]}
+          </span>
+        </Tooltip>
         <span>{countChars(content)} 字</span>
         <span>{lines} 行</span>
         <span className={readOnly ? "warning-text" : undefined}>Markdown · {ENCODING_LABELS[encoding]}</span>

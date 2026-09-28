@@ -42,6 +42,42 @@ const insertTab: Command = (view) => {
   return true;
 };
 
+/**
+ * 报告正文改动和失去焦点。输入法组合（拼音还没上屏）期间拼音也在文档里，这时的改动不报告，
+ * 上屏后再一起报告，免得把拼音当成正文存盘；组合中失去焦点也等上屏后再报告。
+ */
+function changeReporter(o: EditorOptions): Extension {
+  let changed = false;
+  let blurred = false;
+  const settle = (view: EditorView) => {
+    if (view.composing) return;
+    if (changed) {
+      changed = false;
+      o.onChange(view.state.doc.toString());
+    }
+    if (blurred) {
+      blurred = false;
+      if (!view.hasFocus) o.onBlur();
+    }
+  };
+  return [
+    EditorView.updateListener.of((u) => {
+      if (u.docChanged) changed = true;
+      settle(u.view);
+    }),
+    EditorView.domEventHandlers({
+      // 上屏的字往往在组合结束前就已进了文档，之后不一定再有改动，组合结束后补一次
+      compositionend: (_e, view) => {
+        setTimeout(() => view.dom.isConnected && settle(view));
+      },
+      blur: (_e, view) => {
+        blurred = true;
+        settle(view);
+      },
+    }),
+  ];
+}
+
 export function createExtensions(o: EditorOptions): Extension[] {
   return [
     // 应用的快捷键交给外层，编辑器不处理（否则 Alt+↑ 会同时移动行和切换左侧选中项）
@@ -72,9 +108,6 @@ export function createExtensions(o: EditorOptions): Extension[] {
     modeConf.of(modeExtension(o.mode)),
     readOnlyConf.of(EditorState.readOnly.of(o.readOnly)),
     ctrlClickLinks(o.onOpenLink),
-    EditorView.updateListener.of((u) => {
-      if (u.docChanged) o.onChange(u.state.doc.toString());
-    }),
-    EditorView.domEventHandlers({ blur: () => o.onBlur() }),
+    changeReporter(o),
   ];
 }

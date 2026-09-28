@@ -71,6 +71,10 @@ export interface AppSettings {
   editorBackground: EditorBackground;
   /** 背景色选「自定义」时用的颜色，#rrggbb；选别的背景色时也保留 */
   editorCustomColor: string;
+  /** auto save 开着时，待办的标题或正文改动后多久自动保存（秒），从第一处未保存的修改算起 */
+  saveDelaySecs: number;
+  /** auto save：定时保存，以及编辑器失去焦点、窗口失去焦点时立即保存；关掉时只在 Ctrl+S、切换待办和从托盘退出时保存 */
+  autoSave: boolean;
 }
 
 export interface SettingsInfo {

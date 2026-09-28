@@ -73,6 +73,9 @@ export const api = {
   /** customColor 是「自定义」用的颜色（#rrggbb），选别的背景色时也一起保存 */
   setEditorBackground: (background: EditorBackground, customColor: string) =>
     invoke<SettingsInfo>("set_editor_background", { background, customColor }),
+  /** 超出范围的间隔后端取最近的边界值 */
+  setSaveOptions: (autoSave: boolean, saveDelaySecs: number) =>
+    invoke<SettingsInfo>("set_save_options", { autoSave, saveDelaySecs }),
 
   getWebdav: () => invoke<WebDavInfo>("get_webdav"),
   /** password 为 null 时保留原来的密码 */

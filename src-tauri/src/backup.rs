@@ -119,6 +119,8 @@ mod tests {
             editor_font_size: 20,
             editor_background: EditorBackground::Custom,
             editor_custom_color: "#112233".into(),
+            save_delay_secs: 45,
+            auto_save: true,
             ..Default::default()
         };
         let data = pack(&settings, time()).unwrap();
@@ -130,6 +132,8 @@ mod tests {
         assert_eq!(back.sidebar_font_size, 14);
         assert_eq!(back.editor_background, EditorBackground::Custom);
         assert_eq!(back.editor_custom_color, "#112233");
+        assert_eq!(back.save_delay_secs, 45);
+        assert!(back.auto_save);
     }
 
     #[test]

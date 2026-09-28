@@ -45,6 +45,14 @@ export function relativeTime(ms: number, now = Date.now(), compact = false): str
   return compact ? compactTime(ms, now) : shortTime(ms, now);
 }
 
+/** 时长：45 秒 / 3 分钟 / 1 分 30 秒 */
+export function formatDuration(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const rest = secs % 60;
+  if (!m) return `${rest} 秒`;
+  return rest ? `${m} 分 ${rest} 秒` : `${m} 分钟`;
+}
+
 /** 每隔一段时间触发重渲染，让“x 分钟前”保持新鲜 */
 export function useNow(intervalMs = 30_000): number {
   const [now, setNow] = useState(Date.now());

@@ -17,10 +17,19 @@ export const FONT_FIELDS = {
 
 const FONT_AREAS = Object.keys(FONT_FIELDS) as FontArea[];
 
-/** 改了立即生效、稍后存盘的外观设置 */
-type Appearance = Pick<AppSettings, "sidebarFontSize" | "editorFontSize" | "editorBackground" | "editorCustomColor">;
+/** 定时保存间隔的可调范围（秒），与 settings.rs 的 SAVE_DELAY_RANGE 一致 */
+export const SAVE_DELAY_LIMITS = { min: 1, max: 3600 };
 
-/** 拖动滑块、滚动滚轮、输入 RGB 时外观设置会连续变化，停下来片刻再存盘 */
+type SaveOptions = Pick<AppSettings, "autoSave" | "saveDelaySecs">;
+
+/** 设置还没读出来时用的保存方式，与 settings.rs 的默认值一致 */
+const DEFAULT_SAVE_OPTIONS: SaveOptions = { autoSave: false, saveDelaySecs: 180 };
+
+/** 改了立即生效、稍后存盘的设置：外观、保存方式 */
+type Pending = Pick<AppSettings, "sidebarFontSize" | "editorFontSize" | "editorBackground" | "editorCustomColor"> &
+  SaveOptions;
+
+/** 拖动滑块、滚动滚轮、输入数字时设置会连续变化，停下来片刻再存盘 */
 const SAVE_DELAY = 300;
 
 const SettingsContext = createContext<{
@@ -30,7 +39,9 @@ const SettingsContext = createContext<{
   setFontSize: (area: FontArea, size: number | ((cur: number) => number)) => number;
   /** 立即生效，稍后存盘；不传 customColor（#rrggbb）时保留原来的自定义颜色 */
   setEditorBackground: (background: EditorBackground, customColor?: string) => void;
-}>({ info: null, setInfo: () => {}, setFontSize: () => 0, setEditorBackground: () => {} });
+  /** 立即生效，稍后存盘；间隔超出范围时取边界值 */
+  setSaveOptions: (patch: Partial<SaveOptions>) => void;
+}>({ info: null, setInfo: () => {}, setFontSize: () => 0, setEditorBackground: () => {}, setSaveOptions: () => {} });
 
 /** 应用设置（保存在数据目录的 .settings.json）：启动时读一次，设置界面修改后更新 */
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
@@ -40,8 +51,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     infoRef.current = info;
   }, [info]);
-  // 已经生效、还没存盘的外观设置
-  const pending = useRef<Partial<Appearance>>({});
+  // 已经生效、还没存盘的设置
+  const pending = useRef<Partial<Pending>>({});
   const timer = useRef(0);
 
   // 后端返回的设置里可能还是存盘前的旧值，用待存的值盖上
@@ -49,10 +60,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setRawInfo({ ...next, settings: { ...next.settings, ...pending.current } });
   }, []);
 
-  const flushAppearance = useCallback(async () => {
+  const flushPending = useCallback(async () => {
     window.clearTimeout(timer.current);
     const saving = { ...pending.current };
-    const fields = Object.keys(saving) as (keyof Appearance)[];
+    const fields = Object.keys(saving) as (keyof Pending)[];
     if (!fields.length) return;
     try {
       for (const area of FONT_AREAS) {
@@ -62,6 +73,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       // 背景色和自定义颜色总是一起改
       if (saving.editorBackground && saving.editorCustomColor) {
         await api.setEditorBackground(saving.editorBackground, saving.editorCustomColor);
+      }
+      if (saving.autoSave != null || saving.saveDelaySecs != null) {
+        const cur = infoRef.current?.settings ?? DEFAULT_SAVE_OPTIONS;
+        await api.setSaveOptions(saving.autoSave ?? cur.autoSave, saving.saveDelaySecs ?? cur.saveDelaySecs);
       }
     } catch (e) {
       message.error(`保存设置失败：${errMsg(e)}`);
@@ -73,16 +88,16 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     }
   }, [message, setInfo]);
 
-  useEffect(() => registerFlusher(flushAppearance), [flushAppearance]);
+  useEffect(() => registerFlusher(flushPending), [flushPending]);
 
   const apply = useCallback(
-    (patch: Partial<Appearance>) => {
+    (patch: Partial<Pending>) => {
       Object.assign(pending.current, patch);
       setRawInfo((i) => i && { ...i, settings: { ...i.settings, ...patch } });
       window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(flushAppearance, SAVE_DELAY);
+      timer.current = window.setTimeout(flushPending, SAVE_DELAY);
     },
-    [flushAppearance],
+    [flushPending],
   );
 
   const setFontSize = useCallback(
@@ -101,6 +116,16 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     (background: EditorBackground, customColor?: string) => {
       const color = customColor ?? pending.current.editorCustomColor ?? infoRef.current?.settings.editorCustomColor;
       if (color) apply({ editorBackground: background, editorCustomColor: color });
+    },
+    [apply],
+  );
+
+  const setSaveOptions = useCallback(
+    (patch: Partial<SaveOptions>) => {
+      const { min, max } = SAVE_DELAY_LIMITS;
+      const next = { ...patch };
+      if (next.saveDelaySecs != null) next.saveDelaySecs = Math.round(Math.min(max, Math.max(min, next.saveDelaySecs)));
+      apply(next);
     },
     [apply],
   );
@@ -124,10 +149,16 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [sidebarFontSize, editorFontSize, editorBackground, editorCustomColor]);
 
   const value = useMemo(
-    () => ({ info, setInfo, setFontSize, setEditorBackground }),
-    [info, setInfo, setFontSize, setEditorBackground],
+    () => ({ info, setInfo, setFontSize, setEditorBackground, setSaveOptions }),
+    [info, setInfo, setFontSize, setEditorBackground, setSaveOptions],
   );
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
 }
 
 export const useSettings = () => useContext(SettingsContext);
+
+/** 当前的保存方式：定时保存的间隔和 auto save 开关 */
+export function useSaveOptions(): SaveOptions {
+  const s = useContext(SettingsContext).info?.settings ?? DEFAULT_SAVE_OPTIONS;
+  return { autoSave: s.autoSave, saveDelaySecs: s.saveDelaySecs };
+}

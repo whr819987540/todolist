@@ -431,6 +431,18 @@ fn set_editor_background(
     Ok(settings_info(&settings))
 }
 
+// ----- 保存方式 -----
+
+/// 修改定时保存的间隔（秒，超出范围取边界值）和 auto save 开关
+#[tauri::command]
+fn set_save_options(settings: State<'_, SettingsStore>, auto_save: bool, save_delay_secs: u32) -> Cmd<SettingsInfo> {
+    let mut next = settings.get();
+    next.auto_save = auto_save;
+    next.save_delay_secs = save_delay_secs;
+    settings.save(next)?;
+    Ok(settings_info(&settings))
+}
+
 // ----- 设置备份（WebDAV） -----
 
 #[tauri::command]
@@ -596,6 +608,7 @@ pub fn run() {
             pause_toggle_shortcut,
             set_font_size,
             set_editor_background,
+            set_save_options,
             get_webdav,
             save_webdav,
             test_webdav,

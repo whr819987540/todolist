@@ -1157,6 +1157,22 @@ mark {
   text-overflow: ellipsis;
 }
 
+/* 保存 */
+.save-delay-input {
+  width: 96px;
+}
+.save-delay-unit {
+  width: 84px;
+}
+.save-delay-reset {
+  margin-left: auto;
+}
+.setting-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .settings-tabs .ant-tabs-nav {
   margin-bottom: 4px;
 }

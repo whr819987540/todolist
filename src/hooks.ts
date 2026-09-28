@@ -23,20 +23,29 @@ export function useWindowFocus(onChange: (focused: boolean) => void) {
   }, []);
 }
 
-// ----- 关闭窗口前把未保存的内容写盘 -----
+// ----- 隐藏到托盘、退出前把未保存的内容写盘 -----
 
-const flushers = new Set<() => Promise<void>>();
+interface Flusher {
+  flush: () => Promise<void>;
+  /** 正在编辑的待办：隐藏到托盘时受 auto save 开关管；设置等其他内容总是直接写盘 */
+  todo: boolean;
+}
 
-export function registerFlusher(fn: () => Promise<void>): () => void {
-  flushers.add(fn);
+const flushers = new Set<Flusher>();
+
+export function registerFlusher(flush: () => Promise<void>, todo = false): () => void {
+  const f = { flush, todo };
+  flushers.add(f);
   return () => {
-    flushers.delete(fn);
+    flushers.delete(f);
   };
 }
 
-export async function flushAll(timeoutMs = 3000): Promise<void> {
+/** 写盘；todos 为 false 时不管正在编辑的待办（auto save 关闭时隐藏到托盘） */
+export async function flushAll(todos = true, timeoutMs = 3000): Promise<void> {
+  const list = [...flushers].filter((f) => todos || !f.todo);
   await Promise.race([
-    Promise.allSettled([...flushers].map((f) => f())),
+    Promise.allSettled(list.map((f) => f.flush())),
     new Promise((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
 }
