@@ -2,6 +2,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { Compartment, EditorState, type Extension, Prec } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
+import type { EditShortcutMap } from "../editShortcuts";
 import { eventShortcut, sameShortcut } from "../shortcuts";
 import { appearance } from "./appearance";
 import { codeFenceKeymap } from "./codeFences";
@@ -19,6 +20,8 @@ export interface EditorOptions {
   placeholder: string;
   /** 设置里可自定义的应用快捷键：编辑器不处理，留给外层 */
   appShortcuts: () => (string | null | undefined)[];
+  /** 现在的编辑快捷键（设置里可以改） */
+  editShortcuts: () => EditShortcutMap;
   onChange: (doc: string) => void;
   onBlur: () => void;
   onOpenLink: (url: string) => void;
@@ -85,7 +88,7 @@ export function createExtensions(o: EditorOptions): Extension[] {
       }),
     ),
     // 编辑快捷键：Ctrl+B 加粗、Tab 缩进列表等，同 Typora
-    editBindings,
+    editBindings(o.editShortcuts),
     history(),
     // 跳出代码块；要先于 Markdown 自带的回车续写列表
     Prec.highest(codeFenceKeymap),

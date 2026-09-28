@@ -7,6 +7,7 @@ use backup::RemoteBackup;
 use chrono::Local;
 use serde::Serialize;
 use settings::{EditorBackground, FontArea, Settings, SettingsStore, ShortcutAction, StartupView, Theme};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -405,6 +406,19 @@ fn set_shortcut(
     Ok(settings_info(&settings))
 }
 
+/// 替换编辑快捷键里改过的那些（命令 → 快捷键，None 表示不使用；没列出的用默认值）。
+/// 互不重复、不和应用快捷键重复由前端检查，前端知道每个命令的默认值
+#[tauri::command]
+fn set_edit_shortcuts(
+    settings: State<'_, SettingsStore>,
+    shortcuts: BTreeMap<String, Option<String>>,
+) -> Cmd<SettingsInfo> {
+    let mut next = settings.get();
+    next.edit_shortcuts = shortcuts;
+    settings.save(next)?;
+    Ok(settings_info(&settings))
+}
+
 /// 设置界面录制快捷键期间暂停，否则按下当前快捷键会直接把窗口藏起来、录不到。
 /// 返回最新设置：恢复时可能注册失败（暂停期间被其他程序占用了）
 #[tauri::command]
@@ -639,6 +653,7 @@ pub fn run() {
             quit_app,
             get_settings,
             set_shortcut,
+            set_edit_shortcuts,
             pause_toggle_shortcut,
             set_theme,
             set_font_size,

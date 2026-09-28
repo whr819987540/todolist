@@ -1,6 +1,7 @@
 import { App as AntApp } from "antd";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, errMsg } from "./api";
+import { type EditShortcutMap, effectiveEditShortcuts } from "./editShortcuts";
 import { registerFlusher } from "./hooks";
 import type { AppSettings, EditorBackground, FontArea, SettingsInfo, ThemeMode } from "./types";
 
@@ -207,6 +208,12 @@ export function SettingsProvider({
 }
 
 export const useSettings = () => useContext(SettingsContext);
+
+/** 现在每条编辑快捷键用的按键（设置里改过的盖在默认值上），设置不变时是同一个对象 */
+export function useEditShortcuts(): EditShortcutMap {
+  const changed = useContext(SettingsContext).info?.settings.editShortcuts;
+  return useMemo(() => effectiveEditShortcuts(changed), [changed]);
+}
 
 /** 当前的保存方式：定时保存的间隔和 auto save 开关 */
 export function useSaveOptions(): SaveOptions {

@@ -1310,9 +1310,34 @@ kbd {
   border-radius: 4px;
 }
 
-/* 编辑快捷键列表：两列，每项左边是操作、右边是按键 */
+/* 编辑快捷键：每条一行（名称、按键框、恢复默认、不使用）；固定按键两列，左边是操作、右边是按键 */
+.setting-group.with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 2px;
+}
 .edit-shortcuts {
   margin-top: 12px;
+}
+.shortcut-compact + .shortcut-compact {
+  margin-top: 6px;
+}
+.shortcut-name {
+  flex: 1;
+  min-width: 0;
+}
+.shortcut-note {
+  margin-left: 4px;
+  font-size: 12px;
+}
+.shortcut-compact .shortcut-box {
+  flex: 0 0 180px;
+  height: 28px;
+  padding: 0 8px;
+}
+.shortcut-compact .shortcut-box kbd {
+  line-height: 16px;
 }
 .edit-shortcuts-title {
   font-size: 12px;

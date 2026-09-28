@@ -28,7 +28,7 @@ import { webUrl } from "../editor/links";
 import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
 import { registerFlusher, useWindowFocus } from "../hooks";
-import { FONT_LIMITS, useSaveOptions, useSettings } from "../settings";
+import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
 import { countChars, formatDuration, fullTime, relativeTime, useNow } from "../utils";
@@ -92,6 +92,7 @@ export default function TodoEditor(props: Props) {
   const { message } = AntApp.useApp();
   const { info: settingsInfo, setFontSize } = useSettings();
   const keys = settingsInfo?.settings;
+  const editShortcuts = useEditShortcuts();
   const saveOptions = useSaveOptions();
   const { autoSave, saveDelaySecs } = saveOptions;
   const now = useNow();
@@ -532,6 +533,7 @@ export default function TodoEditor(props: Props) {
               readOnly={readOnly}
               placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
               appShortcuts={[keys?.toggleDoneShortcut, keys?.openExternalShortcut]}
+              editShortcuts={editShortcuts}
               onChange={onContentChange}
               onBlur={() => autoSave && saveContent()}
               onOpenLink={openLink}

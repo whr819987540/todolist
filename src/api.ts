@@ -73,6 +73,9 @@ export const api = {
   /** shortcut 为 null 表示不使用 */
   setShortcut: (action: ShortcutAction, shortcut: string | null) =>
     invoke<SettingsInfo>("set_shortcut", { action, shortcut }),
+  /** 替换编辑快捷键里改过的那些（命令 → 快捷键，null 表示不使用）；没列出的用默认值 */
+  setEditShortcuts: (shortcuts: Record<string, string | null>) =>
+    invoke<SettingsInfo>("set_edit_shortcuts", { shortcuts }),
   pauseToggleShortcut: (paused: boolean) => invoke<SettingsInfo>("pause_toggle_shortcut", { paused }),
   setTheme: (theme: ThemeMode) => invoke<SettingsInfo>("set_theme", { theme }),
   /** 超出范围时后端取最近的边界值 */

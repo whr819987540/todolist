@@ -2,6 +2,7 @@ import { historyField, redoDepth, undoDepth } from "@codemirror/commands";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { useEffect, useRef } from "react";
+import type { EditShortcutMap } from "../editShortcuts";
 import { capturePosition, type EditPosition, restorePosition } from "../editor/position";
 import { createExtensions, type EditorMode, setMode, setReadOnly } from "../editor/setup";
 import type { UndoSnapshot } from "../workspaceState";
@@ -25,6 +26,8 @@ interface Props {
   readOnly: boolean;
   placeholder: string;
   appShortcuts: (string | null | undefined)[];
+  /** 现在的编辑快捷键，改了立即生效 */
+  editShortcuts: EditShortcutMap;
   handleRef: React.RefObject<MarkdownEditorHandle | null>;
   onChange: (doc: string) => void;
   onBlur: () => void;
@@ -52,6 +55,7 @@ export default function MarkdownEditor(props: Props) {
         readOnly: p().readOnly,
         placeholder: p().placeholder,
         appShortcuts: () => p().appShortcuts,
+        editShortcuts: () => p().editShortcuts,
         onChange: (doc) => p().onChange(doc),
         onBlur: () => p().onBlur(),
         onOpenLink: (url) => p().onOpenLink(url),

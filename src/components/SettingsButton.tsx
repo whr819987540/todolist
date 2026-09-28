@@ -1,10 +1,37 @@
 import { CheckCircleFilled, ExclamationCircleFilled, SettingOutlined } from "@ant-design/icons";
-import { App as AntApp, Button, InputNumber, Modal, Radio, Segmented, Select, Slider, Switch, Tabs, Tooltip } from "antd";
+import {
+  App as AntApp,
+  Button,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Radio,
+  Segmented,
+  Select,
+  Slider,
+  Switch,
+  Tabs,
+  Tooltip,
+} from "antd";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
-import { EDIT_SHORTCUT_GROUPS } from "../editShortcuts";
-import { FONT_FIELDS, FONT_LIMITS, SAVE_DELAY_LIMITS, useSettings } from "../settings";
-import { checkShortcut, eventShortcut, keyLabel, keyName, modifiers, shortcutLabel } from "../shortcuts";
+import {
+  CONFIGURABLE_EDIT_SHORTCUTS,
+  type EditCommandId,
+  EDIT_SHORTCUT_GROUPS,
+  EDIT_SHORTCUTS,
+} from "../editShortcuts";
+import { FONT_FIELDS, FONT_LIMITS, SAVE_DELAY_LIMITS, useEditShortcuts, useSettings } from "../settings";
+import {
+  checkShortcut,
+  eventShortcut,
+  keyLabel,
+  keyName,
+  modifiers,
+  sameShortcut,
+  shortcutLabel,
+  type TakenShortcut,
+} from "../shortcuts";
 import { THEME_ITEMS } from "../theme";
 import type { EditorBackground, FontArea, ShortcutAction, StartupView, ThemeMode } from "../types";
 import BackupSettings from "./BackupSettings";
@@ -107,10 +134,14 @@ const ITEMS: { action: ShortcutAction; field: ShortcutField; label: string; desc
   },
 ];
 
+/** 录制中的是哪一个：应用快捷键 app:动作、编辑快捷键 edit:命令 */
+type RecordingSlot = `app:${ShortcutAction}` | `edit:${EditCommandId}`;
+
 function ShortcutSettings() {
   const { message } = AntApp.useApp();
   const { info, setInfo } = useSettings();
-  const [recording, setRecording] = useState<ShortcutAction | null>(null);
+  const edit = useEditShortcuts();
+  const [recording, setRecording] = useState<RecordingSlot | null>(null);
 
   // 打开时刷新一次：全局快捷键的注册状态可能变了
   useEffect(() => {
@@ -132,6 +163,24 @@ function ShortcutSettings() {
 
   if (!info) return <div className="setting-item" />;
 
+  /** 除了 self 以外正用着的快捷键：应用快捷键、编辑快捷键和编辑区的固定按键，互相不能重复 */
+  const takenExcept = (self: RecordingSlot): TakenShortcut[] => [
+    ...ITEMS.filter((i) => `app:${i.action}` !== self).map((i) => ({
+      key: info.settings[i.field],
+      label: `「${i.label}」`,
+    })),
+    ...CONFIGURABLE_EDIT_SHORTCUTS.filter((e) => `edit:${e.id}` !== self).map((e) => ({
+      key: edit[e.id],
+      label: `编辑快捷键「${e.label}」`,
+    })),
+    ...EDIT_SHORTCUTS.flatMap((e) => (e.fixed ?? []).map((key) => ({ key, label: `编辑快捷键「${e.label}」` }))),
+  ];
+  const recorder = (slot: RecordingSlot) => ({
+    recording: recording === slot,
+    onRecording: (on: boolean) => setRecording((cur) => (on ? slot : cur === slot ? null : cur)),
+    check: (shortcut: string) => checkShortcut(shortcut, takenExcept(slot)),
+  });
+
   const row = ({ action, field, label, desc }: (typeof ITEMS)[number]) => {
     const value = info.settings[field];
     return (
@@ -146,8 +195,7 @@ function ShortcutSettings() {
             ? `快捷键 ${shortcutLabel(value)} 未生效，可能已被其他程序占用，请换一个`
             : undefined
         }
-        recording={recording === action}
-        onRecording={(on) => setRecording((cur) => (on ? action : cur === action ? null : cur))}
+        {...recorder(`app:${action}`)}
         onSave={async (shortcut) => {
           try {
             setInfo(await api.setShortcut(action, shortcut));
@@ -166,38 +214,119 @@ function ShortcutSettings() {
       {ITEMS.slice(0, 1).map(row)}
       <div className="setting-group">应用内快捷键</div>
       {ITEMS.slice(1).map(row)}
-      <div className="setting-group">编辑快捷键</div>
-      <EditShortcutList />
+      <EditShortcutSettings recorder={recorder} />
     </>
   );
 }
 
-/** 编辑快捷键：正文里的 Markdown 编辑操作，同 Typora，不能修改，这里只列出来 */
-function EditShortcutList() {
+/** 编辑快捷键：正文里的 Markdown 编辑操作，默认同 Typora；每条都能改、恢复默认或不使用，固定按键只列出来 */
+function EditShortcutSettings({
+  recorder,
+}: {
+  recorder: (slot: RecordingSlot) => Pick<ShortcutRowProps, "recording" | "onRecording" | "check">;
+}) {
+  const { message } = AntApp.useApp();
+  const { info, setInfo } = useSettings();
+  const edit = useEditShortcuts();
+  if (!info) return null;
+  const changed = info.settings.editShortcuts;
+  const appKeys = ITEMS.map((i) => ({ key: info.settings[i.field], label: i.label }));
+
+  const saveAll = async (next: Record<string, string | null>, done: string) => {
+    try {
+      setInfo(await api.setEditShortcuts(next));
+      message.success(done);
+    } catch (e) {
+      message.error(errMsg(e));
+    }
+  };
+
+  const resetAll = () => {
+    // 默认按键已经给了应用快捷键的，要先把那边改掉
+    for (const e of CONFIGURABLE_EDIT_SHORTCUTS) {
+      const app = appKeys.find((a) => sameShortcut(a.key, e.defaultKey));
+      if (app) {
+        message.error(`「${e.label}」的默认按键 ${shortcutLabel(e.defaultKey)} 已用于「${app.label}」，请先改掉那个快捷键`);
+        return;
+      }
+    }
+    saveAll({}, "编辑快捷键已全部恢复默认");
+  };
+
+  /** 这一条的按键和别的重复时（手改过设置文件等），说明实际执行的是哪个 */
+  const conflict = (id: EditCommandId, value: string | null): string | undefined => {
+    if (!value) return undefined;
+    const app = appKeys.find((a) => sameShortcut(a.key, value));
+    if (app) return `和「${app.label}」重复，在正文里按下时执行的是「${app.label}」`;
+    const fixed = EDIT_SHORTCUTS.find((e) => e.fixed?.some((k) => sameShortcut(k, value)));
+    if (fixed) return `和编辑快捷键「${fixed.label}」的固定按键重复，这个不起作用`;
+    const before = CONFIGURABLE_EDIT_SHORTCUTS.slice(0, CONFIGURABLE_EDIT_SHORTCUTS.findIndex((e) => e.id === id));
+    const earlier = before.find((e) => sameShortcut(edit[e.id], value));
+    return earlier ? `和编辑快捷键「${earlier.label}」重复，这个不起作用` : undefined;
+  };
+
   return (
-    <div className="setting-item">
-      <div className="setting-desc">在待办正文里使用，按键与 Typora 相同，不能修改；上面的快捷键不能设成这些组合。</div>
+    <>
+      <div className="setting-group with-action">
+        <span>编辑快捷键</span>
+        <Popconfirm title="把编辑快捷键全部恢复成默认？" okText="恢复默认" cancelText="取消" onConfirm={resetAll}>
+          <Button type="link" size="small" disabled={!Object.keys(changed).length}>
+            全部恢复默认
+          </Button>
+        </Popconfirm>
+      </div>
+      <div className="setting-desc">
+        在待办正文里使用，默认与 Typora 相同。点按键框后按下新的组合键即可修改，立即生效，随设置一起备份。
+      </div>
       {EDIT_SHORTCUT_GROUPS.map((g) => (
         <div className="edit-shortcuts" key={g.title}>
           <div className="edit-shortcuts-title">{g.title}</div>
-          <div className="edit-shortcuts-grid">
-            {g.items.map((item) => (
-              <div className="edit-shortcut" key={item.label}>
-                <span>{item.label}</span>
-                <span className="edit-shortcut-keys">
-                  {(item.shown ?? item.keys).map((k, i) => (
-                    <Fragment key={k}>
-                      {i > 0 && <span className="keys-plus">/</span>}
-                      <Keys parts={k.split("+")} />
-                    </Fragment>
-                  ))}
-                </span>
-              </div>
-            ))}
-          </div>
+          {g.items.some((item) => item.id && item.defaultKey) ? (
+            g.items.map((item) => {
+              const { id, defaultKey } = item;
+              if (!id || !defaultKey) return null;
+              return (
+                <ShortcutRow
+                  key={id}
+                  compact
+                  label={item.label}
+                  note={item.fixed?.length ? `（或 ${item.fixed.join(" / ")}）` : undefined}
+                  value={edit[id]}
+                  defaultValue={defaultKey}
+                  warning={conflict(id, edit[id])}
+                  {...recorder(`edit:${id}`)}
+                  onSave={async (shortcut) => {
+                    const next = { ...changed };
+                    if (shortcut === defaultKey) delete next[id];
+                    else next[id] = shortcut;
+                    await saveAll(
+                      next,
+                      shortcut ? `「${item.label}」已设置为 ${shortcutLabel(shortcut)}` : `「${item.label}」已设为不使用`,
+                    );
+                  }}
+                />
+              );
+            })
+          ) : (
+            <div className="edit-shortcuts-grid">
+              {g.items.map((item) => (
+                <div className="edit-shortcut" key={item.label}>
+                  <span>{item.label}</span>
+                  <span className="edit-shortcut-keys">
+                    {(item.shown ?? item.fixed ?? []).map((k, i) => (
+                      <Fragment key={k}>
+                        {i > 0 && <span className="keys-plus">/</span>}
+                        <Keys parts={k.split("+")} />
+                      </Fragment>
+                    ))}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ))}
-    </div>
+    </>
   );
 }
 
@@ -482,17 +611,26 @@ function Keys({ parts }: { parts: string[] }) {
   );
 }
 
-/** 一个快捷键的设置行：点击输入框后按下新的组合键录制 */
-function ShortcutRow(p: {
+interface ShortcutRowProps {
   label: string;
-  desc: string;
+  desc?: string;
+  /** 紧凑的一行：名称、按键框、恢复默认、不使用（编辑快捷键用，条目多） */
+  compact?: boolean;
+  /** 名称后面的补充说明 */
+  note?: string;
   value: string | null;
   defaultValue: string | null;
   warning?: string;
   recording: boolean;
   onRecording: (on: boolean) => void;
+  /** 录到的快捷键不能用时返回原因 */
+  check: (shortcut: string) => string | null;
   onSave: (shortcut: string | null) => Promise<void>;
-}) {
+}
+
+/** 一个快捷键的设置行：点击输入框后按下新的组合键录制 */
+function ShortcutRow(p: ShortcutRowProps) {
+  const { message } = AntApp.useApp();
   const { recording } = p;
   const [held, setHeld] = useState<string[]>([]);
   const [hint, setHint] = useState("");
@@ -516,6 +654,13 @@ function ShortcutRow(p: {
     }
   };
 
+  /** 恢复默认：默认的按键可能已经给了别的快捷键 */
+  const reset = () => {
+    const problem = p.defaultValue && p.check(p.defaultValue);
+    if (problem) message.error(problem);
+    else save(p.defaultValue);
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!recording) return;
     // 不让按键触发页面上的其他快捷键（Ctrl+N 新建等）或关闭对话框
@@ -530,7 +675,7 @@ function ShortcutRow(p: {
     const shortcut = eventShortcut(e);
     setHeld(shortcut ? shortcut.split("+") : mods);
     if (!shortcut) return;
-    const problem = e.metaKey ? "暂不支持 Win 键组合" : checkShortcut(shortcut);
+    const problem = e.metaKey ? "暂不支持 Win 键组合" : p.check(shortcut);
     if (problem) setHint(problem);
     else save(shortcut);
   };
@@ -539,48 +684,81 @@ function ShortcutRow(p: {
     if (recording && !keyName(e.code)) setHeld(modifiers(e));
   };
 
-  return (
-    <div className="setting-item">
-      <div className="setting-label">{p.label}</div>
-      <div className="setting-desc">{p.desc}</div>
-      <div className="setting-row">
-        <div
-          ref={boxRef}
-          tabIndex={0}
-          className={`shortcut-box${recording ? " recording" : ""}`}
-          onClick={() => p.onRecording(true)}
-          onKeyDown={onKeyDown}
-          onKeyUp={onKeyUp}
-          onBlur={() => p.onRecording(false)}
-        >
-          {recording ? (
-            held.length ? (
-              <Keys parts={held} />
-            ) : (
-              <span className="muted">请按下新的快捷键，Esc 取消</span>
-            )
-          ) : p.value ? (
-            <Keys parts={p.value.split("+")} />
-          ) : (
-            <span className="muted">未设置</span>
-          )}
-        </div>
-        <Button loading={saving} onMouseDown={(e) => e.preventDefault()} onClick={() => p.onRecording(!recording)}>
-          {recording ? "取消" : "修改"}
-        </Button>
-        <Button disabled={recording || p.value === p.defaultValue} onClick={() => save(p.defaultValue)}>
-          恢复默认
-        </Button>
-        <Button disabled={recording || !p.value} onClick={() => save(null)}>
-          不使用
-        </Button>
-      </div>
+  const box = (
+    <div
+      ref={boxRef}
+      tabIndex={0}
+      className={`shortcut-box${recording ? " recording" : ""}`}
+      onClick={() => p.onRecording(true)}
+      onKeyDown={onKeyDown}
+      onKeyUp={onKeyUp}
+      onBlur={() => p.onRecording(false)}
+    >
+      {recording ? (
+        held.length ? (
+          <Keys parts={held} />
+        ) : (
+          <span className="muted">{p.compact ? "按下组合键，Esc 取消" : "请按下新的快捷键，Esc 取消"}</span>
+        )
+      ) : p.value ? (
+        <Keys parts={p.value.split("+")} />
+      ) : (
+        <span className="muted">{p.compact ? "不使用" : "未设置"}</span>
+      )}
+    </div>
+  );
+  const size = p.compact ? "small" : undefined;
+  const resetButton = (
+    <Button size={size} disabled={recording || p.value === p.defaultValue} onClick={reset}>
+      恢复默认
+    </Button>
+  );
+  const clearButton = (
+    <Button size={size} disabled={recording || !p.value} onClick={() => save(null)}>
+      不使用
+    </Button>
+  );
+  const hints = (
+    <>
       {recording && hint && <div className="setting-hint error-text">{hint}</div>}
       {!recording && p.warning && (
         <div className="setting-hint warning-text">
           <ExclamationCircleFilled /> {p.warning}
         </div>
       )}
+    </>
+  );
+
+  if (p.compact) {
+    return (
+      <div className="shortcut-compact">
+        <div className="setting-row">
+          <span className="shortcut-name">
+            {p.label}
+            {p.note && <span className="shortcut-note muted">{p.note}</span>}
+          </span>
+          {box}
+          {resetButton}
+          {clearButton}
+        </div>
+        {hints}
+      </div>
+    );
+  }
+
+  return (
+    <div className="setting-item">
+      <div className="setting-label">{p.label}</div>
+      {p.desc && <div className="setting-desc">{p.desc}</div>}
+      <div className="setting-row">
+        {box}
+        <Button loading={saving} onMouseDown={(e) => e.preventDefault()} onClick={() => p.onRecording(!recording)}>
+          {recording ? "取消" : "修改"}
+        </Button>
+        {resetButton}
+        {clearButton}
+      </div>
+      {hints}
     </div>
   );
 }

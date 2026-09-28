@@ -1,5 +1,3 @@
-import { EDIT_SHORTCUTS } from "./editShortcuts";
-
 // 快捷键的保存格式：修饰键（Ctrl、Alt、Shift，按此顺序）+ 主键，用 + 连接，例如 "Ctrl+Alt+T"。
 // 主键名与 KeyboardEvent.code 一致，字母和数字去掉 Key / Digit 前缀；Rust 端的 global-hotkey 也能解析。
 
@@ -32,8 +30,8 @@ export function eventShortcut(e: KeyState): string | null {
   return key ? [...modifiers(e), key].join("+") : null;
 }
 
-/** 统一大小写和写法（设置文件可能被手动改成 "ctrl+alt+KeyD" 之类） */
-function normalize(s: string): string {
+/** 统一大小写和写法（设置文件可能被手动改成 "ctrl+alt+KeyD" 之类），用来比较两个快捷键 */
+export function normalizeShortcut(s: string): string {
   const mods = new Set<string>();
   let key = "";
   for (const raw of s.split("+")) {
@@ -47,7 +45,7 @@ function normalize(s: string): string {
 }
 
 export function sameShortcut(a: string | null | undefined, b: string | null | undefined): boolean {
-  return !!a && !!b && normalize(a) === normalize(b);
+  return !!a && !!b && normalizeShortcut(a) === normalizeShortcut(b);
 }
 
 const KEY_LABELS: Record<string, string> = {
@@ -70,14 +68,23 @@ const RESERVED: Record<string, string> = {
   "Alt+ArrowLeft": "切换到左侧列表", "Alt+ArrowRight": "切换到右侧编辑区",
   "Alt+ArrowUp": "选中上一项", "Alt+ArrowDown": "选中下一项",
   "Ctrl+Slash": "切换实时渲染 / 源码模式",
+  "Ctrl+ArrowLeft": "光标移到上一个词", "Ctrl+ArrowRight": "光标移到下一个词",
+  "Ctrl+Home": "光标移到开头", "Ctrl+End": "光标移到末尾",
+  "Ctrl+Backspace": "删除前一个词", "Ctrl+Delete": "删除后一个词",
 };
 
-/** 录到的快捷键不能用时返回原因 */
-export function checkShortcut(s: string): string | null {
+/** 已经被占用的快捷键，label 如「标记完成 / 未完成」、编辑快捷键「加粗」 */
+export interface TakenShortcut {
+  key: string | null | undefined;
+  label: string;
+}
+
+/** 录到的快捷键不能用时返回原因；taken 是其他已经用着的快捷键（不含正在改的这个） */
+export function checkShortcut(s: string, taken: readonly TakenShortcut[] = []): string | null {
   const parts = s.split("+");
   if (!parts.includes("Ctrl") && !parts.includes("Alt")) return "需要包含 Ctrl 或 Alt，例如 Ctrl + Alt + T";
-  const used = RESERVED[s];
-  if (used) return `${shortcutLabel(s)} 是常用的「${used}」快捷键，请换一个`;
-  const edit = EDIT_SHORTCUTS.find((e) => e.keys.some((k) => sameShortcut(k, s)));
-  return edit ? `${shortcutLabel(s)} 是编辑快捷键「${edit.label}」，请换一个` : null;
+  const reserved = RESERVED[s];
+  if (reserved) return `${shortcutLabel(s)} 是常用的「${reserved}」快捷键，请换一个`;
+  const used = taken.find((t) => sameShortcut(t.key, s));
+  return used ? `${shortcutLabel(s)} 已用于${used.label}，请换一个` : null;
 }

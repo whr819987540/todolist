@@ -85,6 +85,8 @@ export interface AppSettings {
   startupView: StartupView;
   /** 界面主题，窗口标题栏跟着切换 */
   theme: ThemeMode;
+  /** 编辑快捷键里改过的：命令（editShortcuts.ts 的 EditCommandId）→ 快捷键，null 表示不使用；没改过的不在里面 */
+  editShortcuts: Record<string, string | null>;
 }
 
 export interface SettingsInfo {

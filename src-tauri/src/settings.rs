@@ -3,7 +3,8 @@
 //! 工作区只认子目录，这个文件不会被当成工作区。
 
 use crate::store::{atomic_write, strip_bom};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,26 @@ pub struct Settings {
     pub startup_view: StartupView,
     /// 界面主题：浅色、深色或跟随系统
     pub theme: Theme,
+    /// 编辑快捷键（正文里的加粗、标题等）里用户改过的：命令 → 快捷键，None 表示不使用。
+    /// 没改过的不记，用前端 editShortcuts.ts 里的默认值
+    #[serde(deserialize_with = "lenient_edit_shortcuts")]
+    pub edit_shortcuts: BTreeMap<String, Option<String>>,
+}
+
+/// 手改坏的编辑快捷键只丢掉坏的那几项，不能连累整个设置文件读不出来
+fn lenient_edit_shortcuts<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, Option<String>>, D::Error> {
+    use serde_json::Value;
+    let Value::Object(map) = Value::deserialize(d)? else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(map
+        .into_iter()
+        .filter_map(|(id, v)| match v {
+            Value::Null => Some((id, None)),
+            Value::String(s) if !s.trim().is_empty() => Some((id, Some(s.trim().to_string()))),
+            _ => None,
+        })
+        .collect())
 }
 
 impl Default for Settings {
@@ -60,6 +81,7 @@ impl Default for Settings {
             auto_save: false,
             startup_view: StartupView::default(),
             theme: Theme::default(),
+            edit_shortcuts: BTreeMap::new(),
         }
     }
 }
@@ -348,6 +370,35 @@ mod tests {
         assert_eq!(s.editor_background, EditorBackground::Beige);
         assert_eq!(s.editor_custom_color, DEFAULT_CUSTOM_COLOR);
         assert_eq!(s.toggle_shortcut.as_deref(), Some("Ctrl+Alt+Y"));
+    }
+
+    #[test]
+    fn edit_shortcuts_roundtrip_and_bad_values() {
+        let tmp = TempRoot::new("edit-shortcuts");
+        let store = SettingsStore::load(&tmp.0);
+        assert!(store.get().edit_shortcuts.is_empty());
+        let mut next = store.get();
+        next.edit_shortcuts.insert("bold".into(), Some("Ctrl+Alt+B".into()));
+        next.edit_shortcuts.insert("strike".into(), None);
+        store.save(next).unwrap();
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.edit_shortcuts.get("bold"), Some(&Some("Ctrl+Alt+B".to_string())));
+        assert_eq!(s.edit_shortcuts.get("strike"), Some(&None));
+
+        // 写坏的项丢掉，其余的和别的设置照常
+        fs::write(
+            tmp.0.join(SETTINGS_FILE),
+            br#"{"toggleShortcut":"Ctrl+Alt+Y","editShortcuts":{"bold":"Ctrl+Alt+B","italic":3,"code":"  ","link":null}}"#,
+        )
+        .unwrap();
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.toggle_shortcut.as_deref(), Some("Ctrl+Alt+Y"));
+        assert_eq!(s.edit_shortcuts.len(), 2);
+        assert_eq!(s.edit_shortcuts.get("link"), Some(&None));
+        fs::write(tmp.0.join(SETTINGS_FILE), br#"{"toggleShortcut":"Ctrl+Alt+Y","editShortcuts":"oops"}"#).unwrap();
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.toggle_shortcut.as_deref(), Some("Ctrl+Alt+Y"));
+        assert!(s.edit_shortcuts.is_empty());
     }
 
     #[test]
