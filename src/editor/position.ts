@@ -8,9 +8,11 @@ export interface TextAnchor {
   after: string;
 }
 
-/** 编辑位置：光标，以及编辑区滚动到了哪里 */
+/** 编辑位置：光标（和选区），以及编辑区滚动到了哪里 */
 export interface EditPosition {
   cursor: TextAnchor;
+  /** 选中了文字时，选区的另一端（光标是拖动 / Shift 选择时移动的那一端）；没有选中文字时不记 */
+  anchor?: TextAnchor;
   /** 可见区域顶部的那一行，top 是这一行离可见区域顶部的距离（px，一般 ≤ 0） */
   view: TextAnchor & { top: number };
 }
@@ -21,8 +23,8 @@ const CONTEXT = 32;
 const MIN_CONTEXT = 8;
 
 export function capturePosition(view: EditorView): EditPosition {
-  const { doc } = view.state;
-  const anchor = (pos: number): TextAnchor => ({
+  const { doc, selection } = view.state;
+  const at = (pos: number): TextAnchor => ({
     pos,
     before: doc.sliceString(Math.max(0, pos - CONTEXT), pos),
     after: doc.sliceString(pos, Math.min(doc.length, pos + CONTEXT)),
@@ -32,9 +34,11 @@ export function capturePosition(view: EditorView): EditPosition {
   // 可见区域顶部那一行（长段落折成多行时是其中的那一行）的开头
   const top = view.posAtCoords({ x: content.left + 1, y: Math.max(scroller.top, content.top) + 1 }, false);
   const lineTop = view.coordsAtPos(top)?.top ?? scroller.top;
+  const { anchor, head } = selection.main;
   return {
-    cursor: anchor(view.state.selection.main.head),
-    view: { ...anchor(top), top: Math.round(lineTop - scroller.top) },
+    cursor: at(head),
+    ...(anchor !== head && { anchor: at(anchor) }),
+    view: { ...at(top), top: Math.round(lineTop - scroller.top) },
   };
 }
 
@@ -73,14 +77,20 @@ function nearest(doc: string, text: string, near: number): number | null {
 }
 
 /**
- * 在新的正文里找回编辑位置：光标放回原来那段文字处，编辑区滚动到原来看到的地方（那里找不到时把光标滚到中间）。
+ * 在新的正文里找回编辑位置：光标放回原来那段文字处，原来选中了文字的连选区一起找回（选区另一端找不到时只放光标），
+ * 编辑区滚动到原来看到的地方（那里找不到时把光标滚到中间）。
  * 光标找不到（外部大改过）时回到开头：光标在最前面，scroll 为 null 表示滚到顶
  */
-export function restorePosition(doc: string, p: EditPosition): { head: number; scroll: StateEffect<unknown> | null } {
+export function restorePosition(
+  doc: string,
+  p: EditPosition,
+): { anchor: number; head: number; scroll: StateEffect<unknown> | null } {
   const head = locateAnchor(doc, p.cursor);
-  if (head == null) return { head: 0, scroll: null };
+  if (head == null) return { anchor: 0, head: 0, scroll: null };
+  const anchor = (p.anchor && locateAnchor(doc, p.anchor)) ?? head;
   const top = locateAnchor(doc, p.view);
   return {
+    anchor,
     head,
     scroll:
       top == null

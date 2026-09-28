@@ -97,10 +97,15 @@ function isAnchor(a: unknown): a is TextAnchor {
 
 function isPosition(p: unknown): p is EditPosition {
   const x = p as Partial<EditPosition> | null;
-  return isAnchor(x?.cursor) && isAnchor(x.view) && typeof x.view.top === "number";
+  return (
+    isAnchor(x?.cursor) &&
+    (x.anchor === undefined || isAnchor(x.anchor)) &&
+    isAnchor(x.view) &&
+    typeof x.view.top === "number"
+  );
 }
 
-/** 上次在这条待办里的编辑位置（光标和滚动） */
+/** 上次在这条待办里的编辑位置（光标、选区和滚动） */
 export function readEditPosition(workspace: string, project: string, id: string): EditPosition | null {
   const p = readPositions()[todoKey(workspace, project, id)];
   return isPosition(p) ? p : null;

@@ -98,7 +98,7 @@ export default function TodoEditor(props: Props) {
   const [status, setStatus] = useState<Status>("saved");
   const [conflict, setConflict] = useState(false);
   const [mode, setMode] = useLocalState<EditorMode>("editorMode", "live");
-  // 上次在这条待办里的编辑位置：打开时光标和滚动回到那里
+  // 上次在这条待办里的编辑位置：打开时光标（选区）和滚动回到那里
   const [initialPosition] = useState(() => readEditPosition(workspace, project, id));
   // 这次运行期间上次打开时留下的撤销记录，正文在外部被改过时不用
   const [initialHistory, setInitialHistory] = useState<unknown>(null);
