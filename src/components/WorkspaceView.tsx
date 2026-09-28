@@ -1,7 +1,8 @@
 import { App as AntApp, Spin, type InputRef } from "antd";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useWindowFocus } from "../hooks";
+import { type How, visit } from "../navHistory";
 import { useSettings } from "../settings";
 import { eventShortcut, sameShortcut } from "../shortcuts";
 import type { SortKey, TodoSummary, WorkspaceTree } from "../types";
@@ -27,11 +28,18 @@ import Sidebar, { WS_KEY, type Selection, type SidebarHandle } from "./Sidebar";
 import TodoEditor, { type EditorHandle } from "./TodoEditor";
 import { todoMenu, type Actions } from "./menus";
 
+/** 供 App 的后退、前进（鼠标侧键）调用 */
+export interface WorkspaceViewHandle {
+  /** 右侧改显示工作区里的一处；它所在的工作区没选中时选中，展开它所在的分支 */
+  show(sel: Selection): void;
+}
+
 interface Props {
   /** 从首页进入的工作区；进来后可以在侧栏顶部再选中其他工作区一起显示 */
   initialWorkspace: string;
   initialSel: Omit<Selection, "workspace">;
   onHome: () => void;
+  handleRef: React.RefObject<WorkspaceViewHandle | null>;
 }
 
 const MIN_SIDEBAR = 240;
@@ -71,7 +79,7 @@ function useCollapsed() {
   return [get, set, rename, forget] as const;
 }
 
-export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: Props) {
+export default function WorkspaceView({ initialWorkspace, initialSel, onHome, handleRef }: Props) {
   const { message, modal } = AntApp.useApp();
   // 侧栏里选中显示的工作区，按名称排序；进入时恢复上次选中的，再加上这次进入的
   const [workspaces, setWorkspaces] = useState(() => sortNames([initialWorkspace, ...readOpenWorkspaces()]));
@@ -79,7 +87,13 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
   // 第一次加载前核对恢复的工作区还在不在（可能已在首页或外部删除、改名）
   const existing = useRef<Promise<Set<string> | null> | null>(null);
   const [loaded, setLoaded] = useState<WorkspaceTree[] | null>(null);
-  const [sel, setSel] = useState<Selection>({ workspace: initialWorkspace, ...initialSel });
+  const [sel, setSelState] = useState<Selection>({ workspace: initialWorkspace, ...initialSel });
+  // 右侧这次改显示的内容是怎么来的，记后退、前进时用
+  const selHow = useRef<How>("push");
+  const setSel = useCallback((s: Selection, how: How = "push") => {
+    selHow.current = how;
+    setSelState(s);
+  }, []);
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null);
   // 用键盘在左侧列表里移到的选中项：这时焦点留在列表，右侧不自动聚焦输入框
   const [kbSel, setKbSel] = useState<Selection | null>(null);
@@ -110,8 +124,10 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
     writeOpenWorkspaces(workspaces);
   }, [workspaces]);
 
-  // 记下右侧显示的内容：设置里选了开屏「回到上次的位置」时，下次打开软件回到这里
+  // 记下右侧显示的内容：后退、前进时用；设置里选了开屏「回到上次的位置」时，下次打开软件回到这里
   useEffect(() => {
+    visit(sel, selHow.current);
+    selHow.current = "push";
     writeLastView(sel);
   }, [sel]);
 
@@ -168,15 +184,15 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
     const t = loaded.find((x) => x.name === sel.workspace);
     if (!t) {
       // 还在列表里说明正在加载（例如刚改名），等加载完
-      if (!workspaces.includes(sel.workspace)) setSel({ workspace: workspaces[0] });
+      if (!workspaces.includes(sel.workspace)) setSel({ workspace: workspaces[0] }, "replace");
       return;
     }
     if (!sel.project) return;
     const p = t.projects.find((x) => x.name === sel.project);
-    if (!p) setSel({ workspace: sel.workspace });
+    if (!p) setSel({ workspace: sel.workspace }, "replace");
     else if (sel.todoId && !p.todos.some((x) => x.id === sel.todoId))
-      setSel({ workspace: sel.workspace, project: sel.project });
-  }, [loaded, sel, workspaces]);
+      setSel({ workspace: sel.workspace, project: sel.project }, "replace");
+  }, [loaded, sel, workspaces, setSel]);
 
   const selTree = treeOf(sel.workspace);
   const selProject = selTree?.projects.find((p) => p.name === sel.project);
@@ -210,14 +226,27 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
 
   const expand = (ws: string, key: string) => setCollapsed(ws, (c) => (c[key] ? { ...c, [key]: false } : c));
 
-  // 进来时直接打开某个项目 / 待办（首页的搜索结果、工作区上次打开的待办、开屏回到上次的位置），展开它所在的分支
+  /** 展开项目所在的分支，左侧能看到它和其中的待办 */
+  const reveal = useCallback(
+    (ws: string, project?: string) => {
+      if (project)
+        setCollapsed(ws, (c) => (c[WS_KEY] || c[project] ? { ...c, [WS_KEY]: false, [project]: false } : c));
+    },
+    [setCollapsed],
+  );
+
+  // 进来时直接打开某个项目 / 待办（首页的搜索结果、工作区上次打开的待办、开屏回到上次的位置、后退 / 前进），展开它所在的分支
   const initialProject = initialSel.project;
-  useEffect(() => {
-    if (initialProject)
-      setCollapsed(initialWorkspace, (c) =>
-        c[WS_KEY] || c[initialProject] ? { ...c, [WS_KEY]: false, [initialProject]: false } : c,
-      );
-  }, [initialWorkspace, initialProject, setCollapsed]);
+  useEffect(() => reveal(initialWorkspace, initialProject), [initialWorkspace, initialProject, reveal]);
+
+  useImperativeHandle(handleRef, () => ({
+    show(s) {
+      if (!workspacesRef.current.includes(s.workspace)) setWorkspaces((list) => sortNames([...list, s.workspace]));
+      reveal(s.workspace, s.project);
+      setFocusTitleId(null);
+      setSel(s);
+    },
+  }));
 
   /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
   const flushEditor = () => editorRef.current?.flush() ?? Promise.resolve();
@@ -279,7 +308,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
             if (inSel) editorRef.current?.detach();
             renameCollapsed(ws, name);
             setWorkspaces((list) => sortNames(list.map((w) => (w === ws ? name : w))));
-            if (inSel) setSel({ ...sel, workspace: name });
+            if (inSel) setSel({ ...sel, workspace: name }, "replace");
             message.success("已重命名");
           },
         }),
@@ -329,7 +358,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
               return state === undefined ? rest : { ...rest, [name]: state };
             });
             await reload();
-            if (isSelProject(project)) setSel({ ...sel, project: name });
+            if (isSelProject(project)) setSel({ ...sel, project: name }, "replace");
             message.success("已重命名");
           },
         }),
@@ -388,7 +417,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
           moveTodoState(ws, project, t.id, target, moved.id);
           await reload();
           expand(ws, target);
-          if (isSel) setSel({ workspace: ws, project: target, todoId: moved.id });
+          if (isSel) setSel({ workspace: ws, project: target, todoId: moved.id }, "replace");
           message.success(`已移动到「${target}」`);
         }),
       openExternal: (project, t) =>
@@ -539,7 +568,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome }: 
         onSelect={(s) => {
           setFocusTitleId(null);
           setKbSel(s);
-          setSel(s);
+          setSel(s, "keyboard");
         }}
         actionsFor={actionsFor}
         onHome={goHome}

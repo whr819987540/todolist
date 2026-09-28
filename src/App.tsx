@@ -4,8 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import Home from "./components/Home";
 import type { Selection } from "./components/Sidebar";
-import WorkspaceView from "./components/WorkspaceView";
+import WorkspaceView, { type WorkspaceViewHandle } from "./components/WorkspaceView";
 import { flushAll } from "./hooks";
+import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
 import { compareName } from "./utils";
 import { readLastTodo, readLastView, readOpenWorkspaces, writeLastView } from "./workspaceState";
@@ -42,10 +43,13 @@ async function startView(): Promise<View> {
 export default function App() {
   // 读出设置、决定开屏界面之前是 null
   const [view, setView] = useState<View | null>(null);
+  const viewRef = useRef(view);
+  const workspaceRef = useRef<WorkspaceViewHandle | null>(null);
   const { autoSave } = useSaveOptions();
   const autoSaveRef = useRef(autoSave);
   useEffect(() => {
     autoSaveRef.current = autoSave;
+    viewRef.current = view;
   });
 
   useEffect(() => {
@@ -58,8 +62,34 @@ export default function App() {
 
   // 记下停在首页（停在工作区里哪个位置由 WorkspaceView 记）
   useEffect(() => {
-    if (view?.name === "home") writeLastView(null);
+    if (view?.name !== "home") return;
+    writeLastView(null);
+    visit(null);
   }, [view]);
+
+  // 鼠标侧键后退、前进；对话框打开着时不响应
+  useEffect(() => {
+    const onMouse = (e: MouseEvent) => {
+      if (e.button !== 3 && e.button !== 4) return;
+      // 不让 WebView 做网页的后退、前进
+      e.preventDefault();
+      if (e.type !== "mouseup" || (e.target as Element | null)?.closest?.(".ant-modal-root")) return;
+      const place = go(e.button === 3 ? -1 : 1);
+      if (place === undefined) return;
+      if (!place) setView(HOME);
+      else if (viewRef.current?.name === "workspace" && workspaceRef.current) workspaceRef.current.show(place);
+      else {
+        const { workspace, ...sel } = place;
+        setView({ name: "workspace", workspace, sel });
+      }
+    };
+    window.addEventListener("mousedown", onMouse, true);
+    window.addEventListener("mouseup", onMouse, true);
+    return () => {
+      window.removeEventListener("mousedown", onMouse, true);
+      window.removeEventListener("mouseup", onMouse, true);
+    };
+  }, []);
 
   const goHome = useCallback(() => setView(HOME), []);
   // 从首页点进工作区（没指定项目 / 待办）时，直接打开上次在这个工作区打开的待办
@@ -87,6 +117,11 @@ export default function App() {
   if (!view) return null;
   if (view.name === "home") return <Home onEnter={enter} />;
   return (
-    <WorkspaceView initialWorkspace={view.workspace} initialSel={view.sel} onHome={goHome} />
+    <WorkspaceView
+      initialWorkspace={view.workspace}
+      initialSel={view.sel}
+      onHome={goHome}
+      handleRef={workspaceRef}
+    />
   );
 }

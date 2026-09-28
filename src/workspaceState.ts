@@ -1,10 +1,11 @@
 // 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态和上次打开的待办、上次停在哪里、
 // 各待办的编辑位置；
 // 以及只在这次运行期间记在内存里的各待办的撤销记录。
-// 工作区在首页改名 / 删除时也要跟着更新，所以放在这里供首页和工作区视图共用。
+// 工作区在首页改名 / 删除时也要跟着更新（后退、前进的记录也在这时一起更新），所以放在这里供首页和工作区视图共用。
 
 import type { Selection } from "./components/Sidebar";
 import type { EditPosition, TextAnchor } from "./editor/position";
+import { mapPlaces } from "./navHistory";
 
 const OPEN_KEY = "openWorkspaces";
 const LAST_VIEW_KEY = "lastView";
@@ -78,7 +79,8 @@ export function writeLastTodo(workspace: string, project: string, id: string) {
 
 // ----- 各待办的编辑位置：按 [工作区, 项目, 待办 id] 记，最近记的排在最后 -----
 
-type TodoKey = [workspace: string, project: string, id: string];
+/** 按待办记的东西用的键；后退、前进的记录里只到工作区 / 项目一级的，后面是空串 */
+export type TodoKey = [workspace: string, project: string, id: string];
 type Positions = Record<string, EditPosition>;
 
 const todoKey = (...k: TodoKey) => JSON.stringify(k);
@@ -144,7 +146,7 @@ export function takeUndo(workspace: string, project: string, id: string, doc: st
   return snap?.doc === doc ? snap.history : null;
 }
 
-/** 改名、移动、删除之后，记住的编辑位置、各工作区上次打开的待办和撤销记录跟过去；fn 返回 null 的删掉 */
+/** 改名、移动、删除之后，记住的编辑位置、各工作区上次打开的待办、撤销记录和后退、前进的记录跟过去；fn 返回 null 的删掉 */
 function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
   const move = (k: string) => {
     try {
@@ -176,6 +178,7 @@ function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
     undos.delete(k);
     if (nk) undos.set(nk, snap);
   }
+  mapPlaces(fn);
 }
 
 export const renameProjectState = (ws: string, from: string, to: string) =>
