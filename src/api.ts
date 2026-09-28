@@ -55,6 +55,10 @@ export const api = {
   moveTodo: (workspace: string, project: string, id: string, target: string) =>
     invoke<TodoSummary>("move_todo", { workspace, project, id, target }),
 
+  /** 数据目录的 .state.json 里的界面状态（JSON 文本），还没有这个文件时是 null */
+  readUiState: () => invoke<string | null>("read_ui_state"),
+  writeUiState: (data: string) => invoke<void>("write_ui_state", { data }),
+
   openTodoExternal: (workspace: string, project: string, id: string) =>
     invoke<void>("open_todo_external", { workspace, project, id }),
   revealTodo: (workspace: string, project: string, id: string) =>

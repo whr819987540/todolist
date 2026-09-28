@@ -8,6 +8,7 @@
 //!     {项目}/
 //!       .todos.json          标题、完成状态、创建/修改时间等元数据
 //!       20260926-153012.md   待办正文（Markdown 纯文本）
+//!   .state.json              界面状态：上次的位置、各待办的编辑位置等，内容由前端决定
 //! ```
 //!
 //! Markdown 文件是“待办是否存在”的唯一依据：元数据里有但文件不在的条目会被清理，
@@ -26,6 +27,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const META_FILE: &str = ".todos.json";
+pub const UI_STATE_FILE: &str = ".state.json";
 const TRASH_DIR: &str = ".trash";
 const PREVIEW_CHARS: usize = 200;
 const PREVIEW_READ_BYTES: u64 = 4096;
@@ -488,6 +490,23 @@ impl Store {
         ))
     }
 
+    // ----- 界面状态 -----
+
+    /// 读界面状态文件（内容由前端决定，这里原样读写）；还没有时返回 None
+    pub fn read_ui_state(&self) -> Result<Option<String>> {
+        let _g = self.guard();
+        match fs::read(self.root.join(UI_STATE_FILE)) {
+            Ok(bytes) => Ok(Some(String::from_utf8_lossy(strip_bom(&bytes)).into_owned())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("读取界面状态失败：{e}")),
+        }
+    }
+
+    pub fn write_ui_state(&self, data: &str) -> Result<()> {
+        let _g = self.guard();
+        atomic_write(&self.root.join(UI_STATE_FILE), data.as_bytes()).map_err(|e| format!("保存界面状态失败：{e}"))
+    }
+
     // ----- 删除 -----
 
     /// 优先放进系统回收站；回收站不可用时退而移到数据目录下的 .trash
@@ -913,6 +932,20 @@ mod tests {
         let tmp = TempRoot::new(tag);
         let store = Store::new(tmp.0.join("数据")).unwrap();
         (tmp, store)
+    }
+
+    #[test]
+    fn ui_state_roundtrip() {
+        let (_tmp, s) = store("uistate");
+        assert_eq!(s.read_ui_state().unwrap(), None);
+        let json = r#"{"lastView":{"workspace":"工作"}}"#;
+        s.write_ui_state(json).unwrap();
+        assert_eq!(s.read_ui_state().unwrap().as_deref(), Some(json));
+        // 带 BOM 的（被其他编辑器存过）也认
+        fs::write(s.root().join(UI_STATE_FILE), [&[0xEF, 0xBB, 0xBF], json.as_bytes()].concat()).unwrap();
+        assert_eq!(s.read_ui_state().unwrap().as_deref(), Some(json));
+        // 不会被当成工作区
+        assert!(s.list_workspaces().unwrap().is_empty());
     }
 
     #[test]

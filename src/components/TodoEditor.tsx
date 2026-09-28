@@ -209,7 +209,7 @@ export default function TodoEditor(props: Props) {
     });
   };
 
-  /** 记下编辑位置（存在 localStorage），下次打开这条待办时回到这里；改名、移动、删除之后（detached）不再记 */
+  /** 记下编辑位置（存在数据目录的 .state.json），下次打开这条待办时回到这里；改名、移动、删除之后（detached）不再记 */
   const savePosition = () => {
     window.clearTimeout(s.positionTimer);
     if (s.position && !s.detached) writeEditPosition(workspace, project, id, s.position);

@@ -168,6 +168,18 @@ async fn move_todo(
     store.move_todo(&workspace, &project, &id, &target)
 }
 
+// ----- 界面状态（数据目录的 .state.json） -----
+
+#[tauri::command]
+async fn read_ui_state(store: State<'_, Store>) -> Cmd<Option<String>> {
+    store.read_ui_state()
+}
+
+#[tauri::command]
+async fn write_ui_state(store: State<'_, Store>, data: String) -> Cmd<()> {
+    store.write_ui_state(&data)
+}
+
 // ----- 系统集成 -----
 
 #[tauri::command]
@@ -618,6 +630,8 @@ pub fn run() {
             set_todo_done,
             delete_todo,
             move_todo,
+            read_ui_state,
+            write_ui_state,
             open_todo_external,
             reveal_todo,
             open_folder,

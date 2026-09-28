@@ -9,7 +9,7 @@ import { flushAll } from "./hooks";
 import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
 import { compareName } from "./utils";
-import { readLastTodo, readLastView, readOpenWorkspaces, writeLastView } from "./workspaceState";
+import { loadUiState, readLastTodo, readLastView, readOpenWorkspaces, writeLastView } from "./workspaceState";
 
 /** 从首页进入某个工作区（可直接打开其中的项目 / 待办）；进去后可以在侧栏再选中其他工作区 */
 type Entry = Omit<Selection, "workspace">;
@@ -21,11 +21,13 @@ const HOME: View = { name: "home" };
 /**
  * 打开软件时显示的界面：默认首页；设置里选了「回到上次的位置」时，回到上次停留的工作区和待办
  * （侧栏选中的工作区由 WorkspaceView 恢复）。右侧显示的工作区已不在时改显示还在的选中工作区中的第一个，
- * 都不在了就回首页；项目、待办不在了由 WorkspaceView 退回上一级
+ * 都不在了就回首页；项目、待办不在了由 WorkspaceView 退回上一级。
+ * 先读出数据目录里的界面状态（上次的位置、编辑位置等），之后首页和工作区视图直接用
  */
 async function startView(): Promise<View> {
+  const loaded = loadUiState();
   try {
-    const { settings } = await api.getSettings();
+    const [{ settings }] = await Promise.all([api.getSettings(), loaded]);
     const last = readLastView();
     if (settings.startupView !== "lastPosition" || !last) return HOME;
     const names = new Set((await api.listWorkspaces()).map((w) => w.name));
@@ -36,6 +38,7 @@ async function startView(): Promise<View> {
       .sort(compareName)[0];
     return other ? { name: "workspace", workspace: other, sel: {} } : HOME;
   } catch {
+    await loaded;
     return HOME;
   }
 }

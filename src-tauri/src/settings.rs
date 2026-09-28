@@ -80,7 +80,7 @@ pub enum Theme {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StartupView {
-    /// 回到上次的位置：侧栏选中的工作区、右侧打开的待办（记在前端的 localStorage 里）
+    /// 回到上次的位置：侧栏选中的工作区、右侧打开的待办（前端记在数据目录的 `.state.json` 里）
     LastPosition,
     /// 首页；认不出的值也按它处理
     #[default]

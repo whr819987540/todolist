@@ -1,20 +1,29 @@
-// 记在 localStorage 里的界面状态：侧栏选中显示的工作区、每个工作区的折叠状态、排序、隐藏已完成和上次打开的待办、
-// 上次停在哪里、各待办的编辑位置；
-// 以及只在这次运行期间记在内存里的各待办的撤销记录。
+// 界面状态：
+// - 记在数据目录 .state.json 里、跟着数据走的：侧栏选中显示的工作区、上次停在哪里、每个工作区上次打开的待办、
+//   各待办的编辑位置；
+// - 只记在本机 localStorage 里的：每个工作区的折叠状态、排序和隐藏已完成；
+// - 只在这次运行期间记在内存里的：各待办的撤销记录。
 // 工作区在首页改名 / 删除时也要跟着更新（后退、前进的记录也在这时一起更新），所以放在这里供首页和工作区视图共用。
 
+import { api } from "./api";
 import type { Selection } from "./components/Sidebar";
 import type { EditPosition, TextAnchor } from "./editor/position";
+import { registerFlusher } from "./hooks";
 import { mapPlaces } from "./navHistory";
 import type { SortKey } from "./types";
 
+/** .state.json 里各项的名字；以前这几项记在 localStorage 里，用的也是这些名字 */
 const OPEN_KEY = "openWorkspaces";
 const LAST_VIEW_KEY = "lastView";
 const LAST_TODOS_KEY = "lastTodos";
 const POSITIONS_KEY = "editPositions";
+const FILE_KEYS = [OPEN_KEY, LAST_VIEW_KEY, LAST_TODOS_KEY, POSITIONS_KEY];
 
 /** 最多记住这么多条待办的编辑位置，超出时忘掉最久没动过的 */
 const MAX_POSITIONS = 300;
+
+/** .state.json 改动后多久写盘（ms），从第一处没写盘的改动算起；隐藏到托盘、退出前立即写 */
+const SAVE_DELAY = 5000;
 
 export const collapsedKey = (ws: string) => `collapsed:${ws}`;
 export const listOptionsKey = (ws: string) => `listOptions:${ws}`;
@@ -66,25 +75,105 @@ export function readListOptions(ws: string): ListOptions {
   return { sortKey: isSortKey(sortKey) ? sortKey : "created", hideDone: hideDone === true };
 }
 
+// ----- 数据目录 .state.json 里的：换电脑、重装系统后还在，数据目录用网盘同步时一起同步 -----
+
+/** 文件内容。各项在读的时候核对格式（文件可能被手改过，或者是别的版本写的），认不出的项原样留着 */
+let saved: Record<string, unknown> = {};
+/** 读文件出错（不是还没有这个文件）时，这次运行不写，免得把文件里原有的覆盖掉 */
+let writable = true;
+let dirty = false;
+let timer = 0;
+let writing: Promise<boolean> = Promise.resolve(true);
+let loading: Promise<void> | null = null;
+
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** 启动时读一次，重复调用也只读一次；还没有这个文件时，把以前记在 localStorage 里的搬过去 */
+export function loadUiState(): Promise<void> {
+  loading ??= (async () => {
+    let text: string | null;
+    try {
+      text = await api.readUiState();
+    } catch {
+      writable = false;
+      return;
+    }
+    if (text != null) {
+      try {
+        const v: unknown = JSON.parse(text);
+        if (isObject(v)) saved = v;
+      } catch {
+        /* 内容坏了：从头记，下次写盘时覆盖 */
+      }
+      return;
+    }
+    for (const key of FILE_KEYS) {
+      const v = readJson<unknown>(key, undefined);
+      if (v !== undefined) saved[key] = v;
+    }
+    if (!Object.keys(saved).length) return;
+    dirty = true;
+    if (await saveUiState()) for (const key of FILE_KEYS) remove(key);
+  })();
+  return loading;
+}
+
+/** 有没写盘的改动时立即写，返回是否写成功 */
+function saveUiState(): Promise<boolean> {
+  window.clearTimeout(timer);
+  timer = 0;
+  if (!writable) return Promise.resolve(false);
+  if (!dirty) return writing;
+  dirty = false;
+  const data = JSON.stringify(saved);
+  writing = writing
+    .then(() => api.writeUiState(data))
+    .then(
+      () => true,
+      () => {
+        dirty = true; // 下次再试
+        return false;
+      },
+    );
+  return writing;
+}
+
+function writeSaved(key: string, value: unknown) {
+  if (JSON.stringify(saved[key]) === JSON.stringify(value)) return;
+  saved = { ...saved, [key]: value };
+  dirty = true;
+  if (!timer) timer = window.setTimeout(saveUiState, SAVE_DELAY);
+}
+
+// 隐藏到托盘、退出前写盘。flushAll 依次调用各个 flusher，正在编辑的待办在它的 flusher 里同步记下编辑位置，
+// 等这一轮调用完（下一个微任务）再写，免得漏掉
+registerFlusher(async () => {
+  await Promise.resolve();
+  await saveUiState();
+});
+
 /** 上次在侧栏选中的工作区，下次进入时恢复 */
-export const readOpenWorkspaces = () => readJson<string[]>(OPEN_KEY, []);
-export const writeOpenWorkspaces = (list: string[]) => writeJson(OPEN_KEY, list);
+export function readOpenWorkspaces(): string[] {
+  const v = saved[OPEN_KEY];
+  return Array.isArray(v) ? v.filter((ws): ws is string => typeof ws === "string" && !!ws) : [];
+}
+export const writeOpenWorkspaces = (list: string[]) => writeSaved(OPEN_KEY, list);
 
 /** 上次停在哪里：null 是首页，否则是工作区里右侧显示的内容。设置里选了开屏「回到上次的位置」时用 */
 export function readLastView(): Selection | null {
-  const v = readJson<Partial<Record<keyof Selection, unknown>> | null>(LAST_VIEW_KEY, null);
-  if (typeof v?.workspace !== "string") return null;
+  const v = saved[LAST_VIEW_KEY];
+  if (!isObject(v) || typeof v.workspace !== "string") return null;
   const str = (x: unknown) => (typeof x === "string" && x ? x : undefined);
   return { workspace: v.workspace, project: str(v.project), todoId: str(v.todoId) };
 }
-export const writeLastView = (sel: Selection | null) => writeJson(LAST_VIEW_KEY, sel);
+export const writeLastView = (sel: Selection | null) => writeSaved(LAST_VIEW_KEY, sel);
 
 /** 各工作区上次打开的待办：工作区 → [项目, 待办 id] */
 type LastTodos = Record<string, [project: string, id: string]>;
 
 function readLastTodos(): LastTodos {
-  const all = readJson<unknown>(LAST_TODOS_KEY, {});
-  return all && typeof all === "object" && !Array.isArray(all) ? (all as LastTodos) : {};
+  const all = saved[LAST_TODOS_KEY];
+  return isObject(all) ? (all as LastTodos) : {};
 }
 
 /** 这个工作区上次打开的待办，从首页进入工作区时直接打开它 */
@@ -98,7 +187,7 @@ export function writeLastTodo(workspace: string, project: string, id: string) {
   const all = readLastTodos();
   const v = all[workspace];
   if (v?.[0] === project && v[1] === id) return;
-  writeJson(LAST_TODOS_KEY, { ...all, [workspace]: [project, id] });
+  writeSaved(LAST_TODOS_KEY, { ...all, [workspace]: [project, id] });
 }
 
 // ----- 各待办的编辑位置：按 [工作区, 项目, 待办 id] 记，最近记的排在最后 -----
@@ -110,8 +199,8 @@ type Positions = Record<string, EditPosition>;
 const todoKey = (...k: TodoKey) => JSON.stringify(k);
 
 function readPositions(): Positions {
-  const all = readJson<unknown>(POSITIONS_KEY, {});
-  return all && typeof all === "object" && !Array.isArray(all) ? (all as Positions) : {};
+  const all = saved[POSITIONS_KEY];
+  return isObject(all) ? (all as Positions) : {};
 }
 
 function isAnchor(a: unknown): a is TextAnchor {
@@ -136,14 +225,14 @@ export function readEditPosition(workspace: string, project: string, id: string)
 }
 
 export function writeEditPosition(workspace: string, project: string, id: string, p: EditPosition) {
-  const all = readPositions();
+  const all = { ...readPositions() };
   const key = todoKey(workspace, project, id);
   // 删了再加，排到最后；超出上限时从最前面（最久没动过的）删
   delete all[key];
   all[key] = p;
   const keys = Object.keys(all);
   for (const k of keys.slice(0, keys.length - MAX_POSITIONS)) delete all[k];
-  writeJson(POSITIONS_KEY, all);
+  writeSaved(POSITIONS_KEY, all);
 }
 
 // ----- 各待办的撤销记录：只在这次运行期间记在内存里，切到别的待办再切回来时接着用 -----
@@ -193,14 +282,14 @@ function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
     if (nk !== k) changed = true;
     if (nk) next[nk] = p;
   }
-  if (changed) writeJson(POSITIONS_KEY, next);
+  if (changed) writeSaved(POSITIONS_KEY, next);
   const lastBefore = readLastTodos();
   const last: LastTodos = {};
   for (const [ws, v] of Object.entries(lastBefore)) {
     const to = Array.isArray(v) ? fn([ws, v[0], v[1]]) : null;
     if (to) last[to[0]] = [to[1], to[2]];
   }
-  if (JSON.stringify(last) !== JSON.stringify(lastBefore)) writeJson(LAST_TODOS_KEY, last);
+  writeSaved(LAST_TODOS_KEY, last);
   for (const [k, snap] of [...undos]) {
     const nk = move(k);
     if (nk === k) continue;
