@@ -71,6 +71,12 @@ const WHEEL_STEP = 50;
 /** 光标、滚动停下来多久后记下编辑位置（ms）；离开这条待办、窗口失去焦点时立即记 */
 const POSITION_DELAY = 1000;
 
+/**
+ * auto save 关闭时的兜底（秒）：有未保存的修改，从第一处开始满 1 小时也自动保存一次，
+ * 免得程序在托盘里挂好几天、改了的内容一直只在内存里。auto save 开着时按设置的间隔（不超过 1 小时）
+ */
+export const FALLBACK_SAVE_SECS = 3600;
+
 const ENCODING_LABELS: Record<TextEncoding, string> = {
   "UTF-8": "UTF-8",
   "UTF-16": "UTF-16（修改后转存为 UTF-8）",
@@ -83,8 +89,8 @@ const otherMode = (m: EditorMode): EditorMode => (m === "live" ? "source" : "liv
 
 /**
  * 右侧的待办详情：标题 + Markdown 正文（实时渲染或源码模式）。
- * Ctrl+S、切换待办、从托盘退出时总是保存；auto save 开着时，有未保存的修改后还按设置的间隔定时保存，
- * 编辑器或窗口失去焦点时也立即保存
+ * Ctrl+S、切换待办、从托盘退出时总是保存；有未保存的修改后还定时保存：auto save 开着时按设置的间隔，
+ * 关着时满 1 小时兜底。auto save 开着时编辑器或窗口失去焦点也立即保存
  */
 export default function TodoEditor(props: Props) {
   const { workspace, project, summary } = props;
@@ -136,8 +142,10 @@ export default function TodoEditor(props: Props) {
     loaded: false,
     detached: false,
     conflict: false,
-    /** 定时保存（auto save 开着时）：从第一处未保存的修改开始倒计时 */
+    /** 定时保存：从第一处未保存的修改开始倒计时 */
     timer: 0,
+    /** 这次倒计时从什么时候算起（第一处未保存的修改的时间），没在倒计时时是 0 */
+    dirtyAt: 0,
     chain: Promise.resolve(),
     /** 还没记下的编辑位置 */
     position: null as EditPosition | null,
@@ -149,16 +157,29 @@ export default function TodoEditor(props: Props) {
   const stopTimer = () => {
     window.clearTimeout(s.timer);
     s.timer = 0;
+    s.dirtyAt = 0;
   };
 
-  /** auto save 开着且有未保存的修改时开始倒计时；倒计时中继续修改不往后推，最多隔设置的间隔就存一次 */
-  const schedule = () => {
+  /** 现在的定时保存间隔（ms）：auto save 开着时按设置，关着时 1 小时兜底 */
+  const saveDelayMs = () => {
     const { autoSave, saveDelaySecs } = saveOptionsRef.current;
-    if (!autoSave || s.timer || s.detached || !isDirty()) return;
-    s.timer = window.setTimeout(() => {
-      s.timer = 0;
-      flush();
-    }, saveDelaySecs * 1000);
+    return (autoSave ? saveDelaySecs : FALLBACK_SAVE_SECS) * 1000;
+  };
+
+  /**
+   * 有未保存的修改时开始倒计时，从第一处未保存的修改算起；倒计时中继续修改不往后推，最多隔这么久就存一次。
+   * 已经在倒计时（或已经超时、正等着保存）时不重复开始
+   */
+  const schedule = () => {
+    if (s.timer || s.detached || !isDirty()) return;
+    s.dirtyAt ||= Date.now();
+    s.timer = window.setTimeout(
+      () => {
+        s.timer = 0;
+        flush();
+      },
+      Math.max(0, s.dirtyAt + saveDelayMs() - Date.now()),
+    );
   };
 
   /** 更新保存状态；有未保存的修改时按需开始定时保存 */
@@ -288,9 +309,10 @@ export default function TodoEditor(props: Props) {
     }
   }, [summary.title, s]);
 
-  // 开关 auto save、改了定时保存的间隔：重新计时，关掉时停止定时保存
+  // 开关 auto save、改了定时保存的间隔：按新的间隔重新安排，仍从第一处未保存的修改算起（已经超时的立即保存）
   useEffect(() => {
-    stopTimer();
+    window.clearTimeout(s.timer);
+    s.timer = 0;
     schedule();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSave, saveDelaySecs]);
@@ -555,6 +577,7 @@ export default function TodoEditor(props: Props) {
             ) : (
               <>
                 auto save 已关闭：按 Ctrl+S 保存，切换待办、从托盘退出时也会保存
+                <div>修改后一直没保存的，满 1 小时自动保存一次</div>
                 <div>可在设置的「保存」里开启</div>
               </>
             )

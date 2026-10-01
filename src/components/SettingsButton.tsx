@@ -549,13 +549,13 @@ function SaveSettings() {
         </div>
         <div className="setting-desc">
           开启后，编辑器失去焦点、窗口失去焦点（包括隐藏到托盘）时立即保存，有修改时还按下面的间隔定时保存。
-          {"关闭时只在按 Ctrl+S、切换待办和从托盘退出时保存。"}
+          {"关闭时在按 Ctrl+S、切换待办和从托盘退出时保存，失去焦点、隐藏到托盘时不保存；修改后一直没保存的，满 1 小时也会自动保存一次。"}
         </div>
       </div>
       <div className="setting-item">
         <div className="setting-label">定时保存</div>
         <div className="setting-desc">
-          待办的标题或正文改动后，隔多久自动保存。从第一处未保存的修改开始计时，继续输入不会推迟保存。只在开启 auto save 时生效。
+          待办的标题或正文改动后，隔多久自动保存。从第一处未保存的修改开始计时，继续输入不会推迟保存。只在开启 auto save 时生效，关闭时固定为 1 小时。
         </div>
         <div className={`setting-row${autoSave ? "" : " muted"}`}>
           <span>修改后</span>
