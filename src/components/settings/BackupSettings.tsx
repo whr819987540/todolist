@@ -1,10 +1,10 @@
 import { CloudUploadOutlined, DownloadOutlined, FolderOpenOutlined, ReloadOutlined } from "@ant-design/icons";
 import { App as AntApp, Button, Form, Input, Spin } from "antd";
 import { useCallback, useEffect, useState } from "react";
-import { api, errMsg } from "../api";
-import { useSettings } from "../settings";
-import type { RemoteBackup, SettingsInfo, WebDavConfig, WebDavInfo } from "../types";
-import { fullTime } from "../utils";
+import { api, errMsg } from "../../api";
+import { useSettings } from "../../settings";
+import type { RemoteBackup, SettingsInfo, WebDavConfig, WebDavInfo } from "../../types";
+import { fullTime } from "../../utils";
 
 type FormValues = WebDavConfig & { password: string };
 
