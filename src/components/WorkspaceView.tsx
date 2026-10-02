@@ -307,7 +307,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   }));
 
   /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
-  const flushEditor = () => editorRef.current?.flush() ?? Promise.resolve();
+  const flushEditor = () => editorRef.current?.flush() ?? Promise.resolve(true);
 
   /** 改选中的工作区（至少保留一个）；右侧显示的工作区被取消选中时改显示第一个 */
   const changeWorkspaces = (list: string[]) => {
@@ -402,7 +402,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         reload().then(() => message.success("已刷新"));
       } else if (ctrl && key === "s") {
         e.preventDefault();
-        flushEditor().then(() => message.success("已保存"));
+        // 有冲突（弹出了冲突对话框）、保存失败（已提示）时不提示「已保存」
+        flushEditor().then((saved) => saved && message.success("已保存"));
       } else if (ctrl && key === "f") {
         e.preventDefault();
         searchRef.current?.focus({ cursor: "all" });

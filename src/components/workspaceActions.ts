@@ -49,7 +49,7 @@ export interface ActionContext {
   /** 先存盘再返回首页 */
   goHome: () => void;
   /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
-  flushEditor: () => Promise<void>;
+  flushEditor: () => Promise<unknown>;
   editorRef: React.RefObject<EditorHandle | null>;
   openDialog: ReturnType<typeof useNameDialog>[1];
   collapsed: PerWorkspace<Collapsed>;

@@ -43,8 +43,11 @@ import {
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 
 export interface EditorHandle {
-  /** 立即保存所有未保存的修改（Ctrl+S、重命名 / 移动等操作前），不受 auto save 开关影响 */
-  flush(): Promise<void>;
+  /**
+   * 立即保存所有未保存的修改（Ctrl+S、重命名 / 移动等操作前），不受 auto save 开关影响。
+   * 返回是否都存好了（没有要存的也算）；正文有冲突（弹出了冲突对话框）、保存失败（已提示）时为 false
+   */
+  flush(): Promise<boolean>;
   /** 待办已被删除/移走：之后不再尝试保存。撤销记录先按原来的位置留下，由 workspaceState 跟到新位置 */
   detach(): void;
 }
@@ -209,15 +212,22 @@ export default function TodoEditor(props: Props) {
     return s.chain;
   };
 
-  const saveContent = (force = false) => {
-    return enqueue(async () => {
-      if (!s.loaded || s.detached || (s.conflict && !force)) return;
+  /** 存正文；返回是否存好了（没有要存的也算），有冲突、保存失败时为 false */
+  const saveContent = (force = false): Promise<boolean> => {
+    let ok = true;
+    const job = enqueue(async () => {
+      if (!s.loaded || s.detached) return;
+      if (s.conflict && !force) {
+        ok = false;
+        return;
+      }
       const text = s.content;
       if (text === s.savedContent && !force) return;
       setStatus("saving");
       try {
         const r = await api.saveTodoContent(workspace, project, id, text, s.mtime, force);
         if (!r.saved) {
+          ok = false;
           s.conflict = true;
           setConflict(true);
           setStatus("dirty");
@@ -230,14 +240,18 @@ export default function TodoEditor(props: Props) {
         propsRef.current.onSummary(r.summary);
         refreshStatus();
       } catch (e) {
+        ok = false;
         setStatus("error");
         messageRef.current.error(`保存失败：${errMsg(e)}`);
       }
     });
+    return job.then(() => ok);
   };
 
-  const saveTitle = () => {
-    return enqueue(async () => {
+  /** 存标题；返回是否存好了（没有要存的也算） */
+  const saveTitle = (): Promise<boolean> => {
+    let ok = true;
+    const job = enqueue(async () => {
       if (s.detached) return;
       const t = s.title;
       if (t === s.savedTitle) return;
@@ -247,10 +261,12 @@ export default function TodoEditor(props: Props) {
         propsRef.current.onSummary(r);
         refreshStatus();
       } catch (e) {
+        ok = false;
         setStatus("error");
         messageRef.current.error(`保存标题失败：${errMsg(e)}`);
       }
     });
+    return job.then(() => ok);
   };
 
   /** 记下编辑位置（存在数据目录的 .state.json），下次打开这条待办时回到这里；改名、移动、删除之后（detached）不再记 */
@@ -266,11 +282,13 @@ export default function TodoEditor(props: Props) {
     s.positionTimer = window.setTimeout(savePosition, POSITION_DELAY);
   };
 
-  const flush = () => {
+  /** 立即存标题和正文，返回是否都存好了 */
+  const flush = async () => {
     stopTimer();
     savePosition();
-    saveTitle();
-    return saveContent();
+    const title = saveTitle();
+    const content = saveContent();
+    return (await title) && (await content);
   };
 
   // 加载正文；卸载（切换到别的待办、返回首页等）时把没保存的写盘，不受 auto save 开关影响，同时记下编辑位置

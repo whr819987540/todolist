@@ -26,14 +26,14 @@ export function useWindowFocus(onChange: (focused: boolean) => void) {
 // ----- 隐藏到托盘、退出前把未保存的内容写盘 -----
 
 interface Flusher {
-  flush: () => Promise<void>;
+  flush: () => Promise<unknown>;
   /** 正在编辑的待办：隐藏到托盘时受 auto save 开关管；设置等其他内容总是直接写盘 */
   todo: boolean;
 }
 
 const flushers = new Set<Flusher>();
 
-export function registerFlusher(flush: () => Promise<void>, todo = false): () => void {
+export function registerFlusher(flush: () => Promise<unknown>, todo = false): () => void {
   const f = { flush, todo };
   flushers.add(f);
   return () => {
