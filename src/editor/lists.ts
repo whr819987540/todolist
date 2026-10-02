@@ -65,22 +65,70 @@ function itemNumber(state: EditorState, item: SyntaxNode) {
   return Number.isNaN(value) ? null : { from: mark.from, to: mark.to - 1, value };
 }
 
-/**
- * 有序列表从 item 起重新编号：item 接在前一项后面（它是第一项时为 1），后面原本连续编号的各项跟着改；
- * 碰到不连续的（如全写成 1.）就停下，不动别处的写法
- */
-function renumberFrom(state: EditorState, item: SyntaxNode, out: Map<number, ChangeSpec>) {
-  if (item.parent?.name !== "OrderedList") return;
+/** item 的序号是不是紧接着前一项（没有前一项时算是） */
+function followsPrev(state: EditorState, item: SyntaxNode): boolean {
   const prev = siblingItem(item, -1);
-  let next = prev ? (itemNumber(state, prev)?.value ?? 0) + 1 : 1;
+  if (!prev) return true;
+  const a = itemNumber(state, prev);
+  const b = itemNumber(state, item);
+  return !!a && !!b && b.value === a.value + 1;
+}
+
+/** 接在 item 前一项后面的序号；item 是第一项时为 1 */
+function numberAfterPrev(state: EditorState, item: SyntaxNode): number {
+  const prev = siblingItem(item, -1);
+  return prev ? (itemNumber(state, prev)?.value ?? 0) + 1 : 1;
+}
+
+function setNumber(state: EditorState, item: SyntaxNode, value: number, out: Map<number, ChangeSpec>) {
+  const num = itemNumber(state, item);
+  if (num && num.value !== value) out.set(num.from, { from: num.from, to: num.to, insert: String(value) });
+}
+
+/**
+ * 从 item 起，把原本连续编号的一串改成从 start 开始编号；碰到和前一项原来的序号不连续的（如全写成 1.）就停下，
+ * 不动别处的写法
+ */
+function renumberRun(state: EditorState, item: SyntaxNode, start: number, out: Map<number, ChangeSpec>) {
+  let next = start;
   let old: number | null = null;
   for (let n: SyntaxNode | null = item; n; n = siblingItem(n, 1)) {
     const num = itemNumber(state, n);
     if (!num || (old !== null && num.value !== old + 1)) break;
     old = num.value;
-    if (num.value !== next) out.set(num.from, { from: num.from, to: num.to, insert: String(next) });
-    next++;
+    setNumber(state, n, next++, out);
   }
+}
+
+/**
+ * 移进有序列表的几项（block：移动后的文档里，从第一项起相连的几项）重新编号。这个列表原本是连续编号的，
+ * 就接在前一项后面编号，后面的项跟着往后排；原本不是连续编号的（如全写成 1.）不动。
+ * 原本连不连续看移进来的地方：前后都有项时看这两项的序号是不是相邻；只有前面有时看前一项是不是接着它前面那项；
+ * 只有后面有时看后面两项；都没有（移过去成了新的列表）时看移过去的几项自己。
+ * 后面的项按它们自己原来的序号判断还连不连续，和移进来的几项原来是几号无关
+ */
+function renumberMovedIn(state: EditorState, block: SyntaxNode[], out: Map<number, ChangeSpec>) {
+  const first = block[0];
+  if (first.parent?.name !== "OrderedList") return;
+  const prev = siblingItem(first, -1);
+  const next = siblingItem(block[block.length - 1], 1);
+  let consecutive: boolean;
+  if (prev && next) {
+    const a = itemNumber(state, prev);
+    const b = itemNumber(state, next);
+    consecutive = !!a && !!b && b.value === a.value + 1;
+  } else if (prev) {
+    consecutive = followsPrev(state, prev);
+  } else if (next) {
+    const second = siblingItem(next, 1);
+    consecutive = !second || followsPrev(state, second);
+  } else {
+    consecutive = block.every((b, i) => i === 0 || followsPrev(state, b));
+  }
+  if (!consecutive) return;
+  let n = numberAfterPrev(state, first);
+  for (const b of block) setNumber(state, b, n++, out);
+  if (next) renumberRun(state, next, n, out);
 }
 
 /**
@@ -140,15 +188,24 @@ export function indentListItems(view: EditorView, dir: 1 | -1): boolean {
   // 有序列表重新编号：移过去的那几项接在新位置的前一项后面；原来跟在它们后面的，接在原来的前一项后面
   const after = state.update({ changes: moved }).state;
   const afterTree = fullTree(after);
+  const markAfter = (item: SyntaxNode) => moved.mapPos(item.getChild("ListMark")?.from ?? item.from, 1);
+  /** 移动前的列表项在移动后的文档里是哪个节点 */
+  const nodeAfter = (item: SyntaxNode) => itemAt(afterTree, markAfter(item));
   const renumber = new Map<number, ChangeSpec>();
-  // 原来后面那项和移走的不是连续编号（如全写成 1.）时不管它
+  const firstNow = nodeAfter(first);
+  if (firstNow) {
+    const movedMarks = new Set(tops.map(markAfter));
+    const block: SyntaxNode[] = [];
+    for (let n: SyntaxNode | null = firstNow; n && movedMarks.has(n.getChild("ListMark")?.from ?? n.from); n = siblingItem(n, 1))
+      block.push(n);
+    renumberMovedIn(after, block, renumber);
+  }
+  // 原来跟在后面的那项和移走的不是连续编号（如全写成 1.）时不管它
   const following = siblingItem(last, 1);
   const lastNum = itemNumber(state, last);
-  const next = following && lastNum && itemNumber(state, following)?.value === lastNum.value + 1 ? following : null;
-  for (const item of [first, next]) {
-    const mark = item?.getChild("ListMark");
-    const now = mark && itemAt(afterTree, moved.mapPos(mark.from, 1));
-    if (now) renumberFrom(after, now, renumber);
+  if (following && lastNum && itemNumber(state, following)?.value === lastNum.value + 1) {
+    const now = nodeAfter(following);
+    if (now) renumberRun(after, now, numberAfterPrev(after, now), renumber);
   }
   const all = moved.compose(after.changes([...renumber.values()]));
   view.dispatch({
