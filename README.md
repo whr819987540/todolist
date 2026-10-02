@@ -195,7 +195,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
   - `links.ts`：解析链接地址、Ctrl+单击打开
   - `codeFences.ts`：代码块自动补结尾、Ctrl+Enter / ↓ 跳出代码块
   - `position.ts`：编辑位置（光标和选区另一端、光标在编辑区里的高度、它们前后的原文），打开待办和外部修改后重新加载时据此找回光标（选区）和滚动
-- `src/components/`：首页（含搜索）、工作区视图、侧栏树、概览、拖动移动（`DragMove.tsx`，用鼠标事件自己实现，没用 HTML5 拖放；放下的位置按侧栏节点上的 `data-drop-ws` / `data-drop-project` 找）、编辑器（`TodoEditor` 管定时保存（auto save 关闭时 1 小时兜底）、auto save、冲突和记下编辑位置，`MarkdownEditor` 包装 CodeMirror）、设置（常规、快捷键、外观、保存、备份与恢复）
+- `src/components/`：首页（含搜索）、工作区视图、侧栏树、概览、拖动移动（`DragMove.tsx`，用鼠标事件自己实现，没用 HTML5 拖放；放下的位置按侧栏节点上的 `data-drop-ws` / `data-drop-project` 找）、编辑器（`TodoEditor` 管定时保存（auto save 关闭时 1 小时兜底）、auto save、冲突和记下编辑位置，打字时不重新渲染，状态栏的字数、行数停顿片刻再算（`utils.ts` 的 `textStats`），`MarkdownEditor` 包装 CodeMirror）、设置（常规、快捷键、外观、保存、备份与恢复）
   - 待办多（几千条）时侧栏也要快：`WorkspaceView` 刷新（窗口获得焦点、F5、保存后）时内容没变的工作区、项目、待办沿用原来的对象，什么都没变就不重新渲染；`Sidebar` 的工作区、项目、待办行都用 `memo`，只有自己的内容、选中、折叠、拖动状态变了才重新渲染（传给行的操作、拖动函数都是不变的对象；「x 分钟前」只有显示会变的行跟着每 30 秒刷新），待办行的悬停提示和右键菜单不每行各挂一个 antd 组件，整个侧栏共用一个；不在可见区域的项目里的待办不排版、不绘制（`.todo-group` 的 `content-visibility: auto`，加在项目这一级，加在每一行上反而让每一帧都变慢）
 - `scripts/release.mjs`：改版本号、打包并安装到本机（`npm run release`，`release:fast` 传 `--fast`）
 

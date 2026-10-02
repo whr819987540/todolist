@@ -92,11 +92,41 @@ export function matchTodo(t: TodoSummary, keyword: string): boolean {
   return t.title.toLowerCase().includes(k) || t.preview.toLowerCase().includes(k);
 }
 
-/** 字数：不计空白字符 */
-export function countChars(text: string): number {
-  let n = 0;
-  for (const ch of text) if (!/\s/.test(ch)) n++;
-  return n;
+/** 和正则 \s 一样的空白字符（UTF-16 码元） */
+function isSpace(c: number): boolean {
+  if (c <= 0x20) return c === 0x20 || (c >= 0x09 && c <= 0x0d);
+  if (c < 0xa0) return false;
+  return (
+    c === 0xa0 ||
+    c === 0x1680 ||
+    (c >= 0x2000 && c <= 0x200a) ||
+    c === 0x2028 ||
+    c === 0x2029 ||
+    c === 0x202f ||
+    c === 0x205f ||
+    c === 0x3000 ||
+    c === 0xfeff
+  );
+}
+
+/**
+ * 状态栏的字数和行数。字数不计空白字符，一个字（含 emoji 等 UTF-16 代理对）算一个；
+ * 逐个码元判断，不对每个字符跑正则，几十 KB 的正文也很快
+ */
+export function textStats(text: string): { chars: number; lines: number } {
+  let chars = 0;
+  let lines = text ? 1 : 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 0x0a) lines++;
+    // 代理对的后半个和前半个算同一个字
+    if (c >= 0xdc00 && c <= 0xdfff && i > 0) {
+      const prev = text.charCodeAt(i - 1);
+      if (prev >= 0xd800 && prev <= 0xdbff) continue;
+    }
+    if (!isSpace(c)) chars++;
+  }
+  return { chars, lines };
 }
 
 const AVATAR_COLORS = ["#1677ff", "#13a8a8", "#52c41a", "#fa8c16", "#722ed1", "#eb2f96", "#2f54eb", "#fa541c"];

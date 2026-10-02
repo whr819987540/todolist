@@ -31,7 +31,7 @@ import { registerFlusher, useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
-import { countChars, formatDuration, fullTime, relativeTime, useNow } from "../utils";
+import { formatDuration, fullTime, relativeTime, textStats, useNow } from "../utils";
 import {
   keepUndo,
   readEditorMode,
@@ -71,6 +71,9 @@ const WHEEL_STEP = 50;
 /** 光标、滚动停下来多久后记下编辑位置（ms）；离开这条待办、窗口失去焦点时立即记 */
 const POSITION_DELAY = 1000;
 
+/** 打字停下来多久后更新状态栏的字数、行数（ms） */
+const STATS_DELAY = 300;
+
 /**
  * auto save 关闭时的兜底（秒）：有未保存的修改，从第一处开始满 1 小时也自动保存一次，
  * 免得程序在托盘里挂好几天、改了的内容一直只在内存里。auto save 开着时按设置的间隔（不超过 1 小时）
@@ -105,7 +108,10 @@ export default function TodoEditor(props: Props) {
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [content, setContent] = useState("");
+  // 正文只在创建编辑器时读一次；之后的正文在 s.content 里，打字时不重新渲染这个组件
+  const [initialDoc, setInitialDoc] = useState("");
+  // 状态栏的字数、行数：打字停下来一会儿再算，不是每次按键都对全文统计
+  const [stats, setStats] = useState({ chars: 0, lines: 0 });
   const [title, setTitle] = useState(summary.title);
   const [path, setPath] = useState("");
   const [encoding, setEncoding] = useState<TextEncoding>("UTF-8");
@@ -150,6 +156,7 @@ export default function TodoEditor(props: Props) {
     /** 还没记下的编辑位置 */
     position: null as EditPosition | null,
     positionTimer: 0,
+    statsTimer: 0,
   }).current;
 
   const isDirty = () => s.content !== s.savedContent || s.title !== s.savedTitle;
@@ -270,7 +277,8 @@ export default function TodoEditor(props: Props) {
         s.mtime = d.mtime;
         s.loaded = true;
         setInitialHistory(takeUndo(workspace, project, id, d.content));
-        setContent(d.content);
+        setInitialDoc(d.content);
+        setStats(textStats(d.content));
         setPath(d.path);
         setEncoding(d.encoding);
         setLoading(false);
@@ -294,6 +302,7 @@ export default function TodoEditor(props: Props) {
     };
     return () => {
       cancelled = true;
+      window.clearTimeout(s.statsTimer);
       unregister();
       flush();
     };
@@ -339,7 +348,8 @@ export default function TodoEditor(props: Props) {
   const applyDiskContent = (d: TodoDetail) => {
     s.content = s.savedContent = d.content;
     s.mtime = d.mtime;
-    setContent(d.content);
+    window.clearTimeout(s.statsTimer);
+    setStats(textStats(d.content));
     setEncoding(d.encoding);
     refreshStatus();
     mdRef.current?.reset(d.content);
@@ -381,8 +391,9 @@ export default function TodoEditor(props: Props) {
 
   const onContentChange = (text: string) => {
     s.content = text;
-    setContent(text);
     refreshStatus();
+    window.clearTimeout(s.statsTimer);
+    s.statsTimer = window.setTimeout(() => setStats(textStats(s.content)), STATS_DELAY);
   };
 
   /** composing：输入法组合中（拼音还没上屏），这时只更新输入框，不算修改 */
@@ -448,8 +459,6 @@ export default function TodoEditor(props: Props) {
       message.error("复制失败");
     }
   };
-
-  const lines = content ? content.split("\n").length : 0;
 
   return (
     <section className="editor">
@@ -548,7 +557,7 @@ export default function TodoEditor(props: Props) {
             )}
             <MarkdownEditor
               handleRef={mdRef}
-              initialDoc={content}
+              initialDoc={initialDoc}
               initialPosition={initialPosition}
               initialHistory={initialHistory}
               mode={mode}
@@ -588,8 +597,8 @@ export default function TodoEditor(props: Props) {
             {{ saved: "已保存", dirty: "未保存", saving: "正在保存…", error: "保存失败" }[status]}
           </span>
         </Tooltip>
-        <span>{countChars(content)} 字</span>
-        <span>{lines} 行</span>
+        <span>{stats.chars} 字</span>
+        <span>{stats.lines} 行</span>
         <span className={readOnly ? "warning-text" : undefined}>Markdown · {ENCODING_LABELS[encoding]}</span>
         <Tooltip
           title={
