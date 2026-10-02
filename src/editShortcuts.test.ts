@@ -4,6 +4,7 @@ import {
   type EditCommandId,
   EDIT_SHORTCUTS,
   editBindingTable,
+  editShortcutConflict,
   effectiveEditShortcuts,
 } from "./editShortcuts";
 import { checkShortcut, normalizeShortcut } from "./shortcuts";
@@ -104,5 +105,44 @@ describe("按键 → 命令", () => {
     const table = editBindingTable(effectiveEditShortcuts({ bold: "Tab", italic: "Ctrl+U" }));
     expect(lookup(table, "Tab")).toBe("indent");
     expect(lookup(table, "Ctrl+U")).toBe("italic");
+  });
+
+  it("设置文件里手改成软件内置的组合（F5 / Ctrl+R 刷新、Ctrl+S 保存等）的不绑定", () => {
+    const table = editBindingTable(effectiveEditShortcuts({ bold: "Ctrl+R", italic: "F5", underline: "ctrl+s" }));
+    expect(lookup(table, "Ctrl+R")).toBeUndefined();
+    expect(lookup(table, "F5")).toBeUndefined();
+    expect(lookup(table, "Ctrl+S")).toBeUndefined();
+  });
+});
+
+describe("设置里对重复的编辑快捷键的提示", () => {
+  const app = [
+    { key: "Ctrl+Alt+T", label: "显示 / 隐藏主窗口" },
+    { key: "Ctrl+Alt+D", label: "标记完成 / 未完成" },
+  ];
+  const conflict = (changed: Record<string, string | null>, id: EditCommandId) =>
+    editShortcutConflict(id, effectiveEditShortcuts(changed), app);
+
+  it("没重复时没有提示", () => {
+    expect(conflict({}, "bold")).toBeUndefined();
+    expect(conflict({ bold: null }, "bold")).toBeUndefined();
+  });
+
+  it("和刷新（F5 / Ctrl+R）重复：这个不起作用", () => {
+    expect(conflict({ bold: "Ctrl+R" }, "bold")).toBe("Ctrl + R 是常用的「刷新」快捷键，这个不起作用");
+    expect(conflict({ bold: "F5" }, "bold")).toBe("F5 是常用的「刷新」快捷键，这个不起作用");
+  });
+
+  it("和应用快捷键重复：执行的是应用快捷键", () => {
+    expect(conflict({ bold: "Ctrl+Alt+D" }, "bold")).toBe("和「标记完成 / 未完成」重复，在正文里按下时执行的是「标记完成 / 未完成」");
+  });
+
+  it("和固定按键重复", () => {
+    expect(conflict({ bold: "Shift+Tab" }, "bold")).toBe("和编辑快捷键「减少缩进」的固定按键重复，这个不起作用");
+  });
+
+  it("和前面的编辑快捷键重复：后面这个不起作用，前面那个照常", () => {
+    expect(conflict({ italic: "Ctrl+B" }, "italic")).toBe("和编辑快捷键「加粗」重复，这个不起作用");
+    expect(conflict({ italic: "Ctrl+B" }, "bold")).toBeUndefined();
   });
 });

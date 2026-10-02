@@ -4,7 +4,7 @@ import { api, errMsg } from "../api";
 import { useWindowFocus } from "../hooks";
 import { type How, visit } from "../navHistory";
 import { useSettings } from "../settings";
-import { eventShortcut, sameShortcut } from "../shortcuts";
+import { eventShortcut, isRefreshShortcut, sameShortcut } from "../shortcuts";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { compareName, useLocalState } from "../utils";
 import {
@@ -397,7 +397,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         else sidebarRef.current?.move(e.key === "ArrowDown" ? 1 : -1);
         return;
       }
-      if (e.key === "F5" || (ctrl && key === "r")) {
+      if (isRefreshShortcut(e)) {
         e.preventDefault();
         reload().then(() => message.success("已刷新"));
       } else if (ctrl && key === "s") {

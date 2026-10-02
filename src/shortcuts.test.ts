@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   checkShortcut,
   eventShortcut,
+  isRefreshShortcut,
   keyName,
   normalizeShortcut,
+  reservedShortcut,
   sameShortcut,
   shortcutLabel,
 } from "./shortcuts";
@@ -33,6 +35,26 @@ describe("按键事件 → 快捷键", () => {
     expect(eventShortcut({ ...ev("BracketLeft", { ctrl: true, shift: true }), key: "【" } as never)).toBe(
       "Ctrl+Shift+BracketLeft",
     );
+  });
+});
+
+describe("刷新的按键", () => {
+  it("F5、Ctrl+R 刷新", () => {
+    expect(isRefreshShortcut(ev("F5"))).toBe(true);
+    expect(isRefreshShortcut(ev("KeyR", { ctrl: true }))).toBe(true);
+  });
+
+  it("带了别的修饰键的不算（这些组合可以设成自定义快捷键，不能一按就同时刷新）", () => {
+    expect(isRefreshShortcut(ev("F5", { ctrl: true }))).toBe(false);
+    expect(isRefreshShortcut(ev("F5", { alt: true }))).toBe(false);
+    expect(isRefreshShortcut(ev("KeyR", { ctrl: true, shift: true }))).toBe(false);
+    expect(isRefreshShortcut(ev("KeyR", { ctrl: true, alt: true }))).toBe(false);
+    expect(isRefreshShortcut(ev("KeyR"))).toBe(false);
+  });
+
+  it("带修饰键的 F5、Ctrl+R 可以录成自定义快捷键", () => {
+    expect(checkShortcut("Ctrl+F5")).toBeNull();
+    expect(checkShortcut("Ctrl+Alt+R")).toBeNull();
   });
 });
 
@@ -66,6 +88,13 @@ describe("录制快捷键时的检查", () => {
     for (const s of ["Ctrl+S", "Ctrl+F", "Ctrl+N", "Ctrl+Z", "Ctrl+Y", "Ctrl+C", "Ctrl+V", "Ctrl+Slash", "Alt+ArrowUp"]) {
       expect(checkShortcut(s), s).toMatch(/请换一个/);
     }
+  });
+
+  it("F5 和 Ctrl+R（刷新）算已占用", () => {
+    expect(checkShortcut("F5")).toBe("F5 是常用的「刷新」快捷键，请换一个");
+    expect(checkShortcut("Ctrl+R")).toBe("Ctrl + R 是常用的「刷新」快捷键，请换一个");
+    expect(reservedShortcut("ctrl+KeyR")).toBe("刷新");
+    expect(reservedShortcut("Ctrl+Alt+R")).toBeNull();
   });
 
   it("和其他已经用着的快捷键重复时说明是哪个", () => {

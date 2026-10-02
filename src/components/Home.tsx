@@ -23,6 +23,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useWindowFocus } from "../hooks";
+import { isRefreshShortcut } from "../shortcuts";
 import { ThemeButton } from "../theme";
 import type { WorkspaceInfo, WorkspaceTree } from "../types";
 import { avatarColor, compareName, firstChar, relativeTime, useNow } from "../utils";
@@ -101,7 +102,7 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
     const onKey = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
-      if (e.key === "F5" || (ctrl && key === "r")) {
+      if (isRefreshShortcut(e)) {
         e.preventDefault();
         reload();
       } else if (ctrl && key === "n") {

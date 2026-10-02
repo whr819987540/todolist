@@ -1,4 +1,4 @@
-import { normalizeShortcut } from "./shortcuts";
+import { normalizeShortcut, reservedShortcut, sameShortcut, shortcutLabel, type TakenShortcut } from "./shortcuts";
 
 // 编辑快捷键：正文编辑区里的 Markdown 编辑操作，默认按键与 Typora（Windows）相同。
 // 和应用快捷键（显示 / 隐藏主窗口等，以及 Ctrl+N、Ctrl+S 这类内置的）分开：只在正文编辑器里生效。
@@ -114,7 +114,10 @@ export function effectiveEditShortcuts(changed: Readonly<Record<string, string |
   return out;
 }
 
-/** 按键（normalizeShortcut 后）→ 命令：固定按键在前，重复的按先到的算 */
+/**
+ * 按键（normalizeShortcut 后）→ 命令：固定按键在前，重复的按先到的算。
+ * 设置文件里手改成软件内置组合（Ctrl+S 保存、F5 / Ctrl+R 刷新、Ctrl+C 复制等）的不绑定，那些键照常做原来的事
+ */
 export function editBindingTable(map: EditShortcutMap): Map<string, EditCommandId> {
   const table = new Map<string, EditCommandId>();
   const add = (key: string | null | undefined, id: EditCommandId) => {
@@ -122,6 +125,31 @@ export function editBindingTable(map: EditShortcutMap): Map<string, EditCommandI
     if (k && !table.has(k)) table.set(k, id);
   };
   for (const s of EDIT_SHORTCUTS) if (s.id) for (const k of s.fixed ?? []) add(k, s.id);
-  for (const s of CONFIGURABLE_EDIT_SHORTCUTS) add(map[s.id], s.id);
+  for (const s of CONFIGURABLE_EDIT_SHORTCUTS) {
+    const key = map[s.id];
+    if (key && !reservedShortcut(key)) add(key, s.id);
+  }
   return table;
+}
+
+/**
+ * 这一条编辑快捷键的按键和别的重复时（手改过设置文件等），说明实际执行的是哪个；不重复时返回 undefined。
+ * app 是应用快捷键（显示 / 隐藏主窗口等）现在用的按键
+ */
+export function editShortcutConflict(
+  id: EditCommandId,
+  map: EditShortcutMap,
+  app: readonly TakenShortcut[],
+): string | undefined {
+  const value = map[id];
+  if (!value) return undefined;
+  const appKey = app.find((a) => sameShortcut(a.key, value));
+  if (appKey) return `和「${appKey.label}」重复，在正文里按下时执行的是「${appKey.label}」`;
+  const reserved = reservedShortcut(value);
+  if (reserved) return `${shortcutLabel(value)} 是常用的「${reserved}」快捷键，这个不起作用`;
+  const fixed = EDIT_SHORTCUTS.find((e) => e.fixed?.some((k) => sameShortcut(k, value)));
+  if (fixed) return `和编辑快捷键「${fixed.label}」的固定按键重复，这个不起作用`;
+  const before = CONFIGURABLE_EDIT_SHORTCUTS.slice(0, CONFIGURABLE_EDIT_SHORTCUTS.findIndex((e) => e.id === id));
+  const earlier = before.find((e) => sameShortcut(map[e.id], value));
+  return earlier ? `和编辑快捷键「${earlier.label}」重复，这个不起作用` : undefined;
 }

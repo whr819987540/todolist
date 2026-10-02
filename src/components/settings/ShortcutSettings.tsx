@@ -6,6 +6,7 @@ import {
   type EditCommandId,
   EDIT_SHORTCUT_GROUPS,
   EDIT_SHORTCUTS,
+  editShortcutConflict,
 } from "../../editShortcuts";
 import { useEditShortcuts, useSettings } from "../../settings";
 import { checkShortcut, sameShortcut, shortcutLabel, type TakenShortcut } from "../../shortcuts";
@@ -154,18 +155,6 @@ function EditShortcutSettings({
     saveAll({}, "编辑快捷键已全部恢复默认");
   };
 
-  /** 这一条的按键和别的重复时（手改过设置文件等），说明实际执行的是哪个 */
-  const conflict = (id: EditCommandId, value: string | null): string | undefined => {
-    if (!value) return undefined;
-    const app = appKeys.find((a) => sameShortcut(a.key, value));
-    if (app) return `和「${app.label}」重复，在正文里按下时执行的是「${app.label}」`;
-    const fixed = EDIT_SHORTCUTS.find((e) => e.fixed?.some((k) => sameShortcut(k, value)));
-    if (fixed) return `和编辑快捷键「${fixed.label}」的固定按键重复，这个不起作用`;
-    const before = CONFIGURABLE_EDIT_SHORTCUTS.slice(0, CONFIGURABLE_EDIT_SHORTCUTS.findIndex((e) => e.id === id));
-    const earlier = before.find((e) => sameShortcut(edit[e.id], value));
-    return earlier ? `和编辑快捷键「${earlier.label}」重复，这个不起作用` : undefined;
-  };
-
   return (
     <>
       <div className="setting-group with-action">
@@ -194,7 +183,7 @@ function EditShortcutSettings({
                   note={item.fixed?.length ? `（或 ${item.fixed.join(" / ")}）` : undefined}
                   value={edit[id]}
                   defaultValue={defaultKey}
-                  warning={conflict(id, edit[id])}
+                  warning={editShortcutConflict(id, edit, appKeys)}
                   {...recorder(`edit:${id}`)}
                   onSave={async (shortcut) => {
                     const next = { ...changed };

@@ -62,7 +62,7 @@ export const shortcutLabel = (s: string) => s.split("+").map(keyLabel).join(" + 
 
 /** 软件内置或文本编辑常用的组合，不能设成自定义快捷键 */
 const RESERVED: Record<string, string> = {
-  "Ctrl+S": "保存", "Ctrl+F": "搜索", "Ctrl+N": "新建", "Ctrl+R": "刷新",
+  "Ctrl+S": "保存", "Ctrl+F": "搜索", "Ctrl+N": "新建", F5: "刷新", "Ctrl+R": "刷新",
   "Ctrl+A": "全选", "Ctrl+C": "复制", "Ctrl+V": "粘贴", "Ctrl+X": "剪切",
   "Ctrl+Z": "撤销", "Ctrl+Y": "重做", "Ctrl+Shift+Z": "重做",
   "Alt+ArrowLeft": "切换到左侧列表", "Alt+ArrowRight": "切换到右侧编辑区",
@@ -73,6 +73,19 @@ const RESERVED: Record<string, string> = {
   "Ctrl+Backspace": "删除前一个词", "Ctrl+Delete": "删除后一个词",
 };
 
+const RESERVED_NORMALIZED = new Map(Object.entries(RESERVED).map(([k, label]) => [normalizeShortcut(k), label]));
+
+/** 软件内置或文本编辑常用的组合（不能设成自定义快捷键）的名称，如「刷新」；不是的返回 null。写法不同也认 */
+export function reservedShortcut(s: string): string | null {
+  return RESERVED_NORMALIZED.get(normalizeShortcut(s)) ?? null;
+}
+
+/** 刷新：F5 或 Ctrl+R（不带别的修饰键）。WebView 自己的整页刷新在 main.tsx 里挡掉了，这里换成重新读取数据 */
+export function isRefreshShortcut(e: KeyState): boolean {
+  const s = eventShortcut(e);
+  return s === "F5" || s === "Ctrl+R";
+}
+
 /** 已经被占用的快捷键，label 如「标记完成 / 未完成」、编辑快捷键「加粗」 */
 export interface TakenShortcut {
   key: string | null | undefined;
@@ -81,10 +94,10 @@ export interface TakenShortcut {
 
 /** 录到的快捷键不能用时返回原因；taken 是其他已经用着的快捷键（不含正在改的这个） */
 export function checkShortcut(s: string, taken: readonly TakenShortcut[] = []): string | null {
+  const reserved = reservedShortcut(s);
+  if (reserved) return `${shortcutLabel(s)} 是常用的「${reserved}」快捷键，请换一个`;
   const parts = s.split("+");
   if (!parts.includes("Ctrl") && !parts.includes("Alt")) return "需要包含 Ctrl 或 Alt，例如 Ctrl + Alt + T";
-  const reserved = RESERVED[s];
-  if (reserved) return `${shortcutLabel(s)} 是常用的「${reserved}」快捷键，请换一个`;
   const used = taken.find((t) => sameShortcut(t.key, s));
   return used ? `${shortcutLabel(s)} 已用于${used.label}，请换一个` : null;
 }
