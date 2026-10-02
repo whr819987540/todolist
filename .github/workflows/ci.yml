@@ -1,0 +1,48 @@
+# 每次 push、提 PR 时在 Windows 上检查：ESLint、前端单元测试、前端构建、Rust 单元测试
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# 同一个分支上新的提交到了，前面还没跑完的就不跑了
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # vitest 5 要 Node 22.12 以上（或 24）
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: 前端单元测试
+        run: npm test
+
+      - name: 前端构建（tsc + vite build）
+        run: npm run build
+
+      # 放在前端构建之后：tauri::generate_context! 在不是 dev 的构建（tauri build）里要把 frontendDist（../dist）
+      # 嵌进程序，dist 不在就编译失败。现在的 cargo test 是 dev 构建、用 devUrl，其实不读 dist，
+      # 但先构建好，免得以后换了构建方式（release、custom-protocol）时这一步莫名其妙地失败
+      - name: Rust 单元测试
+        working-directory: src-tauri
+        run: cargo test
