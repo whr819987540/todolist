@@ -98,9 +98,13 @@ export function SettingsProvider({
         const size = saving[FONT_FIELDS[area]];
         if (size != null) await api.setFontSize(area, size);
       }
-      // 背景色和自定义颜色总是一起改
-      if (saving.editorBackground && saving.editorCustomColor) {
-        await api.setEditorBackground(saving.editorBackground, saving.editorCustomColor);
+      // 背景色和自定义颜色在设置文件里总是一起改。待存的可能只有其中一个：上一次存盘期间又改了背景色，
+      // 颜色没变，存完时颜色已从待存里去掉了。另一个取界面上现在用的（已经盖上了待存的值）
+      if (saving.editorBackground || saving.editorCustomColor) {
+        const cur = infoRef.current?.settings;
+        const background = saving.editorBackground ?? cur?.editorBackground;
+        const color = saving.editorCustomColor ?? cur?.editorCustomColor;
+        if (background && color) await api.setEditorBackground(background, color);
       }
       if (saving.autoSave != null || saving.saveDelaySecs != null) {
         const cur = infoRef.current?.settings ?? DEFAULT_SAVE_OPTIONS;
