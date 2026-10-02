@@ -55,7 +55,7 @@ function exitSpec(state: EditorState, block: SyntaxNode): TransactionSpec {
 }
 
 /** Ctrl+Enter：光标在代码块里时跳出 */
-const exitCodeBlock: Command = (view) => {
+export const exitCodeBlock: Command = (view) => {
   const { state } = view;
   if (state.readOnly || state.selection.ranges.length > 1) return false;
   const block = fencedCodeAt(state, state.selection.main.head);
@@ -72,7 +72,7 @@ function onLastRow(view: EditorView, pos: number): boolean {
 }
 
 /** ↓：文末代码块的最后一行再往下，就跳出代码块 */
-const downOutOfCodeBlock: Command = (view) => {
+export const downOutOfCodeBlock: Command = (view) => {
   const { state } = view;
   const sel = state.selection.main;
   if (state.readOnly || state.selection.ranges.length > 1 || !sel.empty) return false;
@@ -84,7 +84,7 @@ const downOutOfCodeBlock: Command = (view) => {
 };
 
 /** 回车：刚输入的 ```语言 没有结尾时，补上结尾并把光标放在中间 */
-const closeFenceOnEnter: Command = (view) => {
+export const closeFenceOnEnter: Command = (view) => {
   const { state } = view;
   const sel = state.selection.main;
   if (state.readOnly || state.selection.ranges.length > 1 || !sel.empty) return false;

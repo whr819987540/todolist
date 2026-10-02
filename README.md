@@ -131,8 +131,11 @@ npm run tauri build     # 正式打包，安装包在 src-tauri/target/release/b
 npm run release         # 打包并安装到本机，见下文
 npm run release:fast    # 同上，但用 release-fast profile 构建，快很多
 npm run lint            # ESLint 检查前端代码（含 React hooks 的规则），要零错误、零警告
+npm test                # 前端单元测试（vitest：编辑快捷键、列表缩进、代码块、编辑位置、后退 / 前进、快捷键检查等）
 cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 ```
+
+前端单元测试放在被测模块旁边（`*.test.ts`），配置在 `vitest.config.ts`。默认在 Node 里跑：编辑命令直接构造 CodeMirror 的 `EditorState` 测（`src/editor/testState.ts` 提供用 `|`、`«»` 标出光标和选区的写法，和编辑器用同一份 Markdown 解析），不需要 DOM；要用 `localStorage` 的（`workspaceState.test.ts`）在文件开头指定 happy-dom。用例按 CLAUDE.md 里写的行为写，不照着实现抄期望值。
 
 ESLint 的配置在 `eslint.config.js`：typescript-eslint 的推荐规则，加上 eslint-plugin-react-hooks 的全部推荐规则（`rules-of-hooks`、`exhaustive-deps` 和 React Compiler 的 `refs`、`immutability`、`purity`、`set-state-in-effect` 等）。代码里有不少刻意绕开 hook 依赖的写法（用 ref 拿最新的值、只在挂载时执行一次的 effect），这些地方就地加了 `eslint-disable-next-line` 并写明原因；不要为了消掉警告机械地补依赖，那会让只该执行一次的 effect 反复执行。
 
@@ -189,7 +192,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
 - `src/workspaceState.ts`：界面状态，记在 `.state.json` 里的（选中的工作区、各工作区上次打开的待办、上次停在哪里、各待办的编辑位置和编辑模式；启动时读一次，改动后稍后写盘，隐藏到托盘、退出前立即写）、记在 localStorage 里的（各工作区的折叠状态、排序和隐藏已完成）和记在内存里的各待办撤销记录，工作区 / 项目改名、删除，待办移动、删除时同步（后退、前进的记录也在这时同步）
 - `src/editShortcuts.ts`：编辑快捷键的列表（命令、名称、默认按键、固定按键、分组），设置里改过的盖在默认值上得到现在用的按键；编辑器按它绑定按键，设置界面按它展示和检查重复
 - `src/editor/`：基于 CodeMirror 6 的正文编辑器
-  - `setup.ts`：组装编辑器（快捷键、Markdown 解析、两种模式的切换）；输入法组合中的改动等上屏后再报告，免得拼音被存盘
+  - `setup.ts`：组装编辑器（快捷键、Markdown 解析、两种模式的切换）；输入法组合中的改动等上屏后再报告，免得拼音被存盘。Markdown 解析的配置（`markdownSupport`）单元测试也用
   - `editBindings.ts`：把编辑快捷键绑到 `formatting.ts`、`lists.ts` 的命令上，每次按键时按现在的设置查表（改了立即生效），先于 CodeMirror 自带的按键、后于应用快捷键
   - `formatting.ts`：编辑快捷键的命令（行内格式、标题、引用、列表、代码块、选词 / 选行），按语法树和行首的块标记增删原文里的标记
   - `lists.ts`：Tab / Shift+Tab 缩进列表项（按语法树找出列表项和它的上一项、上一级，移动整棵子树后给有序列表重新编号），不在列表里时的 Tab

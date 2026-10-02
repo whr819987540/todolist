@@ -1,0 +1,132 @@
+import { describe, expect, it } from "vitest";
+import type { TodoSummary } from "./types";
+import {
+  compactTime,
+  displayTitle,
+  formatDuration,
+  matchTodo,
+  relativeTime,
+  shortTime,
+  sortTodos,
+  textStats,
+} from "./utils";
+
+const todo = (p: Partial<TodoSummary>): TodoSummary => ({
+  id: "20260926-153012",
+  title: "",
+  preview: "",
+  done: false,
+  createdAt: 0,
+  updatedAt: 0,
+  doneAt: null,
+  ...p,
+});
+
+describe("状态栏的字数、行数（textStats）", () => {
+  it("空正文是 0 字 0 行", () => {
+    expect(textStats("")).toEqual({ chars: 0, lines: 0 });
+  });
+
+  it("字数不计空白（空格、制表符、换行、全角空格）", () => {
+    expect(textStats("买 牛奶\t和　面包\n")).toEqual({ chars: 6, lines: 2 });
+  });
+
+  it("中文、英文、数字、标点每个算一个字", () => {
+    expect(textStats("今天 done 3 件，")).toEqual({ chars: 9, lines: 1 });
+  });
+
+  it("emoji 等代理对算一个字", () => {
+    expect(textStats("好👍🎉")).toEqual({ chars: 3, lines: 1 });
+  });
+
+  it("行数按换行算，最后一行没有换行也算一行", () => {
+    expect(textStats("甲\n乙\n丙")).toEqual({ chars: 3, lines: 3 });
+    expect(textStats("甲\n\n")).toEqual({ chars: 1, lines: 3 });
+  });
+
+  it("Markdown 标记也算字（统计的是原文）", () => {
+    expect(textStats("# 标题")).toEqual({ chars: 3, lines: 1 });
+  });
+});
+
+describe("左侧显示的文字（displayTitle）", () => {
+  it("有标题用标题", () => {
+    expect(displayTitle(todo({ title: " 买牛奶 ", preview: "正文" }))).toEqual({ text: "买牛奶", fromContent: false });
+  });
+
+  it("没有标题时用正文开头", () => {
+    expect(displayTitle(todo({ title: "  ", preview: "正文开头" }))).toEqual({ text: "正文开头", fromContent: true });
+  });
+
+  it("都没有时显示「空白待办」", () => {
+    expect(displayTitle(todo({}))).toEqual({ text: "空白待办", fromContent: true });
+  });
+});
+
+describe("排序（sortTodos）", () => {
+  const a = todo({ id: "a", title: "乙", createdAt: 1, updatedAt: 30 });
+  const b = todo({ id: "b", title: "甲", createdAt: 2, updatedAt: 10 });
+  const c = todo({ id: "c", title: "丙", createdAt: 3, updatedAt: 20, done: true });
+  const ids = (l: TodoSummary[]) => l.map((t) => t.id);
+
+  it("按创建时间、修改时间新的在前，已完成的沉底", () => {
+    expect(ids(sortTodos([a, b, c], "created"))).toEqual(["b", "a", "c"]);
+    expect(ids(sortTodos([a, b, c], "updated"))).toEqual(["a", "b", "c"]);
+  });
+
+  it("按标题（中文按拼音）", () => {
+    // 丙 bǐng、甲 jiǎ、乙 yǐ
+    expect(ids(sortTodos([a, b, { ...c, done: false }], "title"))).toEqual(["c", "b", "a"]);
+  });
+
+  it("不改原来的数组", () => {
+    const list = [a, b, c];
+    sortTodos(list, "title");
+    expect(ids(list)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("搜索匹配（matchTodo）", () => {
+  it("标题和正文开头，不分大小写", () => {
+    const t = todo({ title: "Weekly Report", preview: "整理会议纪要" });
+    expect(matchTodo(t, "weekly")).toBe(true);
+    expect(matchTodo(t, "纪要")).toBe(true);
+    expect(matchTodo(t, "预算")).toBe(false);
+    expect(matchTodo(t, "")).toBe(true);
+  });
+});
+
+describe("时间显示", () => {
+  const now = new Date("2026-10-02T15:00:00").getTime();
+  const at = (s: string) => new Date(s).getTime();
+
+  it("相对时间：刚刚 / x 分钟前 / x 小时前，超过一天显示日期", () => {
+    expect(relativeTime(now - 30_000, now)).toBe("刚刚");
+    expect(relativeTime(now - 5 * 60_000, now)).toBe("5 分钟前");
+    expect(relativeTime(now - 3 * 3_600_000, now)).toBe("3 小时前");
+    expect(relativeTime(at("2026-10-01T09:30:00"), now)).toBe("昨天 09:30");
+    expect(relativeTime(at("2026-09-26T14:30:00"), now)).toBe("09-26 14:30");
+    expect(relativeTime(at("2025-09-26T14:30:00"), now)).toBe("2025-09-26");
+  });
+
+  it("侧栏用的紧凑格式", () => {
+    expect(relativeTime(now - 5 * 60_000, now, true)).toBe("5分钟前");
+    expect(compactTime(at("2026-10-02T08:05:00"), now)).toBe("08:05");
+    expect(compactTime(at("2026-10-01T08:05:00"), now)).toBe("昨天 08:05");
+    expect(compactTime(at("2026-09-26T08:05:00"), now)).toBe("09-26");
+    expect(compactTime(at("2025-09-26T08:05:00"), now)).toBe("2025-09-26");
+  });
+
+  it("昨天的「x 小时前」不跨过零点", () => {
+    // 2 小时前是昨天 23:30，显示日期而不是「2 小时前」
+    const early = at("2026-10-02T01:30:00");
+    expect(relativeTime(at("2026-10-01T23:30:00"), early)).toBe("昨天 23:30");
+    expect(shortTime(at("2026-10-02T00:10:00"), early)).toBe("今天 00:10");
+  });
+
+  it("时长", () => {
+    expect(formatDuration(45)).toBe("45 秒");
+    expect(formatDuration(180)).toBe("3 分钟");
+    expect(formatDuration(90)).toBe("1 分 30 秒");
+  });
+});

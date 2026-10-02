@@ -76,6 +76,15 @@ function changeReporter(o: EditorOptions): Extension {
   ];
 }
 
+/**
+ * Markdown 解析（含 GFM：表格、任务列表、删除线、网址自动识别；回车续写列表、退格删除列表标记）和缩进宽度。
+ * 编辑命令按它解析出的语法树增删标记，单元测试构造 EditorState 时用同一份
+ */
+export const markdownSupport = (): Extension[] => [
+  markdown({ base: markdownLanguage, completeHTMLTags: false }),
+  EditorState.tabSize.of(2),
+];
+
 export function createExtensions(o: EditorOptions): Extension[] {
   return [
     // 应用的快捷键交给外层，编辑器不处理（否则 Alt+↑ 会同时移动行和切换左侧选中项）
@@ -97,9 +106,7 @@ export function createExtensions(o: EditorOptions): Extension[] {
       ...defaultKeymap.filter((b) => b.key !== "Mod-/"),
       ...historyKeymap,
     ]),
-    // 含 GFM：表格、任务列表、删除线、网址自动识别；回车续写列表、退格删除列表标记
-    markdown({ base: markdownLanguage, completeHTMLTags: false }),
-    EditorState.tabSize.of(2),
+    ...markdownSupport(),
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({ spellcheck: "false", autocorrect: "off", "aria-label": "待办正文" }),
     placeholder(o.placeholder),
