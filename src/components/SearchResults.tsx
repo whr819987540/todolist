@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import type { ProjectNode, TodoSummary, WorkspaceInfo, WorkspaceTree } from "../types";
 import { compareName, displayTitle, fullTime, matchTodo, relativeTime, useNow } from "../utils";
 import Highlight from "./Highlight";
-import type { Selection } from "./Sidebar";
+import type { Selection } from "./sidebar/tree";
 
 interface Props {
   kw: string;

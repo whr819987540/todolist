@@ -1,7 +1,7 @@
 // 后退 / 前进（鼠标侧键）：这次运行期间看过的地方，按顺序记在内存里，和浏览器一样。
 // 一处是首页，或工作区里右侧显示的内容（工作区概览、项目概览、待办）。
 
-import type { Selection } from "./components/Sidebar";
+import type { Selection } from "./components/sidebar/tree";
 import type { TodoKey } from "./workspaceState";
 
 /** null 是首页 */

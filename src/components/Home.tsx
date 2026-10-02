@@ -32,7 +32,7 @@ import Logo from "./Logo";
 import { useNameDialog } from "./NameDialog";
 import SearchResults from "./SearchResults";
 import SettingsButton from "./SettingsButton";
-import type { Selection } from "./Sidebar";
+import type { Selection } from "./sidebar/tree";
 
 /** 首页：全部工作区 */
 export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: Omit<Selection, "workspace">) => void }) {

@@ -6,7 +6,7 @@
 // 工作区在首页改名 / 删除时也要跟着更新（后退、前进的记录也在这时一起更新），所以放在这里供首页和工作区视图共用。
 
 import { api } from "./api";
-import type { Selection } from "./components/Sidebar";
+import type { Selection } from "./components/sidebar/tree";
 import type { EditPosition, TextAnchor } from "./editor/position";
 import type { EditorMode } from "./editor/setup";
 import { registerFlusher } from "./hooks";

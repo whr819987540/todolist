@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import Home from "./components/Home";
-import type { Selection } from "./components/Sidebar";
+import type { Selection } from "./components/sidebar/tree";
 import WorkspaceView, { type WorkspaceViewHandle } from "./components/WorkspaceView";
 import { flushAll } from "./hooks";
 import { go, visit } from "./navHistory";

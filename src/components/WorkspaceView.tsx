@@ -29,7 +29,8 @@ import {
 import { useDragMove } from "./DragMove";
 import { useNameDialog } from "./NameDialog";
 import { ProjectOverview, WorkspaceOverview } from "./Overview";
-import Sidebar, { WS_KEY, type Selection, type SidebarHandle } from "./Sidebar";
+import Sidebar, { type SidebarHandle } from "./Sidebar";
+import { type Selection, WS_KEY } from "./sidebar/tree";
 import TodoEditor, { type EditorHandle } from "./TodoEditor";
 import { todoMenu, type Actions } from "./menus";
 
