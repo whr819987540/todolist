@@ -15,7 +15,7 @@ import {
   VerticalAlignMiddleOutlined,
 } from "@ant-design/icons";
 import { Button, Checkbox, Dropdown, Input, Popover, Tooltip, type InputRef, type MenuProps } from "antd";
-import { useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { ThemeButton } from "../theme";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
@@ -32,7 +32,7 @@ import {
   useNow,
 } from "../utils";
 import type { ListOptions } from "../workspaceState";
-import { type DragMove, dropClass, isDraggingProject, isDraggingTodo } from "./DragMove";
+import { type DragItem, type DragMove, type DragState, dropClass, isDraggingProject } from "./DragMove";
 import Highlight from "./Highlight";
 import { projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
 import SettingsButton from "./SettingsButton";
@@ -102,8 +102,11 @@ const countAll = (t: WorkspaceTree) => t.projects.reduce((n, p) => n + p.todos.l
 export default function Sidebar(props: Props) {
   const { trees, sel, actionsFor, collapsedOf, setCollapsed, keyword, listOptionsOf } = props;
   const now = useNow();
+  // 跨了一天时所有行的时间显示（今天 / 昨天 / 日期）都要重新算
+  const today = new Date(now).toDateString();
   const kw = keyword.trim();
   const multi = trees.length > 1;
+  const popups = useRowPopups(trees);
 
   const total = trees.reduce((n, t) => n + countAll(t), 0);
   const done = trees.reduce((n, t) => n + countDone(t), 0);
@@ -283,22 +286,29 @@ export default function Sidebar(props: Props) {
         onKeyDown={onTreeKey}
         onMouseDown={() => setKbFocus(false)}
         onBlur={() => setKbFocus(false)}
+        onMouseOver={popups.onMouseOver}
+        onMouseLeave={popups.hideTip}
+        onScroll={popups.hideTip}
       >
         {trees.map((tree) => (
           <WorkspaceBranch
             key={tree.name}
             tree={tree}
-            sel={sel}
+            sel={sel.workspace === tree.name ? sel : undefined}
             actions={actionsFor(tree.name)}
             collapsed={collapsedOf(tree.name)}
-            setCollapsed={(fn) => setCollapsed(tree.name, fn)}
+            setCollapsed={setCollapsed}
             keyword={kw}
             {...listOptionsOf(tree.name)}
             now={now}
-            drag={props.drag}
+            today={today}
+            dragState={props.drag.state}
+            dragStart={props.drag.start}
+            onContextMenu={popups.openMenu}
           />
         ))}
       </div>
+      {popups.node}
 
       <div className="sidebar-foot">
         {multi && `${trees.length} 个工作区，`}共 {total} 条待办，已完成 {done} 条
@@ -307,23 +317,34 @@ export default function Sidebar(props: Props) {
   );
 }
 
-/** 一个工作区：工作区行 + 下面的项目和待办 */
-function WorkspaceBranch(p: {
+/** 打开行的右键菜单（侧栏共用一个，见 useRowPopups） */
+type OpenMenu = (e: React.MouseEvent, menu: MenuProps) => void;
+
+/** 拖动：没在拖时 state 是 null；start 是不变的函数 */
+type DragStart = (e: React.MouseEvent, item: DragItem) => void;
+
+/**
+ * 一个工作区：工作区行 + 下面的项目和待办。
+ * 工作区、项目、待办的行都用 memo：待办可能有几千条，只有内容（对象）、选中、折叠、拖动状态变了的才重新渲染
+ */
+const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   tree: WorkspaceTree;
-  sel: Selection;
+  /** 右侧显示的是这个工作区里的内容时才传 */
+  sel?: Selection;
   actions: Actions;
   collapsed: Collapsed;
-  setCollapsed: (fn: (prev: Collapsed) => Collapsed) => void;
+  setCollapsed: (workspace: string, fn: (prev: Collapsed) => Collapsed) => void;
   keyword: string;
   hideDone: boolean;
   sortKey: SortKey;
   now: number;
-  drag: DragMove;
+  today: string;
+  dragState: DragState | null;
+  dragStart: DragStart;
+  onContextMenu: OpenMenu;
 }) {
-  const { tree, actions: a, collapsed, keyword: kw, hideDone, sortKey } = p;
+  const { tree, sel, actions: a, collapsed, keyword: kw, hideDone, sortKey, setCollapsed } = p;
   const projectNames = useMemo(() => tree.projects.map((x) => x.name), [tree]);
-  // 右侧显示的是这个工作区里的内容时才有选中项
-  const sel = p.sel.workspace === tree.name ? p.sel : undefined;
 
   const visible = useMemo(() => {
     const k = kw.toLowerCase();
@@ -342,11 +363,18 @@ function WorkspaceBranch(p: {
 
   // 搜索时忽略折叠状态，把命中项全部展开
   const isOpen = (key: string) => !!kw || !collapsed[key];
-  const toggle = (key: string) => p.setCollapsed((c) => ({ ...c, [key]: !c[key] }));
+  const toggle = useCallback(
+    (key: string) => setCollapsed(tree.name, (c) => ({ ...c, [key]: !c[key] })),
+    [setCollapsed, tree.name],
+  );
+
+  // 拖动中：正在拖的待办、指针下的项目；只把和某个项目有关的传给它，其他项目不必重新渲染
+  const drag = p.dragState;
+  const dragTodo = drag?.item.kind === "todo" && drag.item.workspace === tree.name ? drag.item : null;
 
   return (
     <div
-      className={["ws-branch", dropClass(p.drag.state, tree.name)].filter(Boolean).join(" ")}
+      className={["ws-branch", dropClass(drag, tree.name)].filter(Boolean).join(" ")}
       role="treeitem"
       aria-expanded={isOpen(WS_KEY)}
       data-drop-ws={tree.name}
@@ -387,14 +415,20 @@ function WorkspaceBranch(p: {
               project={project}
               todos={todos}
               open={isOpen(project.name)}
-              onToggle={() => toggle(project.name)}
-              sel={sel}
+              onToggle={toggle}
+              selected={sel?.project === project.name && !sel.todoId}
+              selTodoId={sel?.project === project.name ? sel.todoId : undefined}
               actions={a}
               projectNames={projectNames}
               keyword={kw}
               now={p.now}
+              today={p.today}
               hideDone={hideDone}
-              drag={p.drag}
+              dropCls={dropClass(drag, tree.name, project.name)}
+              dragSource={isDraggingProject(drag, tree.name, project.name)}
+              draggingTodoId={dragTodo?.project === project.name ? dragTodo.todo.id : undefined}
+              dragStart={p.dragStart}
+              onContextMenu={p.onContextMenu}
             />
           ))}
           {tree.projects.length === 0 && (
@@ -412,55 +446,59 @@ function WorkspaceBranch(p: {
       )}
     </div>
   );
-}
+});
 
-function ProjectBranch(p: {
+const ProjectBranch = memo(function ProjectBranch(p: {
   workspace: string;
   project: ProjectNode;
   todos: TodoSummary[];
   open: boolean;
-  onToggle: () => void;
-  /** 右侧显示的是这个工作区里的内容时才传 */
-  sel?: Selection;
+  /** 折叠 / 展开，参数是项目名 */
+  onToggle: (key: string) => void;
+  /** 右侧显示的是这个项目的概览 */
+  selected: boolean;
+  /** 右侧打开的是这个项目里的哪条待办 */
+  selTodoId?: string;
   actions: Actions;
   projectNames: string[];
   keyword: string;
   now: number;
+  today: string;
   hideDone: boolean;
-  drag: DragMove;
+  /** 拖动时指针在这个项目上：能放下 / 放不下的样式 */
+  dropCls?: string;
+  /** 正在拖的是这个项目 */
+  dragSource: boolean;
+  /** 正在拖的是这个项目里的哪条待办 */
+  draggingTodoId?: string;
+  dragStart: DragStart;
+  onContextMenu: OpenMenu;
 }) {
-  const { project, todos, sel, actions: a } = p;
+  const { project, todos, actions: a } = p;
   const undone = project.todos.filter((t) => !t.done).length;
-  const selected = sel?.project === project.name && !sel.todoId;
   const hiddenDone = p.hideDone ? project.todos.length - undone : 0;
+  const toggle = () => p.onToggle(project.name);
 
   return (
     <div
       role="treeitem"
       aria-expanded={p.open}
       data-drop-project={project.name}
-      className={
-        [
-          dropClass(p.drag.state, p.workspace, project.name),
-          isDraggingProject(p.drag.state, p.workspace, project.name) && "drag-source",
-        ]
-          .filter(Boolean)
-          .join(" ") || undefined
-      }
+      className={[p.dropCls, p.dragSource && "drag-source"].filter(Boolean).join(" ") || undefined}
     >
       <Dropdown menu={projectMenu(a, project.name)} trigger={["contextMenu"]}>
         <div
-          className={`tree-row project-row${selected ? " selected" : ""}`}
+          className={`tree-row project-row${p.selected ? " selected" : ""}`}
           data-sel={selKey({ workspace: p.workspace, project: project.name })}
           style={{ paddingLeft: 22 }}
-          onMouseDown={(e) => p.drag.start(e, { kind: "project", workspace: p.workspace, project: project.name })}
+          onMouseDown={(e) => p.dragStart(e, { kind: "project", workspace: p.workspace, project: project.name })}
           onClick={() => {
             a.selectProject(project.name);
-            if (!p.open) p.onToggle();
+            if (!p.open) toggle();
           }}
-          onDoubleClick={p.onToggle}
+          onDoubleClick={toggle}
         >
-          <Chevron open={p.open} onClick={p.onToggle} />
+          <Chevron open={p.open} onClick={toggle} />
           <span className="project-icon">{p.open ? <FolderOpenFilled /> : <FolderFilled />}</span>
           <span className="row-label" title={project.name}>
             <Highlight text={project.name} kw={p.keyword} />
@@ -476,19 +514,27 @@ function ProjectBranch(p: {
       </Dropdown>
 
       {p.open && (
-        <div role="group">
+        <div
+          role="group"
+          className="todo-group"
+          // 不在可见区域时的占位高度：每行两行文字加上下内边距和间距（14px 字号时约 51px）
+          style={{ containIntrinsicBlockSize: `auto calc(${todos.length} * (2 * var(--fs-sidebar) + 23px))` }}
+        >
           {todos.map((t) => (
             <TodoRow
               key={t.id}
               workspace={p.workspace}
               project={project.name}
               todo={t}
-              selected={sel?.project === project.name && sel.todoId === t.id}
+              selected={p.selTodoId === t.id}
               actions={a}
               projectNames={p.projectNames}
               keyword={p.keyword}
               now={p.now}
-              drag={p.drag}
+              today={p.today}
+              dragged={p.draggingTodoId === t.id}
+              dragStart={p.dragStart}
+              onContextMenu={p.onContextMenu}
             />
           ))}
           {todos.length === 0 && !p.keyword && (
@@ -506,9 +552,9 @@ function ProjectBranch(p: {
       )}
     </div>
   );
-}
+});
 
-function TodoRow(p: {
+interface TodoRowProps {
   workspace: string;
   project: string;
   todo: TodoSummary;
@@ -517,15 +563,86 @@ function TodoRow(p: {
   projectNames: string[];
   keyword: string;
   now: number;
-  drag: DragMove;
-}) {
+  today: string;
+  dragged: boolean;
+  dragStart: DragStart;
+  onContextMenu: OpenMenu;
+}
+
+/**
+ * 修改时间在侧栏显示成什么（relativeTime 的 compact 格式）只取决于它在哪一档：刚刚、第几分钟前、第几小时前，
+ * 再往前是日期，日期只在跨了一天（today 变了）时才变。按这个判断，不必真的格式化
+ */
+function timeBucket(ms: number, now: number): number {
+  const diff = now - ms;
+  if (diff < 60_000) return -1;
+  if (diff < 3_600_000) return Math.floor(diff / 60_000);
+  if (diff < 86_400_000) return 100 + Math.floor(diff / 3_600_000);
+  return 1000;
+}
+
+/**
+ * now 每 30 秒变一次：只有修改时间的显示（「x 分钟前」「x 小时前」）跟着变了的行才重新渲染；
+ * 创建时间和更早的修改时间显示成日期，只在跨了一天（today 变了）时变
+ */
+function sameTodoRow(a: TodoRowProps, b: TodoRowProps): boolean {
+  for (const k of Object.keys(b) as (keyof TodoRowProps)[]) {
+    if (k === "now" || a[k] === b[k]) continue;
+    return false;
+  }
+  return a.now === b.now || timeBucket(b.todo.updatedAt, a.now) === timeBucket(b.todo.updatedAt, b.now);
+}
+
+/**
+ * 待办行。行很多，不给每行各挂 antd 的 Tooltip、Dropdown（几千行时挂载、重新渲染都很慢）：
+ * 悬停提示和右键菜单由侧栏共用一个（useRowPopups），按行的 data-sel 找到这条待办
+ */
+const TodoRow = memo(function TodoRow(p: TodoRowProps) {
   const { todo: t, actions: a } = p;
-  const dragged = isDraggingTodo(p.drag.state, p.workspace, p.project, t.id);
   const { text, fromContent } = displayTitle(t);
 
-  const tip = (
+  return (
+    <div
+      role="treeitem"
+      aria-selected={p.selected}
+      data-sel={selKey({ workspace: p.workspace, project: p.project, todoId: t.id })}
+      className={`tree-row todo-row${p.selected ? " selected" : ""}${t.done ? " done" : ""}${p.dragged ? " drag-source" : ""}`}
+      style={{ paddingLeft: 44 }}
+      onMouseDown={(e) => p.dragStart(e, { kind: "todo", workspace: p.workspace, project: p.project, todo: t })}
+      onClick={() => a.selectTodo(p.project, t.id)}
+      onContextMenu={(e) => p.onContextMenu(e, todoMenu(a, p.project, t, p.projectNames))}
+    >
+      <span
+        className={`check${t.done ? " checked" : ""}`}
+        role="checkbox"
+        aria-checked={t.done}
+        title={t.done ? "标记为未完成" : "标记为已完成"}
+        onClick={(e) => {
+          e.stopPropagation();
+          a.toggleDone(p.project, t);
+        }}
+      >
+        {t.done && <CheckOutlined />}
+      </span>
+      <div className="todo-main">
+        <div className={`todo-title${fromContent ? " from-content" : ""}`}>
+          <Highlight text={text} kw={p.keyword} />
+        </div>
+        <div className="todo-meta">
+          创建 {compactTime(t.createdAt, p.now)}
+          <span className="sep">·</span>
+          修改 {relativeTime(t.updatedAt, p.now, true)}
+        </div>
+      </div>
+    </div>
+  );
+}, sameTodoRow);
+
+/** 待办行的悬停提示 */
+function TodoTip({ t }: { t: TodoSummary }) {
+  return (
     <div className="todo-tip">
-      <div className="todo-tip-title">{text}</div>
+      <div className="todo-tip-title">{displayTitle(t).text}</div>
       <div>状态：{t.done ? "已完成" : "未完成"}</div>
       <div>创建时间：{fullTime(t.createdAt)}</div>
       <div>修改时间：{fullTime(t.updatedAt)}</div>
@@ -533,45 +650,95 @@ function TodoRow(p: {
       <div className="todo-tip-hint">右键可用默认程序打开，拖到其他项目上可移动过去</div>
     </div>
   );
+}
 
-  return (
-    <Tooltip title={tip} placement="right" mouseEnterDelay={0.8}>
-      <Dropdown menu={todoMenu(a, p.project, t, p.projectNames)} trigger={["contextMenu"]}>
-        <div
-          role="treeitem"
-          aria-selected={p.selected}
-          data-sel={selKey({ workspace: p.workspace, project: p.project, todoId: t.id })}
-          className={`tree-row todo-row${p.selected ? " selected" : ""}${t.done ? " done" : ""}${dragged ? " drag-source" : ""}`}
-          style={{ paddingLeft: 44 }}
-          onMouseDown={(e) => p.drag.start(e, { kind: "todo", workspace: p.workspace, project: p.project, todo: t })}
-          onClick={() => a.selectTodo(p.project, t.id)}
-        >
-          <span
-            className={`check${t.done ? " checked" : ""}`}
-            role="checkbox"
-            aria-checked={t.done}
-            title={t.done ? "标记为未完成" : "标记为已完成"}
-            onClick={(e) => {
-              e.stopPropagation();
-              a.toggleDone(p.project, t);
-            }}
-          >
-            {t.done && <CheckOutlined />}
-          </span>
-          <div className="todo-main">
-            <div className={`todo-title${fromContent ? " from-content" : ""}`}>
-              <Highlight text={text} kw={p.keyword} />
-            </div>
-            <div className="todo-meta">
-              创建 {compactTime(t.createdAt, p.now)}
-              <span className="sep">·</span>
-              修改 {relativeTime(t.updatedAt, p.now, true)}
-            </div>
-          </div>
-        </div>
-      </Dropdown>
-    </Tooltip>
+/** 指针在待办行上停多久（ms）显示悬停提示，同原来每行一个 Tooltip 时的 mouseEnterDelay */
+const TIP_DELAY = 800;
+
+/**
+ * 侧栏里所有待办行共用的悬停提示和右键菜单。
+ * 悬停提示：指针在一行上停一会儿后，在这一行右边显示（锚点是一个和这一行一样大小位置的透明元素）；离开、滚动时隐藏。
+ * 右键菜单：在指针处显示，点了菜单项、点了别处时关闭
+ */
+function useRowPopups(trees: WorkspaceTree[]) {
+  const [tip, setTip] = useState<{ key: string; rect: DOMRect } | null>(null);
+  // seq：每次右键加一，换一个 Dropdown，菜单按新的位置重新对齐
+  const [menu, setMenu] = useState<{ x: number; y: number; menu: MenuProps; open: boolean; seq: number } | null>(null);
+  const timer = useRef(0);
+  const hovered = useRef<HTMLElement | null>(null);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const hideTip = useCallback(() => {
+    hovered.current = null;
+    window.clearTimeout(timer.current);
+    setTip(null);
+  }, []);
+
+  const onMouseOver = useCallback((e: React.MouseEvent) => {
+    const row = (e.target as Element).closest<HTMLElement>(".todo-row");
+    if (row === hovered.current) return;
+    hovered.current = row;
+    window.clearTimeout(timer.current);
+    setTip(null);
+    if (row)
+      timer.current = window.setTimeout(() => {
+        if (row.isConnected && !document.body.classList.contains("drag-moving"))
+          setTip({ key: row.dataset.sel!, rect: row.getBoundingClientRect() });
+      }, TIP_DELAY);
+  }, []);
+
+  const openMenu = useCallback<OpenMenu>(
+    (e, m) => {
+      e.preventDefault();
+      hideTip();
+      setMenu((old) => ({ x: e.clientX, y: e.clientY, menu: m, open: true, seq: (old?.seq ?? 0) + 1 }));
+    },
+    [hideTip],
   );
+  const closeMenu = () => setMenu((m) => (m ? { ...m, open: false } : m));
+
+  let tipTodo: TodoSummary | undefined;
+  if (tip) {
+    const s = parseSelKey(tip.key);
+    tipTodo = trees
+      .find((t) => t.name === s.workspace)
+      ?.projects.find((x) => x.name === s.project)
+      ?.todos.find((x) => x.id === s.todoId);
+  }
+
+  const node = (
+    <>
+      {tip && tipTodo && (
+        <Tooltip key={tip.key} open title={<TodoTip t={tipTodo} />} placement="right">
+          <div
+            className="row-popup-anchor"
+            style={{ left: tip.rect.left, top: tip.rect.top, width: tip.rect.width, height: tip.rect.height }}
+          />
+        </Tooltip>
+      )}
+      {menu && (
+        <Dropdown
+          key={menu.seq}
+          open={menu.open}
+          trigger={["click"]}
+          placement="bottomLeft"
+          menu={{
+            ...menu.menu,
+            onClick: (info) => {
+              closeMenu();
+              menu.menu.onClick?.(info);
+            },
+          }}
+          onOpenChange={(o) => !o && closeMenu()}
+        >
+          {/* 1px 大小：rc-trigger 不给零大小的元素对齐弹出层 */}
+          <div className="row-popup-anchor" style={{ left: menu.x, top: menu.y, width: 1, height: 1 }} />
+        </Dropdown>
+      )}
+    </>
+  );
+
+  return { node, onMouseOver, hideTip, openMenu };
 }
 
 function Chevron({ open, onClick }: { open: boolean; onClick: () => void }) {

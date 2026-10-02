@@ -1,5 +1,5 @@
 import { FileTextOutlined, FolderFilled } from "@ant-design/icons";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { displayTitle } from "../utils";
 
@@ -139,7 +139,8 @@ export function useDragMove(opts: {
   // 拖动中离开了工作区视图（返回首页等）：结束拖动
   useEffect(() => () => cancel.current?.(), []);
 
-  const start = (e: React.MouseEvent, item: DragItem) => {
+  // 不变的函数：侧栏的行据此判断要不要重新渲染；里面只用 ref 和 setState
+  const start = useCallback((e: React.MouseEvent, item: DragItem) => {
     // 行里的按钮、勾选框、折叠箭头照常点击
     if (e.button !== 0 || cancel.current || (e.target as Element).closest(".row-btn, .check, .chevron")) return;
     const x0 = e.clientX;
@@ -233,7 +234,8 @@ export function useDragMove(opts: {
     window.addEventListener("mouseup", onUp, true);
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("blur", stop);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const item = state?.item;
   const ghost = state && item && (

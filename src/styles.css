@@ -653,6 +653,13 @@ mark {
   padding: 6px 12px;
 }
 
+/* 项目下的待办列表。待办可能有几千条：不在可见区域里的项目，其中的待办不排版、不绘制（content-visibility），
+   只按估计的高度占位（第一次显示前按行数估计，见 Sidebar 的 ProjectBranch，显示过一次后记住实际高度）。
+   加在项目这一级而不是每一行上：每一行都加的话，浏览器每一帧都要逐行判断是否可见，几千行时打字都会变卡 */
+.todo-group {
+  content-visibility: auto;
+}
+
 /* 待办条目：两行，第一行标题，第二行创建/修改时间 */
 .todo-row {
   align-items: flex-start;
@@ -718,6 +725,12 @@ mark {
 .todo-tip-hint {
   opacity: 0.6;
   margin-top: 2px;
+}
+
+/* 侧栏待办行共用的悬停提示、右键菜单的锚点：盖在那一行上（提示）或指针处（菜单），不挡鼠标 */
+.row-popup-anchor {
+  position: fixed;
+  pointer-events: none;
 }
 
 /* ---------------- 拖动移动 ---------------- */

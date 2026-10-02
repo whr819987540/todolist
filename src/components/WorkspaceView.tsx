@@ -1,5 +1,5 @@
 import { App as AntApp, Spin, type InputRef } from "antd";
-import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useWindowFocus } from "../hooks";
 import { type How, visit } from "../navHistory";
@@ -54,6 +54,39 @@ function sortTree(t: WorkspaceTree): WorkspaceTree {
   return { ...t, projects: [...t.projects].sort((a, b) => compareName(a.name, b.name)) };
 }
 
+const sameFields = <T extends object>(a: T, b: T) => {
+  const keys = Object.keys(a) as (keyof T)[];
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
+};
+
+/** 新的列表和原来的逐项相同（reuse 过的会是同一个对象）时沿用原来的列表 */
+const sameItems = <T,>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** 沿用原来的对象：before 里有同名（同 id）且内容一样的就用它 */
+function reuse<T>(before: T[], after: T[], key: (x: T) => string, same: (old: T, fresh: T) => T): T[] {
+  const old = new Map(before.map((x) => [key(x), x]));
+  const out = after.map((x) => {
+    const o = old.get(key(x));
+    return o === undefined ? x : same(o, x);
+  });
+  return sameItems(out, before) ? before : out;
+}
+
+/**
+ * 刷新（窗口获得焦点、F5 等）后，内容没变的工作区、项目、待办沿用原来的对象：
+ * 什么都没变时整个视图不重新渲染，变了的只有那一部分重新渲染（侧栏的行按对象是否相同决定要不要重新渲染）
+ */
+function reuseTrees(before: WorkspaceTree[] | null, after: WorkspaceTree[]): WorkspaceTree[] {
+  if (!before) return after;
+  return reuse(before, after, (t) => t.name, (oldTree, tree) => {
+    const projects = reuse(oldTree.projects, tree.projects, (p) => p.name, (oldProject, project) => {
+      const todos = reuse(oldProject.todos, project.todos, (x) => x.id, (o, x) => (sameFields(o, x) ? o : x));
+      return todos === oldProject.todos ? oldProject : { ...project, todos };
+    });
+    return projects === oldTree.projects ? oldTree : { ...tree, projects };
+  });
+}
+
 const sortNames = (names: string[]) => [...new Set(names)].sort(compareName);
 
 type Collapsed = Record<string, boolean>;
@@ -70,17 +103,30 @@ function usePerWorkspace<T>(key: (ws: string) => string, read: (ws: string) => T
     for (const [ws, v] of Object.entries(map)) writeJson(key(ws), v);
   }, [map, key]);
 
-  const get = (ws: string) => map[ws] ?? read(ws);
-  const set = useCallback(
-    (ws: string, fn: (prev: T) => T) => setMap((m) => ({ ...m, [ws]: fn(m[ws] ?? read(ws)) })),
+  // 还没改过的工作区读 localStorage，读一次就记下，每次渲染拿到的是同一个对象（侧栏的行据此判断要不要重新渲染）
+  const reads = useRef(new Map<string, T>());
+  const readOnce = useCallback(
+    (ws: string) => {
+      if (!reads.current.has(ws)) reads.current.set(ws, read(ws));
+      return reads.current.get(ws) as T;
+    },
     [read],
   );
-  /** 工作区改名、删除后，内存里的跟着改（localStorage 里的由 workspaceState 改） */
-  const rename = useCallback(
-    (from: string, to: string) => setMap(({ [from]: v, ...rest }) => (v === undefined ? rest : { ...rest, [to]: v })),
-    [],
+  const get = (ws: string) => map[ws] ?? readOnce(ws);
+  const set = useCallback(
+    (ws: string, fn: (prev: T) => T) => setMap((m) => ({ ...m, [ws]: fn(m[ws] ?? readOnce(ws)) })),
+    [readOnce],
   );
-  const forget = useCallback((ws: string) => setMap(({ [ws]: _, ...rest }) => rest), []);
+  /** 工作区改名、删除后，内存里的跟着改（localStorage 里的由 workspaceState 改） */
+  const rename = useCallback((from: string, to: string) => {
+    reads.current.delete(from);
+    reads.current.delete(to);
+    setMap(({ [from]: v, ...rest }) => (v === undefined ? rest : { ...rest, [to]: v }));
+  }, []);
+  const forget = useCallback((ws: string) => {
+    reads.current.delete(ws);
+    setMap(({ [ws]: _, ...rest }) => rest);
+  }, []);
   return { get, set, rename, forget };
 }
 
@@ -168,7 +214,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       return;
     }
     if (trees.length < workspaces.length) setWorkspaces(trees.map((t) => t.name));
-    setLoaded(trees);
+    setLoaded((before) => reuseTrees(before, trees));
   }, [workspaces, initialWorkspace, message]);
 
   useEffect(() => {
@@ -210,23 +256,34 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     if (sel.project && selTodoId) writeLastTodo(sel.workspace, sel.project, selTodoId);
   }, [sel.workspace, sel.project, selTodoId]);
 
+  /** 改某个项目的待办列表；fn 原样返回时什么都不改，其他工作区、项目沿用原来的对象 */
   const updateTodos = useCallback(
     (ws: string, project: string, fn: (todos: TodoSummary[]) => TodoSummary[]) => {
-      setLoaded((ts) =>
-        ts?.map((t) =>
-          t.name !== ws
-            ? t
-            : { ...t, projects: t.projects.map((p) => (p.name === project ? { ...p, todos: fn(p.todos) } : p)) },
-        ) ?? ts,
-      );
+      setLoaded((ts) => {
+        if (!ts) return ts;
+        const next = ts.map((t) => {
+          if (t.name !== ws) return t;
+          const projects = t.projects.map((p) => {
+            if (p.name !== project) return p;
+            const todos = fn(p.todos);
+            return todos === p.todos ? p : { ...p, todos };
+          });
+          return sameItems(projects, t.projects) ? t : { ...t, projects };
+        });
+        return sameItems(next, ts) ? ts : next;
+      });
     },
     [],
   );
 
-  /** 只替换已有条目：保存回调晚到时不会把已删除/移走的待办加回来 */
+  /** 只替换已有条目：保存回调晚到时不会把已删除/移走的待办加回来；内容没变时什么都不改（侧栏不必重新渲染） */
   const patchTodo = useCallback(
     (ws: string, project: string, s: TodoSummary) =>
-      updateTodos(ws, project, (todos) => todos.map((x) => (x.id === s.id ? s : x))),
+      updateTodos(ws, project, (todos) => {
+        const i = todos.findIndex((x) => x.id === s.id);
+        if (i < 0 || sameFields(todos[i], s)) return todos;
+        return todos.map((x, j) => (j === i ? s : x));
+      }),
     [updateTodos],
   );
 
@@ -475,6 +532,28 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     },
   });
 
+  // 侧栏的行只在自己的内容变了时才重新渲染，传给它们的操作要是不变的对象：每个工作区一个，调用时转给最新的 actionsFor
+  const actionsRef = useRef(actionsFor);
+  useEffect(() => {
+    actionsRef.current = actionsFor;
+  });
+  const stableActions = useMemo(() => {
+    const cache = new Map<string, Actions>();
+    return (ws: string): Actions => {
+      let a = cache.get(ws);
+      if (!a) {
+        const forward =
+          (name: keyof Actions) =>
+          (...args: unknown[]) =>
+            (actionsRef.current(ws)[name] as (...a: unknown[]) => unknown)(...args);
+        const names = Object.keys(actionsRef.current(ws)) as (keyof Actions)[];
+        a = Object.fromEntries(names.map((k) => [k, forward(k)])) as unknown as Actions;
+        cache.set(ws, a);
+      }
+      return a;
+    };
+  }, []);
+
   /** 焦点移到右侧：待办的正文、项目概览的快速添加框，概览页没有输入框时落在右侧区域本身 */
   const focusMain = () => {
     const main = mainRef.current;
@@ -617,7 +696,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
           setKbSel(s);
           setSel(s, "keyboard");
         }}
-        actionsFor={actionsFor}
+        actionsFor={stableActions}
         onHome={goHome}
         onFocusMain={focusMain}
         handleRef={sidebarRef}
