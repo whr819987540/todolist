@@ -16,10 +16,15 @@
 //!
 //! 正文一律按 UTF-8 写入；拷进来的文件可能是 GBK 或带 BOM 的 UTF-16，读取时识别编码，
 //! 认不出来的只读，不允许在软件里保存，免得把原文件覆盖成乱码。
+//!
+//! 左侧列表显示的正文开头（预览）要读每个 .md 的开头，待办多了很慢（窗口每次获得焦点都要重新加载），
+//! 所以缓存在内存里，按文件的修改时间和大小判断是否失效；不写进任何文件（数据目录可能用网盘同步，
+//! 多写一个文件就多一次同步冲突的机会）。
 
 use chrono::Local;
 use encoding_rs::{DecoderResult, Encoding, GB18030, UTF_8};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -155,8 +160,8 @@ pub struct SaveResult {
 
 pub struct Store {
     root: PathBuf,
-    // 所有读写串行化：操作都很快，且元数据文件需要读-改-写
-    lock: Mutex<()>,
+    // 所有读写串行化：操作都很快，且元数据文件需要读-改-写。预览缓存也由这把锁保护
+    lock: Mutex<PreviewCache>,
 }
 
 impl Store {
@@ -164,7 +169,7 @@ impl Store {
         fs::create_dir_all(&root)?;
         Ok(Self {
             root,
-            lock: Mutex::new(()),
+            lock: Mutex::new(PreviewCache::default()),
         })
     }
 
@@ -172,7 +177,7 @@ impl Store {
         &self.root
     }
 
-    fn guard(&self) -> MutexGuard<'_, ()> {
+    fn guard(&self) -> MutexGuard<'_, PreviewCache> {
         self.lock.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -233,7 +238,7 @@ impl Store {
             };
             for (_, pdir) in list_subdirs(&dir)? {
                 info.project_count += 1;
-                for t in scan_project(&pdir, false)? {
+                for t in scan_project(&pdir, None)? {
                     info.todo_count += 1;
                     info.done_count += t.done as usize;
                     info.updated_at = info.updated_at.max(t.updated_at);
@@ -252,29 +257,36 @@ impl Store {
     }
 
     pub fn rename_workspace(&self, name: &str, new_name: &str) -> Result<String> {
-        let _g = self.guard();
+        let mut g = self.guard();
         let dir = self.ws_dir(name)?;
         let new_name = normalize_name(new_name, "工作区")?;
         rename_dir(&dir, &self.root, name, &new_name, "工作区")?;
+        g.forget_under(&dir);
         Ok(new_name)
     }
 
     pub fn delete_workspace(&self, name: &str) -> Result<()> {
-        let _g = self.guard();
+        let mut g = self.guard();
         let dir = self.ws_dir(name)?;
-        self.move_to_trash(&dir)
+        self.move_to_trash(&dir)?;
+        g.forget_under(&dir);
+        Ok(())
     }
 
     pub fn load_workspace(&self, ws: &str) -> Result<WorkspaceTree> {
-        let _g = self.guard();
+        let mut g = self.guard();
         let dir = self.ws_dir(ws)?;
         let mut projects = Vec::new();
+        let mut scanned = HashSet::new();
         for (name, pdir) in list_subdirs(&dir)? {
             projects.push(ProjectNode {
                 name,
-                todos: scan_project(&pdir, true)?,
+                todos: scan_project(&pdir, Some(&mut g))?,
             });
+            scanned.insert(pdir);
         }
+        // 已经不在的项目（删除、改名、移走了）不再占着缓存
+        g.dirs.retain(|d, _| !d.starts_with(&dir) || scanned.contains(d));
         Ok(WorkspaceTree {
             name: ws.to_string(),
             projects,
@@ -549,8 +561,43 @@ impl Store {
 // 项目扫描与元数据
 // ---------------------------------------------------------------------------
 
-/// 扫描项目目录，把元数据和实际的 .md 文件对齐，返回全部待办摘要
-fn scan_project(dir: &Path, with_preview: bool) -> Result<Vec<TodoSummary>> {
+/// 预览缓存里的一条：文件的修改时间和大小都没变就直接用
+struct CachedPreview {
+    stamp: FileStamp,
+    preview: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl FileStamp {
+    fn of(md: &fs::Metadata) -> Self {
+        Self {
+            modified: md.modified().ok(),
+            len: md.len(),
+        }
+    }
+}
+
+/// 正文开头（预览）的内存缓存：项目目录 → 待办 id → 预览。
+/// 每次扫描一个项目目录后，这个目录只留这次扫到的文件；工作区改名、删除时整个丢掉
+#[derive(Default)]
+struct PreviewCache {
+    dirs: HashMap<PathBuf, HashMap<String, CachedPreview>>,
+}
+
+impl PreviewCache {
+    fn forget_under(&mut self, dir: &Path) {
+        self.dirs.retain(|d, _| !d.starts_with(dir));
+    }
+}
+
+/// 扫描项目目录，把元数据和实际的 .md 文件对齐，返回全部待办摘要。
+/// 给了预览缓存时带上正文开头（文件没变就用缓存的，不重新读），否则预览为空
+fn scan_project(dir: &Path, previews: Option<&mut PreviewCache>) -> Result<Vec<TodoSummary>> {
     let mut meta = read_meta(dir)?;
 
     let mut files: Vec<(String, PathBuf, fs::Metadata)> = Vec::new();
@@ -569,16 +616,18 @@ fn scan_project(dir: &Path, with_preview: bool) -> Result<Vec<TodoSummary>> {
         }
         files.push((stem.to_string(), path, md));
     }
+    // id → 在 files 里的位置；待办多时逐个比对太慢
+    let index: HashMap<String, usize> = files.iter().enumerate().map(|(i, (id, _, _))| (id.clone(), i)).collect();
 
     let mut changed = false;
     let before = meta.todos.len();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     meta.todos
-        .retain(|m| files.iter().any(|(id, _, _)| *id == m.id) && seen.insert(m.id.clone()));
+        .retain(|m| index.contains_key(&m.id) && seen.insert(m.id.clone()));
     changed |= meta.todos.len() != before;
 
     for (id, _, md) in &files {
-        if meta.find(id).is_some() {
+        if !seen.insert(id.clone()) {
             continue;
         }
         let modified = to_ms(md.modified()).unwrap_or_else(now_ms);
@@ -598,16 +647,71 @@ fn scan_project(dir: &Path, with_preview: bool) -> Result<Vec<TodoSummary>> {
         write_meta(dir, &meta)?;
     }
 
-    Ok(meta
+    let entries: Vec<(&TodoMeta, &PathBuf, &fs::Metadata)> = meta
         .todos
         .iter()
         .map(|m| {
-            let (_, path, md) = files.iter().find(|(id, _, _)| *id == m.id).expect("retained above");
-            let mtime = to_ms(md.modified()).unwrap_or(0);
-            let preview = if with_preview { read_preview(path) } else { String::new() };
-            summary_of(m, mtime, preview)
+            let (_, path, md) = &files[index[&m.id]];
+            (m, path, md)
         })
+        .collect();
+    let previews_of = match previews {
+        None => vec![String::new(); entries.len()],
+        Some(cache) => {
+            // 这个目录原来缓存的预览；扫完后只留这次扫到的文件
+            let mut cached = cache.dirs.remove(dir).unwrap_or_default();
+            // 修改时间、大小取自列目录，在读开头之前：读的过程中文件又被改了的话，下次扫描对不上，会重新读
+            let stamps: Vec<FileStamp> = entries.iter().map(|(_, _, md)| FileStamp::of(md)).collect();
+            let mut out: Vec<Option<String>> = entries
+                .iter()
+                .zip(&stamps)
+                .map(|((m, _, _), stamp)| match cached.remove(&m.id) {
+                    Some(c) if c.stamp == *stamp => Some(c.preview),
+                    _ => None,
+                })
+                .collect();
+            let missing: Vec<usize> = (0..out.len()).filter(|&i| out[i].is_none()).collect();
+            let paths: Vec<&Path> = missing.iter().map(|&i| entries[i].1.as_path()).collect();
+            for (i, preview) in missing.into_iter().zip(read_previews(&paths)) {
+                out[i] = Some(preview);
+            }
+            let out: Vec<String> = out.into_iter().map(Option::unwrap_or_default).collect();
+            let fresh = entries
+                .iter()
+                .zip(stamps)
+                .zip(&out)
+                .map(|(((m, _, _), stamp), preview)| (m.id.clone(), CachedPreview { stamp, preview: preview.clone() }))
+                .collect();
+            cache.dirs.insert(dir.to_path_buf(), fresh);
+            out
+        }
+    };
+    Ok(entries
+        .into_iter()
+        .zip(previews_of)
+        .map(|((m, _, md), preview)| summary_of(m, to_ms(md.modified()).unwrap_or(0), preview))
         .collect())
+}
+
+/// 读一批文件的开头生成预览。打开、读文件的时间主要花在等系统（和杀毒软件扫描）上，
+/// 刚启动、缓存还是空的时候要读几千个，所以多的时候分给几个线程一起读
+fn read_previews(paths: &[&Path]) -> Vec<String> {
+    const PARALLEL_MIN: usize = 16;
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 8);
+    if paths.len() < PARALLEL_MIN {
+        return paths.iter().map(|p| read_preview(p)).collect();
+    }
+    let chunk = paths.len().div_ceil(threads);
+    std::thread::scope(|s| {
+        let handles: Vec<_> = paths
+            .chunks(chunk)
+            .map(|part| s.spawn(move || part.iter().map(|p| read_preview(p)).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_else(|_| vec![String::new(); chunk]))
+            .collect()
+    })
 }
 
 /// 读取元数据并定位某条待办；元数据缺这一条时先扫描补登记
@@ -616,7 +720,7 @@ fn meta_with_entry(dir: &Path, id: &str) -> Result<(MetaFile, usize)> {
     if let Some(idx) = meta.find(id) {
         return Ok((meta, idx));
     }
-    scan_project(dir, false)?;
+    scan_project(dir, None)?;
     let meta = read_meta(dir)?;
     let idx = meta.find(id).ok_or("待办不存在，可能已被删除或移动")?;
     Ok((meta, idx))
@@ -1166,6 +1270,158 @@ mod tests {
         let tree = s.load_workspace("w").unwrap();
         assert_eq!(tree.projects[0].todos.len(), 1);
         assert_eq!(tree.projects[0].todos[0].id, t.id);
+    }
+
+    #[test]
+    fn preview_cache_follows_external_changes() {
+        let (_tmp, s) = store("preview-cache");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let t = s.create_todo("w", "p", "").unwrap();
+        s.save_todo_content("w", "p", &t.id, "第一版", None, false).unwrap();
+        let dir = s.project_path("w", "p").unwrap();
+        let file = dir.join(format!("{}.md", t.id));
+        let preview = |id: &str| {
+            let tree = s.load_workspace("w").unwrap();
+            tree.projects[0].todos.iter().find(|x| x.id == id).map(|x| x.preview.clone())
+        };
+        assert_eq!(preview(&t.id).as_deref(), Some("第一版"));
+
+        // 外部编辑器改了正文（长度变了）
+        fs::write(&file, "外部改过的第二版").unwrap();
+        assert_eq!(preview(&t.id).as_deref(), Some("外部改过的第二版"));
+
+        // 长度没变、只有修改时间变了，也要重新读
+        let old_time = fs::metadata(&file).unwrap().modified().unwrap();
+        fs::write(&file, "外部改过的第三版").unwrap();
+        let f = File::options().write(true).open(&file).unwrap();
+        f.set_modified(old_time + std::time::Duration::from_secs(5)).unwrap();
+        drop(f);
+        assert_eq!(preview(&t.id).as_deref(), Some("外部改过的第三版"));
+
+        // 修改时间和大小都没变时用缓存，不重新读文件（证明缓存确实生效）
+        let same_time = fs::metadata(&file).unwrap().modified().unwrap();
+        fs::write(&file, "外部改过的第四版").unwrap();
+        let f = File::options().write(true).open(&file).unwrap();
+        f.set_modified(same_time).unwrap();
+        drop(f);
+        assert_eq!(preview(&t.id).as_deref(), Some("外部改过的第三版"));
+
+        // 在软件里保存：文件变了，预览跟着变
+        s.save_todo_content("w", "p", &t.id, "# 软件里保存的", None, true).unwrap();
+        assert_eq!(preview(&t.id).as_deref(), Some("软件里保存的"));
+
+        // 往项目文件夹里放进来的 .md 有预览；删掉的文件不再出现，也不再占着缓存
+        fs::write(dir.join("拷进来的.md"), "新文件的内容").unwrap();
+        assert_eq!(preview("拷进来的").as_deref(), Some("新文件的内容"));
+        fs::remove_file(dir.join("拷进来的.md")).unwrap();
+        assert_eq!(preview("拷进来的"), None);
+        assert!(!s.guard().dirs[&dir].contains_key("拷进来的"));
+
+        // 删掉后又放进来同名、内容不同的文件
+        fs::write(dir.join("拷进来的.md"), "又放进来的").unwrap();
+        assert_eq!(preview("拷进来的").as_deref(), Some("又放进来的"));
+    }
+
+    #[test]
+    fn many_previews_are_read_in_parallel_and_matched() {
+        // 缓存是空的、要读的文件多时分给几个线程读：每条待办拿到的是自己文件的预览
+        let (_tmp, s) = store("preview-many");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let dir = s.project_path("w", "p").unwrap();
+        for i in 0..53 {
+            fs::write(dir.join(format!("笔记{i:02}.md")), format!("# 第 {i} 条\n正文 {i}")).unwrap();
+        }
+        let check = |s: &Store| {
+            let tree = s.load_workspace("w").unwrap();
+            assert_eq!(tree.projects[0].todos.len(), 53);
+            for t in &tree.projects[0].todos {
+                let i: u32 = t.id.trim_start_matches("笔记").parse().unwrap();
+                assert_eq!(t.preview, format!("第 {i} 条 正文 {i}"));
+            }
+        };
+        check(&s);
+        // 改了其中一部分（超过一个线程的量）再读：改了的重新读，没改的用缓存
+        for i in (0..53).step_by(2) {
+            fs::write(dir.join(format!("笔记{i:02}.md")), format!("# 第 {i} 条\n正文 {i}（改过）")).unwrap();
+        }
+        let tree = s.load_workspace("w").unwrap();
+        for t in &tree.projects[0].todos {
+            let i: u32 = t.id.trim_start_matches("笔记").parse().unwrap();
+            let suffix = if i % 2 == 0 { "（改过）" } else { "" };
+            assert_eq!(t.preview, format!("第 {i} 条 正文 {i}{suffix}"));
+        }
+        // 新的 Store（刚启动）照样读得对
+        let s2 = Store::new(s.root().to_path_buf()).unwrap();
+        assert_eq!(s2.load_workspace("w").unwrap().projects[0].todos.len(), 53);
+    }
+
+    #[test]
+    fn preview_cache_forgets_renamed_and_deleted() {
+        let (_tmp, s) = store("preview-forget");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        s.create_project("w", "q").unwrap();
+        let t = s.create_todo("w", "p", "").unwrap();
+        s.save_todo_content("w", "p", &t.id, "正文", None, false).unwrap();
+        s.load_workspace("w").unwrap();
+        assert_eq!(s.guard().dirs.len(), 2);
+
+        // 项目改名：新名字下照样有预览，旧目录不再占着缓存
+        s.rename_project("w", "p", "p2").unwrap();
+        let tree = s.load_workspace("w").unwrap();
+        let p2 = tree.projects.iter().find(|p| p.name == "p2").unwrap();
+        assert_eq!(p2.todos[0].preview, "正文");
+        assert!(s.guard().dirs.keys().all(|d| !d.ends_with("p")));
+
+        // 工作区改名：旧工作区下的都丢掉
+        s.rename_workspace("w", "w2").unwrap();
+        assert!(s.guard().dirs.is_empty());
+        assert_eq!(s.load_workspace("w2").unwrap().projects.len(), 2);
+        assert_eq!(s.guard().dirs.len(), 2);
+    }
+
+    /// 性能测量：`TODOLIST_BENCH_DIR=<测试数据目录> cargo test --profile release-fast --lib bench_scan -- --ignored --nocapture`。
+    /// 只读不写（数据和元数据一致时扫描不会写盘）
+    #[test]
+    #[ignore]
+    fn bench_scan() {
+        use std::time::Instant;
+        let dir = std::env::var("TODOLIST_BENCH_DIR").expect("TODOLIST_BENCH_DIR");
+        let s = Store::new(PathBuf::from(dir)).unwrap();
+        let time = |label: &str, f: &dyn Fn()| {
+            let mut runs = Vec::new();
+            for _ in 0..5 {
+                let t = Instant::now();
+                f();
+                runs.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            let rest = &runs[1..];
+            let avg = rest.iter().sum::<f64>() / rest.len() as f64;
+            println!("{label}: 第一次 {:.1} ms，之后平均 {avg:.1} ms（{runs:.1?}）", runs[0]);
+        };
+        let names: Vec<String> = s.list_workspaces().unwrap().into_iter().map(|w| w.name).collect();
+        time("list_workspaces", &|| {
+            s.list_workspaces().unwrap();
+        });
+        time(&format!("load_workspace ×{}", names.len()), &|| {
+            for n in &names {
+                s.load_workspace(n).unwrap();
+            }
+        });
+        // 预览缓存是空的（刚启动）：每次换一个新的 Store
+        let root = s.root().to_path_buf();
+        time(&format!("load_workspace ×{}（缓存是空的）", names.len()), &|| {
+            let fresh = Store::new(root.clone()).unwrap();
+            for n in &names {
+                fresh.load_workspace(n).unwrap();
+            }
+        });
+        let tree = s.load_workspace(&names[0]).unwrap();
+        let todos: usize = tree.projects.iter().map(|p| p.todos.len()).sum();
+        let json = serde_json::to_vec(&tree).unwrap();
+        println!("一个工作区：{} 个项目、{todos} 条待办，序列化后 {} KB", tree.projects.len(), json.len() / 1024);
     }
 
     #[test]

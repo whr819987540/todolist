@@ -133,6 +133,12 @@ npm run release:fast    # 同上，但用 release-fast profile 构建，快很�
 cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 ```
 
+测量扫描数据目录的耗时（`list_workspaces`、`load_workspace`，含预览缓存是空的和已缓存两种情况）：用一份测试数据（不要用真实数据），跑标了 `#[ignore]` 的 `bench_scan`。它只读不写（数据和 `.todos.json` 一致时扫描不会写盘）：
+
+```powershell
+cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --profile release-fast --lib bench_scan -- --ignored --nocapture
+```
+
 ### 本机测试用的构建
 
 `npm run tauri build` 慢在三处：release 配置开了 `lto = true`、`codegen-units = 1`（最耗时），前端要重新 `tsc && vite build`，最后还要打 NSIS 安装包。测试时按需要跳过：
@@ -167,7 +173,7 @@ cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 
 代码结构：
 
-- `src-tauri/src/store.rs`：文件存储、元数据对齐、名称校验，界面状态文件 `.state.json` 的读写（内容由前端决定）
+- `src-tauri/src/store.rs`：文件存储、元数据对齐、名称校验，界面状态文件 `.state.json` 的读写（内容由前端决定）；左侧显示的正文开头（预览）缓存在内存里，按 .md 的修改时间和大小判断是否失效，文件没变就不重新读（窗口每次获得焦点都要重新加载选中的工作区，待办多时读几千个文件开头很慢），缓存是空的时（刚启动）分给几个线程一起读；缓存不写进任何文件，免得数据目录用网盘同步时多出冲突
 - `src-tauri/src/settings.rs`：应用设置（快捷键、改过的编辑快捷键、主题、字号、编辑区背景色、保存方式、开屏方式）的读写和字号、保存间隔的范围
 - `src-tauri/src/backup.rs`：设置备份包的打包、解包、命名和读本地的备份文件
 - `src-tauri/src/webdav.rs`：WebDAV 连接配置、密码存取、客户端（含代理处理）
