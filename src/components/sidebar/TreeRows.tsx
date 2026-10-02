@@ -12,7 +12,7 @@ import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../../typ
 import { avatarColor, compactTime, displayTitle, firstChar, matchTodo, relativeTime, sortTodos } from "../../utils";
 import { type DragItem, type DragState, dropClass, isDraggingProject } from "../DragMove";
 import Highlight from "../Highlight";
-import { projectMenu, todoMenu, workspaceMenu, type Actions } from "../menus";
+import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "../menus";
 import type { OpenMenu } from "./RowPopups";
 import { type Collapsed, countAll, countDone, type Selection, selKey, WS_KEY } from "./tree";
 
@@ -38,9 +38,10 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   dragState: DragState | null;
   dragStart: DragStart;
   onContextMenu: OpenMenu;
+  /** 右键「移动到」列出的项目，右键时才算；是不变的函数 */
+  moveTargets: (workspace: string) => MoveTarget[];
 }) {
   const { tree, sel, actions: a, collapsed, keyword: kw, hideDone, sortKey, setCollapsed } = p;
-  const projectNames = useMemo(() => tree.projects.map((x) => x.name), [tree]);
 
   const visible = useMemo(() => {
     const k = kw.toLowerCase();
@@ -115,7 +116,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
               selected={sel?.project === project.name && !sel.todoId}
               selTodoId={sel?.project === project.name ? sel.todoId : undefined}
               actions={a}
-              projectNames={projectNames}
+              moveTargets={p.moveTargets}
               keyword={kw}
               now={p.now}
               today={p.today}
@@ -156,7 +157,7 @@ const ProjectBranch = memo(function ProjectBranch(p: {
   /** 右侧打开的是这个项目里的哪条待办 */
   selTodoId?: string;
   actions: Actions;
-  projectNames: string[];
+  moveTargets: (workspace: string) => MoveTarget[];
   keyword: string;
   now: number;
   today: string;
@@ -224,7 +225,7 @@ const ProjectBranch = memo(function ProjectBranch(p: {
               todo={t}
               selected={p.selTodoId === t.id}
               actions={a}
-              projectNames={p.projectNames}
+              moveTargets={p.moveTargets}
               keyword={p.keyword}
               now={p.now}
               today={p.today}
@@ -256,7 +257,7 @@ interface TodoRowProps {
   todo: TodoSummary;
   selected: boolean;
   actions: Actions;
-  projectNames: string[];
+  moveTargets: (workspace: string) => MoveTarget[];
   keyword: string;
   now: number;
   today: string;
@@ -306,7 +307,7 @@ const TodoRow = memo(function TodoRow(p: TodoRowProps) {
       style={{ paddingLeft: 44 }}
       onMouseDown={(e) => p.dragStart(e, { kind: "todo", workspace: p.workspace, project: p.project, todo: t })}
       onClick={() => a.selectTodo(p.project, t.id)}
-      onContextMenu={(e) => p.onContextMenu(e, todoMenu(a, p.project, t, p.projectNames))}
+      onContextMenu={(e) => p.onContextMenu(e, todoMenu(a, p.project, t, p.moveTargets(p.workspace)))}
     >
       <span
         className={`check${t.done ? " checked" : ""}`}

@@ -11,7 +11,7 @@ import { useState } from "react";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime, sortTodos, useNow } from "../utils";
 import { type DragMove, isDraggingProject, isDraggingTodo } from "./DragMove";
-import { projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
+import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
 
 const percent = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0);
 
@@ -105,7 +105,8 @@ export function WorkspaceOverview({ tree, actions: a, drag }: { tree: WorkspaceT
 export function ProjectOverview(p: {
   workspace: string;
   project: ProjectNode;
-  projectNames: string[];
+  /** 右键「移动到」列出的项目（第一组是这个工作区的） */
+  moveTargets: MoveTarget[];
   sortKey: SortKey;
   actions: Actions;
   /** 打开时聚焦快速添加框（用键盘在左侧列表里移过来时不聚焦） */
@@ -136,7 +137,7 @@ export function ProjectOverview(p: {
   const row = (t: TodoSummary) => {
     const { text, fromContent } = displayTitle(t);
     return (
-      <Dropdown key={t.id} menu={todoMenu(a, project.name, t, p.projectNames)} trigger={["contextMenu"]}>
+      <Dropdown key={t.id} menu={todoMenu(a, project.name, t, p.moveTargets)} trigger={["contextMenu"]}>
         <div
           className={`list-row${t.done ? " done" : ""}${isDraggingTodo(p.drag.state, p.workspace, project.name, t.id) ? " drag-source" : ""}`}
           onMouseDown={(e) => p.drag.start(e, { kind: "todo", workspace: p.workspace, project: project.name, todo: t })}

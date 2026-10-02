@@ -25,7 +25,7 @@ import { ProjectOverview, WorkspaceOverview } from "./Overview";
 import Sidebar, { type SidebarHandle } from "./Sidebar";
 import { type Selection, WS_KEY } from "./sidebar/tree";
 import TodoEditor, { type EditorHandle } from "./TodoEditor";
-import { todoMenu } from "./menus";
+import { moveTargets, todoMenu } from "./menus";
 import { sortNames, useWorkspaceActions } from "./workspaceActions";
 
 /** 供 App 的后退、前进（鼠标侧键）调用 */
@@ -461,7 +461,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         summary={selTodo}
         autoFocusTitle={focusTitleId === selTodo.id}
         handleRef={editorRef}
-        menu={todoMenu(a, selProject.name, selTodo, selTree.projects.map((p) => p.name))}
+        menu={todoMenu(a, selProject.name, selTodo, moveTargets(trees, selTree.name))}
         onSummary={(s) => patchTodo(selTree.name, selProject.name, s)}
         onToggleDone={() => a.toggleDone(selProject.name, selTodo)}
         onOpenExternal={() => a.openExternal(selProject.name, selTodo)}
@@ -474,7 +474,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       <ProjectOverview
         workspace={selTree.name}
         project={selProject}
-        projectNames={selTree.projects.map((p) => p.name)}
+        moveTargets={moveTargets(trees, selTree.name)}
         sortKey={listOptions.get(selTree.name).sortKey}
         actions={a}
         autoFocus={sel !== kbSel}

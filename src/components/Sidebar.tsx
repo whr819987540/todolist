@@ -1,10 +1,10 @@
 import type { InputRef } from "antd";
-import { useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { WorkspaceTree } from "../types";
 import { useNow } from "../utils";
 import type { ListOptions } from "../workspaceState";
 import type { DragMove } from "./DragMove";
-import type { Actions } from "./menus";
+import { type Actions, moveTargets } from "./menus";
 import { useRowPopups } from "./sidebar/RowPopups";
 import SidebarToolbar from "./sidebar/SidebarToolbar";
 import { type Collapsed, countAll, countDone, parseSelKey, type Selection, selKey, WS_KEY } from "./sidebar/tree";
@@ -55,6 +55,14 @@ export default function Sidebar(props: Props) {
   const kw = keyword.trim();
   const multi = trees.length > 1;
   const popups = useRowPopups(trees);
+
+  // 右键「移动到」列出的项目：右键时才按侧栏里现在显示的工作区算。传给行的是不变的函数，
+  // 别的待办、项目变了时行不必跟着重新渲染
+  const treesRef = useRef(trees);
+  useEffect(() => {
+    treesRef.current = trees;
+  });
+  const moveTargetsOf = useCallback((ws: string) => moveTargets(treesRef.current, ws), []);
 
   const total = trees.reduce((n, t) => n + countAll(t), 0);
   const done = trees.reduce((n, t) => n + countDone(t), 0);
@@ -175,6 +183,7 @@ export default function Sidebar(props: Props) {
             dragState={props.drag.state}
             dragStart={props.drag.start}
             onContextMenu={popups.openMenu}
+            moveTargets={moveTargetsOf}
           />
         ))}
       </div>

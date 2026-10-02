@@ -11,7 +11,7 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import type { TodoSummary } from "../types";
+import type { TodoSummary, WorkspaceTree } from "../types";
 
 /** 工作区视图里所有可触发的操作，由 WorkspaceView 实现，侧栏、概览、编辑器共用 */
 export interface Actions {
@@ -91,8 +91,44 @@ export function projectMenu(a: Actions, project: string): MenuProps {
   };
 }
 
-export function todoMenu(a: Actions, project: string, t: TodoSummary, projects: string[]): MenuProps {
-  const others = projects.filter((p) => p !== project);
+/** 「移动到」里一个工作区的项目 */
+export interface MoveTarget {
+  workspace: string;
+  projects: string[];
+}
+
+/** 待办可以移到的项目：侧栏里同时显示的各工作区（trees）的项目，待办所在的工作区排第一，其余按侧栏里的顺序 */
+export function moveTargets(trees: readonly WorkspaceTree[], workspace: string): MoveTarget[] {
+  const own = trees.filter((t) => t.name === workspace);
+  const others = trees.filter((t) => t.name !== workspace);
+  return [...own, ...others].map((t) => ({ workspace: t.name, projects: t.projects.map((p) => p.name) }));
+}
+
+const MOVE_PREFIX = "move:";
+const moveKey = (workspace: string, project: string) => MOVE_PREFIX + JSON.stringify([workspace, project]);
+
+/**
+ * 「移动到」的子菜单：只显示一个工作区时直接列出同一工作区的其他项目；同时显示了几个工作区时，
+ * 按工作区分组列出（所在的工作区排第一，标上「当前」），没有可移去的项目的工作区不列
+ */
+function moveItems(project: string, targets: readonly MoveTarget[]): NonNullable<MenuProps["items"]> {
+  const [own, ...others] = targets;
+  const item = (workspace: string, p: string) => ({ key: moveKey(workspace, p), icon: <FolderOutlined />, label: p });
+  const ownItems = own ? own.projects.filter((p) => p !== project).map((p) => item(own.workspace, p)) : [];
+  if (!others.length) return ownItems;
+  const groups = [
+    { workspace: own?.workspace, label: own && `${own.workspace}（当前）`, children: ownItems },
+    ...others.map((t) => ({ workspace: t.workspace, label: t.workspace, children: t.projects.map((p) => item(t.workspace, p)) })),
+  ];
+  return groups
+    .filter((g) => g.children.length)
+    .map((g) => ({ type: "group" as const, key: `group:${g.workspace}`, label: g.label, children: g.children }));
+}
+
+/** targets：可以移到的项目（moveTargets），第一组是待办所在的工作区 */
+export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: readonly MoveTarget[]): MenuProps {
+  const move = moveItems(project, targets);
+  const ownWorkspace = targets[0]?.workspace;
   return {
     items: [
       { key: "open", icon: <ExportOutlined />, label: "用默认程序打开" },
@@ -105,18 +141,20 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, projects: 
         key: "move",
         icon: <SwapOutlined />,
         label: "移动到",
-        disabled: others.length === 0,
-        children: others.length
-          ? others.map((p) => ({ key: `move:${p}`, icon: <FolderOutlined />, label: p }))
-          : undefined,
+        disabled: move.length === 0,
+        children: move.length ? move : undefined,
+        // 项目多（几个工作区一起列出）时子菜单可以滚动，不超出窗口
+        popupClassName: "move-menu",
       },
       { key: "reveal", icon: <FolderOpenOutlined />, label: "在资源管理器中显示" },
       { type: "divider" },
       { key: "delete", icon: <DeleteOutlined />, label: "删除", danger: true },
     ],
     onClick: handler((key) => {
-      if (key.startsWith("move:")) a.moveTodo(project, t, key.slice("move:".length));
-      else if (key === "open") a.openExternal(project, t);
+      if (key.startsWith(MOVE_PREFIX)) {
+        const [workspace, target] = JSON.parse(key.slice(MOVE_PREFIX.length)) as [string, string];
+        a.moveTodo(project, t, target, workspace === ownWorkspace ? undefined : workspace);
+      } else if (key === "open") a.openExternal(project, t);
       else if (key === "done") a.toggleDone(project, t);
       else if (key === "reveal") a.revealTodo(project, t);
       else if (key === "delete") a.deleteTodo(project, t);
