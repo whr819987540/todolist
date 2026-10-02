@@ -62,7 +62,7 @@ export const shortcutLabel = (s: string) => s.split("+").map(keyLabel).join(" + 
 
 /** 软件内置或文本编辑常用的组合，不能设成自定义快捷键 */
 const RESERVED: Record<string, string> = {
-  "Ctrl+S": "保存", "Ctrl+F": "搜索", "Ctrl+N": "新建", F5: "刷新", "Ctrl+R": "刷新",
+  "Ctrl+S": "保存", "Ctrl+F": "搜索", "Ctrl+Shift+F": "搜索", "Ctrl+N": "新建", F5: "刷新", "Ctrl+R": "刷新",
   "Ctrl+A": "全选", "Ctrl+C": "复制", "Ctrl+V": "粘贴", "Ctrl+X": "剪切",
   "Ctrl+Z": "撤销", "Ctrl+Y": "重做", "Ctrl+Shift+Z": "重做",
   "Alt+ArrowLeft": "切换到左侧列表", "Alt+ArrowRight": "切换到右侧编辑区",

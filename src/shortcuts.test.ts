@@ -90,6 +90,11 @@ describe("录制快捷键时的检查", () => {
     }
   });
 
+  it("Ctrl+Shift+F（侧栏 / 首页的搜索）算已占用", () => {
+    expect(checkShortcut("Ctrl+Shift+F")).toBe("Ctrl + Shift + F 是常用的「搜索」快捷键，请换一个");
+    expect(reservedShortcut("shift+ctrl+KeyF")).toBe("搜索");
+  });
+
   it("F5 和 Ctrl+R（刷新）算已占用", () => {
     expect(checkShortcut("F5")).toBe("F5 是常用的「刷新」快捷键，请换一个");
     expect(checkShortcut("Ctrl+R")).toBe("Ctrl + R 是常用的「刷新」快捷键，请换一个");

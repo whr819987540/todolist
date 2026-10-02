@@ -108,7 +108,7 @@ export default function SidebarToolbar(props: {
           ref={searchRef}
           allowClear
           prefix={<SearchOutlined className="muted" />}
-          placeholder="搜索待办（Ctrl+F）"
+          placeholder="搜索待办（Ctrl+Shift+F）"
           value={keyword}
           onChange={(e) => props.setKeyword(e.target.value)}
           onKeyDown={(e) => {

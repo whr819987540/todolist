@@ -23,7 +23,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useWindowFocus } from "../hooks";
-import { isRefreshShortcut } from "../shortcuts";
+import { eventShortcut, isRefreshShortcut } from "../shortcuts";
 import { ThemeButton } from "../theme";
 import type { WorkspaceInfo, WorkspaceTree } from "../types";
 import { avatarColor, compareName, firstChar, relativeTime, useNow } from "../utils";
@@ -102,13 +102,15 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
     const onKey = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+      const combo = eventShortcut(e);
       if (isRefreshShortcut(e)) {
         e.preventDefault();
         reload();
       } else if (ctrl && key === "n") {
         e.preventDefault();
         createRef.current();
-      } else if (ctrl && key === "f") {
+      } else if (combo === "Ctrl+Shift+F" || combo === "Ctrl+F") {
+        // 搜索是 Ctrl+Shift+F（工作区里也是）；首页没有正文可查找，Ctrl+F 也聚焦搜索框
         e.preventDefault();
         searchRef.current?.focus({ cursor: "all" });
       }
@@ -243,7 +245,7 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
               className="home-search"
               allowClear
               prefix={<SearchOutlined className="muted" />}
-              placeholder="搜索工作区、项目、待办（Ctrl+F）"
+              placeholder="搜索工作区、项目、待办（Ctrl+Shift+F）"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               onKeyDown={(e) => {
