@@ -637,8 +637,10 @@ function ShortcutRow(p: ShortcutRowProps) {
   const [saving, setSaving] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
 
+  // 开始录制时清掉上次留下的按键和提示，并把焦点放到按键框上（录制状态由外层管，可能由别的按钮开始）
   useEffect(() => {
     if (!recording) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHeld([]);
     setHint("");
     boxRef.current?.focus();

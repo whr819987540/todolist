@@ -100,7 +100,7 @@ const countDone = (t: WorkspaceTree) => t.projects.reduce((n, p) => n + p.todos.
 const countAll = (t: WorkspaceTree) => t.projects.reduce((n, p) => n + p.todos.length, 0);
 
 export default function Sidebar(props: Props) {
-  const { trees, sel, actionsFor, collapsedOf, setCollapsed, keyword, listOptionsOf } = props;
+  const { trees, sel, actionsFor, collapsedOf, setCollapsed, keyword, listOptionsOf, handleRef, searchRef } = props;
   const now = useNow();
   // 跨了一天时所有行的时间显示（今天 / 昨天 / 日期）都要重新算
   const today = new Date(now).toDateString();
@@ -151,7 +151,7 @@ export default function Sidebar(props: Props) {
     if (next >= 0 && next < keys.length && next !== at) props.onSelect(parseSelKey(keys[next]));
   };
 
-  useImperativeHandle(props.handleRef, () => ({ focus: focusTree, move }));
+  useImperativeHandle(handleRef, () => ({ focus: focusTree, move }));
 
   // 列表获得焦点时：↑↓ 移动，← → 折叠 / 展开（或回到上一级），Enter 打开待办或折叠 / 展开
   const onTreeKey = (e: React.KeyboardEvent) => {
@@ -227,7 +227,7 @@ export default function Sidebar(props: Props) {
 
       <div className="sidebar-search">
         <Input
-          ref={props.searchRef}
+          ref={searchRef}
           allowClear
           prefix={<SearchOutlined className="muted" />}
           placeholder="搜索待办（Ctrl+F）"

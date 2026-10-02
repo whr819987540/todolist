@@ -58,6 +58,8 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
   }, [message]);
 
   useEffect(() => {
+    // reload 是异步加载，setState 都在 await 之后，规则看不出来，当成了同步调用
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     reload();
     api.dataRoot().then(setRoot);
   }, [reload]);

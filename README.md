@@ -130,8 +130,11 @@ npm run build:fast      # 不打安装包、不做 LTO 的优化版 exe，见下
 npm run tauri build     # 正式打包，安装包在 src-tauri/target/release/bundle/nsis/
 npm run release         # 打包并安装到本机，见下文
 npm run release:fast    # 同上，但用 release-fast profile 构建，快很多
+npm run lint            # ESLint 检查前端代码（含 React hooks 的规则），要零错误、零警告
 cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 ```
+
+ESLint 的配置在 `eslint.config.js`：typescript-eslint 的推荐规则，加上 eslint-plugin-react-hooks 的全部推荐规则（`rules-of-hooks`、`exhaustive-deps` 和 React Compiler 的 `refs`、`immutability`、`purity`、`set-state-in-effect` 等）。代码里有不少刻意绕开 hook 依赖的写法（用 ref 拿最新的值、只在挂载时执行一次的 effect），这些地方就地加了 `eslint-disable-next-line` 并写明原因；不要为了消掉警告机械地补依赖，那会让只该执行一次的 effect 反复执行。
 
 测量扫描数据目录的耗时（`list_workspaces`、`load_workspace`，含预览缓存是空的和已缓存两种情况）：用一份测试数据（不要用真实数据），跑标了 `#[ignore]` 的 `bench_scan`。它只读不写（数据和 `.todos.json` 一致时扫描不会写盘）：
 

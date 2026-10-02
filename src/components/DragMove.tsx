@@ -234,7 +234,6 @@ export function useDragMove(opts: {
     window.addEventListener("mouseup", onUp, true);
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("blur", stop);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const item = state?.item;

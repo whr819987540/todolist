@@ -96,7 +96,7 @@ const otherMode = (m: EditorMode): EditorMode => (m === "live" ? "source" : "liv
  * 关着时满 1 小时兜底。auto save 开着时编辑器或窗口失去焦点也立即保存
  */
 export default function TodoEditor(props: Props) {
-  const { workspace, project, summary } = props;
+  const { workspace, project, summary, handleRef } = props;
   const id = summary.id;
   const { message } = AntApp.useApp();
   const { info: settingsInfo, setFontSize } = useSettings();
@@ -138,7 +138,9 @@ export default function TodoEditor(props: Props) {
     saveOptionsRef.current = saveOptions;
   });
 
-  // 保存相关的可变状态放在 ref 里，异步回调和卸载时都能拿到最新值
+  // 保存相关的可变状态放在 ref 里，异步回调和卸载时都能拿到最新值。
+  // 渲染时只取一次这个对象本身（每次都是同一个），里面的值只在回调和 effect 里读写，渲染结果不依赖它们
+  // eslint-disable-next-line react-hooks/refs
   const s = useRef({
     content: "",
     savedContent: "",
@@ -185,6 +187,9 @@ export default function TodoEditor(props: Props) {
         s.timer = 0;
         flush();
       },
+      // schedule 只在回调、effect 里调用，不在渲染时调用；purity 规则在这个组件里推断错了
+      // （删掉不相干的 useRef(zoomBy) 它就不报了），不是真的在渲染时取时间
+      // eslint-disable-next-line react-hooks/purity
       Math.max(0, s.dirtyAt + saveDelayMs() - Date.now()),
     );
   };
@@ -291,7 +296,7 @@ export default function TodoEditor(props: Props) {
         setLoading(false);
       });
     const unregister = registerFlusher(flush, true);
-    props.handleRef.current = {
+    handleRef.current = {
       flush,
       detach: () => {
         const snap = mdRef.current?.snapshot();
@@ -306,7 +311,9 @@ export default function TodoEditor(props: Props) {
       unregister();
       flush();
     };
-    // 组件以 project/id 为 key 挂载，这里只需要执行一次
+    // 只在挂载时执行一次、卸载时 flush 一次：组件以 工作区/项目/id 为 key 挂载，workspace、project、id、handleRef
+    // 不会变；flush、stopTimer 每次渲染都是新函数，但只经由 s 和各个 ref 读写，挂载时那一份一直可用。
+    // 补上这些依赖会让每次渲染都重新读正文、注销再注册 flusher，并在清理时多存一次盘
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -323,8 +330,21 @@ export default function TodoEditor(props: Props) {
     window.clearTimeout(s.timer);
     s.timer = 0;
     schedule();
+    // 只在这两个设置变了时重新安排：schedule 每次渲染都是新函数（间隔从 saveOptionsRef 读，前面的 effect 已经更新过），
+    // 加进依赖会让每次渲染（打字时状态栏刷新等）都清掉重来；s 是不变的对象
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSave, saveDelaySecs]);
+
+  /** 换成磁盘上的正文（外部改过后重新加载） */
+  const applyDiskContent = (d: TodoDetail) => {
+    s.content = s.savedContent = d.content;
+    s.mtime = d.mtime;
+    window.clearTimeout(s.statsTimer);
+    setStats(textStats(d.content));
+    setEncoding(d.encoding);
+    refreshStatus();
+    mdRef.current?.reset(d.content);
+  };
 
   // auto save：窗口失焦立即保存（编辑位置总是立即记下）；重新获得焦点时检查文件是否被外部程序改过
   useWindowFocus(async (focused) => {
@@ -344,16 +364,6 @@ export default function TodoEditor(props: Props) {
       /* 文件被删等情况由外层刷新处理 */
     }
   });
-
-  const applyDiskContent = (d: TodoDetail) => {
-    s.content = s.savedContent = d.content;
-    s.mtime = d.mtime;
-    window.clearTimeout(s.statsTimer);
-    setStats(textStats(d.content));
-    setEncoding(d.encoding);
-    refreshStatus();
-    mdRef.current?.reset(d.content);
-  };
 
   const zoomBy = (step: number) => {
     const { min, max } = FONT_LIMITS.editor;

@@ -55,7 +55,7 @@ export function formatDuration(secs: number): string {
 
 /** 每隔一段时间触发重渲染，让“x 分钟前”保持新鲜 */
 export function useNow(intervalMs = 30_000): number {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = window.setInterval(() => setNow(Date.now()), intervalMs);
     return () => window.clearInterval(t);
