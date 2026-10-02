@@ -1056,6 +1056,13 @@ body.drag-moving .tree-row:hover .row-count {
   margin-top: 12px;
 }
 
+/* 外部修改冲突对话框里对「另存为新待办」的说明 */
+.conflict-hint {
+  margin-top: 8px;
+  color: var(--c-text-3);
+  font-size: 13px;
+}
+
 /* CodeMirror 编辑器的容器；编辑器内部的样式在 src/editor/appearance.ts */
 .editor-cm {
   flex: 1;

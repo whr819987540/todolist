@@ -109,14 +109,16 @@ async fn move_project(
 
 // ----- 待办 -----
 
+/// 新建待办；content 是正文，不传时是空白待办（外部修改冲突时「另存为新待办」带着正文一起建）
 #[tauri::command]
 async fn create_todo(
     store: State<'_, Store>,
     workspace: String,
     project: String,
     title: String,
+    content: Option<String>,
 ) -> Cmd<TodoSummary> {
-    store.create_todo(&workspace, &project, &title)
+    store.create_todo(&workspace, &project, &title, content.as_deref().unwrap_or_default())
 }
 
 #[tauri::command]

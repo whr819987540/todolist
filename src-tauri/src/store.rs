@@ -26,7 +26,7 @@ use encoding_rs::{DecoderResult, Encoding, GB18030, UTF_8};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -335,17 +335,25 @@ impl Store {
 
     // ----- 待办 -----
 
-    pub fn create_todo(&self, ws: &str, project: &str, title: &str) -> Result<TodoSummary> {
+    /// 新建待办；content 是正文（新建空白待办时为空）。正文在同一次调用里写好，
+    /// 不会出现先有一个空文件、再保存正文的中间状态（外部修改冲突时「另存为新待办」用）
+    pub fn create_todo(&self, ws: &str, project: &str, title: &str, content: &str) -> Result<TodoSummary> {
         let _g = self.guard();
         let dir = self.project_dir(ws, project)?;
         let mut meta = read_meta(&dir)?;
         let id = unique_id(&dir, &meta);
         let path = dir.join(format!("{id}.md"));
-        OpenOptions::new()
+        let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
             .map_err(|e| format!("创建待办文件失败：{e}"))?;
+        if let Err(e) = file.write_all(content.as_bytes()).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return Err(format!("写入待办正文失败：{e}"));
+        }
+        drop(file);
         let now = now_ms();
         let entry = TodoMeta {
             id,
@@ -357,7 +365,7 @@ impl Store {
         };
         meta.todos.push(entry.clone());
         write_meta(&dir, &meta)?;
-        Ok(summary_of(&entry, now, String::new()))
+        Ok(summary_of(&entry, now, make_preview(content)))
     }
 
     pub fn read_todo(&self, ws: &str, project: &str, id: &str) -> Result<TodoDetail> {
@@ -1076,7 +1084,7 @@ mod tests {
         s.create_project("工作 空间", "项目A").unwrap();
         s.create_project("工作 空间", "项目B").unwrap();
 
-        let t = s.create_todo("工作 空间", "项目A", "买牛奶").unwrap();
+        let t = s.create_todo("工作 空间", "项目A", "买牛奶", "").unwrap();
         assert!(is_generated_id(&t.id));
         assert_eq!(t.title, "买牛奶");
 
@@ -1117,7 +1125,7 @@ mod tests {
         s.create_project("甲", "项目").unwrap();
         s.create_project("甲", "重名").unwrap();
         s.create_project("乙", "重名").unwrap();
-        let t = s.create_todo("甲", "项目", "带着走").unwrap();
+        let t = s.create_todo("甲", "项目", "带着走", "").unwrap();
         s.set_todo_done("甲", "项目", &t.id, true).unwrap();
 
         assert!(s.move_project("甲", "项目", "甲").is_err());
@@ -1142,7 +1150,7 @@ mod tests {
         s.create_workspace("乙").unwrap();
         s.create_project("甲", "p").unwrap();
         s.create_project("乙", "q").unwrap();
-        let t = s.create_todo("甲", "p", "跨工作区").unwrap();
+        let t = s.create_todo("甲", "p", "跨工作区", "").unwrap();
         s.save_todo_content("甲", "p", &t.id, "正文", None, false).unwrap();
         // 目标项目里已有同名文件：换一个新 id，标题和正文不变
         fs::write(s.project_path("乙", "q").unwrap().join(format!("{}.md", t.id)), "别的").unwrap();
@@ -1161,7 +1169,7 @@ mod tests {
         let (_tmp, s) = store("conflict");
         s.create_workspace("w").unwrap();
         s.create_project("w", "p").unwrap();
-        let t = s.create_todo("w", "p", "").unwrap();
+        let t = s.create_todo("w", "p", "", "").unwrap();
         let d = s.read_todo("w", "p", &t.id).unwrap();
         let r = s.save_todo_content("w", "p", &t.id, "x", Some(d.mtime - 1000), false).unwrap();
         assert!(!r.saved);
@@ -1171,11 +1179,53 @@ mod tests {
     }
 
     #[test]
+    fn create_todo_with_content() {
+        let (_tmp, s) = store("create-content");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        // 外部修改冲突时「另存为新待办」：原来那条在外部被改了，我这边的正文存成新的一条
+        let orig = s.create_todo("w", "p", "周报", "").unwrap();
+        let d = s.read_todo("w", "p", &orig.id).unwrap();
+        let path = s.todo_path("w", "p", &orig.id).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "外部改的").unwrap();
+        let mine = "# 我改的\n- 第一项\n";
+        assert!(!s.save_todo_content("w", "p", &orig.id, mine, Some(d.mtime), false).unwrap().saved);
+
+        let copy = s.create_todo("w", "p", "周报（我的版本）", mine).unwrap();
+        assert_ne!(copy.id, orig.id);
+        assert_eq!(copy.title, "周报（我的版本）");
+        assert_eq!(copy.preview, "我改的 第一项");
+        let read = s.read_todo("w", "p", &copy.id).unwrap();
+        assert_eq!(read.content, mine);
+        assert_eq!(read.encoding, TextEncoding::Utf8);
+        // 两份都在
+        assert_eq!(s.read_todo("w", "p", &orig.id).unwrap().content, "外部改的");
+        let tree = s.load_workspace("w").unwrap();
+        let todos = &tree.projects[0].todos;
+        assert_eq!(todos.len(), 2);
+        assert!(todos.iter().any(|t| t.id == copy.id && t.title == "周报（我的版本）"));
+
+        // 同一秒里再建一条也不会撞名
+        let again = s.create_todo("w", "p", "", mine).unwrap();
+        assert!(again.id != copy.id && again.id != orig.id);
+        assert_eq!(s.read_todo("w", "p", &again.id).unwrap().content, mine);
+    }
+
+    #[test]
+    fn create_todo_in_missing_project_writes_nothing() {
+        let (_tmp, s) = store("create-missing");
+        s.create_workspace("w").unwrap();
+        assert!(s.create_todo("w", "不存在", "标题", "正文").is_err());
+        assert!(s.list_workspaces().unwrap()[0].todo_count == 0);
+    }
+
+    #[test]
     fn scan_reconciles_external_files() {
         let (_tmp, s) = store("scan");
         s.create_workspace("w").unwrap();
         s.create_project("w", "p").unwrap();
-        let t = s.create_todo("w", "p", "会被删").unwrap();
+        let t = s.create_todo("w", "p", "会被删", "").unwrap();
         let dir = s.project_path("w", "p").unwrap();
         fs::remove_file(dir.join(format!("{}.md", t.id))).unwrap();
         fs::write(dir.join("会议纪要.md"), "\u{feff}周会\r\n内容").unwrap();
@@ -1264,7 +1314,7 @@ mod tests {
         let (_tmp, s) = store("corrupt");
         s.create_workspace("w").unwrap();
         s.create_project("w", "p").unwrap();
-        let t = s.create_todo("w", "p", "标题").unwrap();
+        let t = s.create_todo("w", "p", "标题", "").unwrap();
         let dir = s.project_path("w", "p").unwrap();
         fs::write(dir.join(META_FILE), "{ not json").unwrap();
         let tree = s.load_workspace("w").unwrap();
@@ -1277,7 +1327,7 @@ mod tests {
         let (_tmp, s) = store("preview-cache");
         s.create_workspace("w").unwrap();
         s.create_project("w", "p").unwrap();
-        let t = s.create_todo("w", "p", "").unwrap();
+        let t = s.create_todo("w", "p", "", "").unwrap();
         s.save_todo_content("w", "p", &t.id, "第一版", None, false).unwrap();
         let dir = s.project_path("w", "p").unwrap();
         let file = dir.join(format!("{}.md", t.id));
@@ -1363,7 +1413,7 @@ mod tests {
         s.create_workspace("w").unwrap();
         s.create_project("w", "p").unwrap();
         s.create_project("w", "q").unwrap();
-        let t = s.create_todo("w", "p", "").unwrap();
+        let t = s.create_todo("w", "p", "", "").unwrap();
         s.save_todo_content("w", "p", &t.id, "正文", None, false).unwrap();
         s.load_workspace("w").unwrap();
         assert_eq!(s.guard().dirs.len(), 2);

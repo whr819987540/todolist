@@ -36,8 +36,9 @@ export const api = {
   moveProject: (workspace: string, name: string, targetWorkspace: string) =>
     invoke<void>("move_project", { workspace, name, targetWorkspace }),
 
-  createTodo: (workspace: string, project: string, title: string) =>
-    invoke<TodoSummary>("create_todo", { workspace, project, title }),
+  /** content 是正文，不传时新建空白待办；带正文时正文和待办在同一次调用里建好 */
+  createTodo: (workspace: string, project: string, title: string, content?: string) =>
+    invoke<TodoSummary>("create_todo", { workspace, project, title, content: content ?? null }),
   readTodo: (workspace: string, project: string, id: string) =>
     invoke<TodoDetail>("read_todo", { workspace, project, id }),
   saveTodoContent: (

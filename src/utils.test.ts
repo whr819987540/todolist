@@ -5,6 +5,7 @@ import {
   displayTitle,
   formatDuration,
   matchTodo,
+  myVersionTitle,
   relativeTime,
   shortTime,
   sortTodos,
@@ -60,6 +61,27 @@ describe("左侧显示的文字（displayTitle）", () => {
 
   it("都没有时显示「空白待办」", () => {
     expect(displayTitle(todo({}))).toEqual({ text: "空白待办", fromContent: true });
+  });
+});
+
+describe("另存为新待办的标题（myVersionTitle）", () => {
+  it("原来的标题加上「（我的版本）」", () => {
+    expect(myVersionTitle(" 周报 ", "正文")).toBe("周报（我的版本）");
+  });
+
+  it("没有标题时取正文第一行，去掉行首的 Markdown 标记", () => {
+    expect(myVersionTitle("", "\n\n## 会议纪要\n内容")).toBe("会议纪要（我的版本）");
+    expect(myVersionTitle("", "- [ ] 买牛奶\n- 面包")).toBe("买牛奶（我的版本）");
+    expect(myVersionTitle("", "> 1. 引用里的列表")).toBe("引用里的列表（我的版本）");
+  });
+
+  it("第一行太长时截短", () => {
+    const long = "一".repeat(50);
+    expect(myVersionTitle("", long)).toBe(`${"一".repeat(30)}…（我的版本）`);
+  });
+
+  it("标题和正文都是空的", () => {
+    expect(myVersionTitle("", "  \n ")).toBe("我的版本");
   });
 });
 

@@ -31,7 +31,7 @@ import { registerFlusher, useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
-import { formatDuration, fullTime, relativeTime, textStats, useNow } from "../utils";
+import { formatDuration, fullTime, MY_VERSION, myVersionTitle, relativeTime, textStats, useNow } from "../utils";
 import {
   keepUndo,
   readEditorMode,
@@ -61,6 +61,8 @@ interface Props {
   onOpenExternal: () => void;
   onSelectWorkspace: () => void;
   onSelectProject: () => void;
+  /** 外部修改冲突时选了「另存为新待办」：新建的那条（同一项目里），由外层加进列表并打开 */
+  onSavedAsNew: (s: TodoSummary) => void;
 }
 
 type Status = "saved" | "dirty" | "saving" | "error";
@@ -430,6 +432,41 @@ export default function TodoEditor(props: Props) {
     }
   };
 
+  /**
+   * 冲突时「另存为新待办」，两份都保留：这里的正文连同标题（加上「（我的版本）」）存成同一项目里的一条新待办，
+   * 这一条重新加载外部的版本，然后打开新的那条。新的那条的正文和这里一模一样，编辑位置、撤销记录、编辑模式
+   * 跟过去，打开后接着原来的地方编辑
+   */
+  const saveAsNew = async () => {
+    setConflict(false);
+    const mine = s.content;
+    const newTitle = myVersionTitle(s.title, mine);
+    savePosition();
+    const position = readEditPosition(workspace, project, id);
+    const snap = mdRef.current?.snapshot();
+    let created: TodoSummary;
+    try {
+      created = await api.createTodo(workspace, project, newTitle, mine);
+    } catch (e) {
+      message.error(`另存为新待办失败：${errMsg(e)}`);
+      setConflict(true);
+      return;
+    }
+    if (position) writeEditPosition(workspace, project, created.id, position);
+    if (snap) keepUndo(workspace, project, created.id, snap);
+    writeEditorMode(workspace, project, created.id, mode);
+    try {
+      const d = await api.readTodo(workspace, project, id);
+      s.conflict = false;
+      applyDiskContent(d);
+      propsRef.current.onSummary(d.summary);
+    } catch {
+      /* 这一条在外部被删了等：由外层刷新处理。这里的内容已经在新的那条里了，冲突标记留着，不会再往这一条存 */
+    }
+    message.success(`已另存为新待办「${newTitle}」，这一条换成了外部修改后的内容`);
+    propsRef.current.onSavedAsNew(created);
+  };
+
   /** 切换这条待办的编辑模式并记下；改名、移动、删除之后（detached）不再记 */
   const toggleMode = () => {
     const next = otherMode(mode);
@@ -647,6 +684,7 @@ export default function TodoEditor(props: Props) {
       <Modal
         open={conflict}
         title="文件已在外部被修改"
+        width={560}
         closable={false}
         mask={{ closable: false }}
         keyboard={false}
@@ -654,12 +692,19 @@ export default function TodoEditor(props: Props) {
           <Button key="theirs" onClick={() => resolveConflict(false)}>
             放弃我的修改，重新加载
           </Button>,
-          <Button key="mine" type="primary" danger onClick={() => resolveConflict(true)}>
+          <Button key="mine" danger onClick={() => resolveConflict(true)}>
             用我的内容覆盖
+          </Button>,
+          <Button key="copy" type="primary" onClick={saveAsNew}>
+            另存为新待办
           </Button>,
         ]}
       >
-        这条待办的 Markdown 文件在其他程序中被修改过，而这里也有尚未保存的修改，请选择保留哪一份。
+        这条待办的 Markdown 文件在其他程序中被修改过，而这里也有尚未保存的修改，请选择怎么处理。
+        <div className="conflict-hint">
+          「另存为新待办」两份都保留：你的修改存成同一项目里的一条新待办，标题后面加上「{MY_VERSION}」，并打开它；
+          这一条换成外部修改后的内容。
+        </div>
       </Modal>
     </section>
   );

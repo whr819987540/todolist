@@ -467,6 +467,10 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         onOpenExternal={() => a.openExternal(selProject.name, selTodo)}
         onSelectWorkspace={a.selectWorkspace}
         onSelectProject={() => a.selectProject(selProject.name)}
+        onSavedAsNew={(created) => {
+          updateTodos(selTree.name, selProject.name, (todos) => [...todos, created]);
+          setSel({ workspace: selTree.name, project: selProject.name, todoId: created.id });
+        }}
       />
     );
   } else if (selProject) {

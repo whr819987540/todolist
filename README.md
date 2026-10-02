@@ -34,7 +34,7 @@
 - **主题**：浅色、深色或跟随系统（默认），点首页或侧栏顶部的主题按钮、或在「设置 → 外观」里切换，窗口标题栏跟着变
 - **编辑区背景色**：待办编辑区默认是护眼米色，可在「设置 → 外观」里换成白色，或选「自定义」输入 RGB 数值设置任意颜色；深色模式下编辑区始终是深色背景
 - **全局搜索**：首页可跨全部工作区搜索工作区、项目和待办（标题与正文开头），点击结果直接打开
-- **外部修改感知**：从其他编辑器切回时自动刷新；若两边同时改了同一条，会弹窗让你选择保留哪一份
+- **外部修改感知**：从其他编辑器切回时自动刷新；若两边同时改了同一条，会弹窗让你选择：放弃自己的修改重新加载、用自己的内容覆盖，或「另存为新待办」——两份都保留，你的修改存成同一项目里标题带「（我的版本）」的新待办并打开它，原来这条换成外部改过的内容
 - 侧栏搜索（Ctrl+F，在选中的工作区里查找）、隐藏已完成、三种排序（这两项每个工作区各自记住，选中多个工作区时作用于右侧正在显示的那个）、在项目间移动待办（右键「移动到」，同时显示了几个工作区时按工作区分组列出它们的项目，和拖动一样能移到其他工作区）、删除进回收站、侧栏宽度可拖动
 
 ## 数据存储
@@ -201,7 +201,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
   - `links.ts`：解析链接地址、Ctrl+单击打开
   - `codeFences.ts`：代码块自动补结尾、Ctrl+Enter / ↓ 跳出代码块
   - `position.ts`：编辑位置（光标和选区另一端、光标在编辑区里的高度、它们前后的原文），打开待办和外部修改后重新加载时据此找回光标（选区）和滚动
-- `src/components/`：首页（含搜索）、工作区视图、侧栏树、概览、拖动移动（`DragMove.tsx`，用鼠标事件自己实现，没用 HTML5 拖放；放下的位置按侧栏节点上的 `data-drop-ws` / `data-drop-project` 找）、编辑器（`TodoEditor` 管定时保存（auto save 关闭时 1 小时兜底）、auto save、冲突和记下编辑位置，打字时不重新渲染，状态栏的字数、行数停顿片刻再算（`utils.ts` 的 `textStats`），`MarkdownEditor` 包装 CodeMirror）、设置
+- `src/components/`：首页（含搜索）、工作区视图、侧栏树、概览、拖动移动（`DragMove.tsx`，用鼠标事件自己实现，没用 HTML5 拖放；放下的位置按侧栏节点上的 `data-drop-ws` / `data-drop-project` 找）、编辑器（`TodoEditor` 管定时保存（auto save 关闭时 1 小时兜底）、auto save、冲突（含「另存为新待办」：Rust 端 `create_todo` 可以带正文一次建好）和记下编辑位置，打字时不重新渲染，状态栏的字数、行数停顿片刻再算（`utils.ts` 的 `textStats`），`MarkdownEditor` 包装 CodeMirror）、设置
   - 设置：`SettingsButton.tsx` 是设置按钮和对话框，五个页签各在 `settings/` 下一个文件——`GeneralSettings`（常规）、`ShortcutSettings`（快捷键：应用快捷键和编辑快捷键，录制时检查冲突）、`AppearanceSettings`（外观：主题、编辑区背景色、字号）、`SaveSettings`（保存）、`BackupSettings`（备份与恢复）；`ShortcutRow` 是录制一个快捷键的那一行
   - 工作区视图：`WorkspaceView.tsx` 管选中的工作区、右侧显示的内容、加载和刷新、快捷键、侧栏宽度；新建、重命名、删除、移动、打开等操作在 `workspaceActions.ts` 的 `useWorkspaceActions`（`actionsFor(ws)` 每次渲染新建、用这次渲染的状态；`stableActions(ws)` 是传给侧栏行的不变对象，调用时转给最新的 `actionsFor`）
   - 侧栏：`Sidebar.tsx` 管树的焦点和键盘操作（↑↓←→、Enter、Alt+方向键），其余在 `sidebar/` 下——`SidebarToolbar`（顶部：返回首页、选中工作区的 `WorkspacePicker`、主题、设置、搜索、新建、排序、隐藏已完成、全部折叠 / 展开）、`TreeRows`（工作区、项目、待办的行）、`RowPopups`（待办行共用的悬停提示 `TodoTip` 和右键菜单）、`tree.ts`（右侧显示的内容 `Selection`、行上 `data-sel` 的键、折叠状态、计数）

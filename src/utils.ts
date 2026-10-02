@@ -71,6 +71,26 @@ export function displayTitle(t: TodoSummary): { text: string; fromContent: boole
   return { text: "空白待办", fromContent: true };
 }
 
+/** 另存为新待办时标题后面加的 */
+export const MY_VERSION = "（我的版本）";
+
+/**
+ * 外部修改冲突时「另存为新待办」的标题：原来的标题加上「（我的版本）」；没有标题时取正文第一行
+ * （去掉标题、引用、列表、任务框这些行首标记，太长的截短）
+ */
+export function myVersionTitle(title: string, content: string): string {
+  let base = title.trim();
+  if (!base) {
+    const line = content.split("\n").find((l) => l.trim()) ?? "";
+    base = line
+      .trim()
+      .replace(/^(?:[#>]+\s*|[-*+]\s+|\d+[.)]\s+)*(?:\[[ xX]\]\s+)?/, "")
+      .trim();
+    if (base.length > 30) base = `${base.slice(0, 30)}…`;
+  }
+  return base ? `${base}${MY_VERSION}` : "我的版本";
+}
+
 export function sortTodos(todos: TodoSummary[], key: SortKey): TodoSummary[] {
   const byKey = (a: TodoSummary, b: TodoSummary) => {
     switch (key) {
