@@ -2,6 +2,7 @@ import { App as AntApp, Spin, type InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useWindowFocus } from "../hooks";
+import { useContentSearch } from "../search";
 import { type How, visit } from "../navHistory";
 import { useSettings } from "../settings";
 import { eventShortcut, isRefreshShortcut, sameShortcut } from "../shortcuts";
@@ -221,6 +222,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
 
   // 刚取消选中的工作区不等重新加载完就从侧栏去掉
   const trees = loaded?.filter((t) => workspaces.includes(t.name)) ?? null;
+  // 侧栏搜索时在选中工作区的正文全文里查；数据刷新、保存后（loaded 变了）重新查
+  const hits = useContentSearch(workspaces, keyword, loaded);
   const treeOf = (ws: string) => trees?.find((t) => t.name === ws);
 
   // 选中的工作区/项目/待办在刷新后不存在了（被外部删除、取消选中等），退回上一级。
@@ -518,6 +521,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         setCollapsed={setCollapsed}
         keyword={keyword}
         setKeyword={setKeyword}
+        hits={hits}
         listOptionsOf={listOptions.get}
         setListOptions={setListOptions}
         drag={drag}

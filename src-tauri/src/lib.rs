@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use store::{Store, TodoDetail, TodoSummary, WorkspaceInfo, WorkspaceTree, SaveResult};
+use store::{SaveResult, SearchHit, Store, TodoDetail, TodoSummary, WorkspaceInfo, WorkspaceTree};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent};
@@ -181,6 +181,18 @@ async fn move_todo(
     target_project: String,
 ) -> Cmd<TodoSummary> {
     store.move_todo(&workspace, &project, &id, &target_workspace, &target_project)
+}
+
+// ----- 全文搜索 -----
+
+/// 在正文全文里查找（不区分大小写）；workspaces 为 null 时查全部工作区
+#[tauri::command]
+async fn search_todos(
+    store: State<'_, Store>,
+    workspaces: Option<Vec<String>>,
+    keyword: String,
+) -> Cmd<Vec<SearchHit>> {
+    store.search(workspaces.as_deref(), &keyword)
 }
 
 // ----- 界面状态（数据目录的 .state.json） -----
@@ -698,6 +710,7 @@ pub fn run() {
             set_todo_done,
             delete_todo,
             move_todo,
+            search_todos,
             read_ui_state,
             write_ui_state,
             open_todo_external,

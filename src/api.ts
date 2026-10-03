@@ -4,6 +4,7 @@ import type {
   FontArea,
   RemoteBackup,
   SaveResult,
+  SearchHit,
   SettingsInfo,
   ShortcutAction,
   StartupView,
@@ -59,6 +60,10 @@ export const api = {
   /** 移到另一个项目，可以在别的工作区里；返回移过去后的摘要（id 可能因为重名而变） */
   moveTodo: (workspace: string, project: string, id: string, targetWorkspace: string, targetProject: string) =>
     invoke<TodoSummary>("move_todo", { workspace, project, id, targetWorkspace, targetProject }),
+
+  /** 在正文全文里查找（不区分大小写），返回正文里有关键字的待办；workspaces 为 null 时查全部工作区 */
+  searchTodos: (workspaces: string[] | null, keyword: string) =>
+    invoke<SearchHit[]>("search_todos", { workspaces, keyword }),
 
   /** 数据目录的 .state.json 里的界面状态（JSON 文本），还没有这个文件时是 null */
   readUiState: () => invoke<string | null>("read_ui_state"),

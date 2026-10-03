@@ -711,6 +711,10 @@ mark {
 .todo-meta .sep {
   margin: 0 4px;
 }
+/* 搜索时代替创建、修改时间显示的正文片段 */
+.todo-snippet {
+  color: var(--c-text-2);
+}
 
 .todo-tip {
   font-size: 12px;

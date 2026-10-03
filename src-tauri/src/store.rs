@@ -18,8 +18,8 @@
 //! 认不出来的只读，不允许在软件里保存，免得把原文件覆盖成乱码。
 //!
 //! 左侧列表显示的正文开头（预览）要读每个 .md 的开头，待办多了很慢（窗口每次获得焦点都要重新加载），
-//! 所以缓存在内存里，按文件的修改时间和大小判断是否失效；不写进任何文件（数据目录可能用网盘同步，
-//! 多写一个文件就多一次同步冲突的机会）。
+//! 所以缓存在内存里，按文件的修改时间和大小判断是否失效；全文搜索用的正文全文同样缓存在内存里。
+//! 都不写进任何文件（数据目录可能用网盘同步，多写一个文件就多一次同步冲突的机会）。
 
 use chrono::Local;
 use encoding_rs::{DecoderResult, Encoding, GB18030, UTF_8};
@@ -38,6 +38,11 @@ const PREVIEW_CHARS: usize = 200;
 const PREVIEW_READ_BYTES: u64 = 4096;
 const MAX_NAME_CHARS: usize = 64;
 const MAX_TITLE_CHARS: usize = 200;
+/// 全文搜索最多返回这么多条
+const MAX_SEARCH_HITS: usize = 2000;
+/// 全文搜索的结果里，命中处前后各带多少个字
+const SNIPPET_BEFORE: usize = 16;
+const SNIPPET_AFTER: usize = 60;
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -145,6 +150,17 @@ pub enum TextEncoding {
     Unknown,
 }
 
+/// 全文搜索命中的一条待办（正文里有关键字）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub workspace: String,
+    pub project: String,
+    pub id: String,
+    /// 正文里第一处命中附近的一段，合并成一行，前后被截掉的地方加省略号
+    pub snippet: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveResult {
@@ -160,8 +176,8 @@ pub struct SaveResult {
 
 pub struct Store {
     root: PathBuf,
-    // 所有读写串行化：操作都很快，且元数据文件需要读-改-写。预览缓存也由这把锁保护
-    lock: Mutex<PreviewCache>,
+    // 所有读写串行化：操作都很快，且元数据文件需要读-改-写。预览和全文的缓存也由这把锁保护
+    lock: Mutex<MemCache>,
 }
 
 impl Store {
@@ -169,7 +185,7 @@ impl Store {
         fs::create_dir_all(&root)?;
         Ok(Self {
             root,
-            lock: Mutex::new(PreviewCache::default()),
+            lock: Mutex::new(MemCache::default()),
         })
     }
 
@@ -177,7 +193,7 @@ impl Store {
         &self.root
     }
 
-    fn guard(&self) -> MutexGuard<'_, PreviewCache> {
+    fn guard(&self) -> MutexGuard<'_, MemCache> {
         self.lock.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -394,7 +410,7 @@ impl Store {
         base_mtime: Option<i64>,
         force: bool,
     ) -> Result<SaveResult> {
-        let _g = self.guard();
+        let mut g = self.guard();
         let dir = self.project_dir(ws, project)?;
         let path = Self::todo_file(&dir, id)?;
         let (meta, idx) = meta_with_entry(&dir, id)?;
@@ -414,6 +430,8 @@ impl Store {
             return Err("正文文件不是 UTF-8 或 GBK 编码，为免损坏原文件不能在这里保存，请用默认程序打开编辑".into());
         }
         atomic_write(&path, content.as_bytes()).map_err(|e| format!("保存失败：{e}"))?;
+        // 很快地连着保存两次、长度又一样时，修改时间和大小可能都没变，缓存认不出来，这里直接丢掉
+        g.forget_todo(&dir, id);
         let mtime = mtime_ms(&path).unwrap_or_else(now_ms);
         Ok(SaveResult {
             saved: true,
@@ -527,6 +545,41 @@ impl Store {
         ))
     }
 
+    // ----- 全文搜索 -----
+
+    /// 在正文全文里查找关键字（不区分大小写），返回正文里有关键字的待办和命中处附近的一段。
+    /// workspaces 为 None 时查全部工作区；不存在的工作区跳过。标题由前端自己匹配，这里只查正文
+    pub fn search(&self, workspaces: Option<&[String]>, keyword: &str) -> Result<Vec<SearchHit>> {
+        let needle = fold(keyword.trim());
+        if needle.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut g = self.guard();
+        let list = match workspaces {
+            Some(names) => names.iter().filter_map(|ws| Some((ws.clone(), self.ws_dir(ws).ok()?))).collect(),
+            None => list_subdirs(&self.root)?,
+        };
+        let mut hits = Vec::new();
+        for (workspace, ws_dir) in list {
+            for (project, pdir) in list_subdirs(&ws_dir)? {
+                for (id, text) in g.project_texts(&pdir)? {
+                    if hits.len() >= MAX_SEARCH_HITS {
+                        return Ok(hits);
+                    }
+                    if let Some(at) = text.folded.find(&needle) {
+                        hits.push(SearchHit {
+                            workspace: workspace.clone(),
+                            project: project.clone(),
+                            id,
+                            snippet: snippet(&text, at, needle.chars().count()),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(hits)
+    }
+
     // ----- 界面状态 -----
 
     /// 读界面状态文件（内容由前端决定，这里原样读写）；还没有时返回 None
@@ -590,40 +643,69 @@ impl FileStamp {
     }
 }
 
-/// 正文开头（预览）的内存缓存：项目目录 → 待办 id → 预览。
-/// 每次扫描一个项目目录后，这个目录只留这次扫到的文件；工作区改名、删除时整个丢掉
-#[derive(Default)]
-struct PreviewCache {
-    dirs: HashMap<PathBuf, HashMap<String, CachedPreview>>,
+/// 全文缓存里的一条：文件的修改时间和大小都没变就直接用
+struct CachedText {
+    stamp: FileStamp,
+    /// 正文（按识别出的编码解码，换行统一成 \n）
+    text: String,
+    /// 逐字转成小写的正文，字数和 text 一样，用来不区分大小写地查找
+    folded: String,
 }
 
-impl PreviewCache {
+/// 内存缓存。dirs：正文开头（预览），项目目录 → 待办 id → 预览；texts：全文搜索用的正文全文，项目目录 → 待办 id → 全文。
+/// 每次扫描（搜索）一个项目目录后，这个目录只留这次扫到的文件；工作区改名、删除时整个丢掉
+#[derive(Default)]
+struct MemCache {
+    dirs: HashMap<PathBuf, HashMap<String, CachedPreview>>,
+    texts: HashMap<PathBuf, HashMap<String, CachedText>>,
+}
+
+impl MemCache {
     fn forget_under(&mut self, dir: &Path) {
         self.dirs.retain(|d, _| !d.starts_with(dir));
+        self.texts.retain(|d, _| !d.starts_with(dir));
+    }
+
+    /// 项目目录 dir 里的一条待办的正文变了
+    fn forget_todo(&mut self, dir: &Path, id: &str) {
+        if let Some(m) = self.dirs.get_mut(dir) {
+            m.remove(id);
+        }
+        if let Some(m) = self.texts.get_mut(dir) {
+            m.remove(id);
+        }
+    }
+
+    /// 项目里每条待办的正文全文（待办 id → 全文）：文件没变的用缓存，变了的、新的重新读，多的时候并行读
+    fn project_texts(&mut self, dir: &Path) -> Result<Vec<(String, &CachedText)>> {
+        let files = markdown_files(dir)?;
+        let mut cached = self.texts.remove(dir).unwrap_or_default();
+        let mut fresh: HashMap<String, CachedText> = HashMap::with_capacity(files.len());
+        let mut missing = Vec::new();
+        for (id, path, md) in &files {
+            let stamp = FileStamp::of(md);
+            match cached.remove(id) {
+                Some(c) if c.stamp == stamp => {
+                    fresh.insert(id.clone(), c);
+                }
+                _ => missing.push((id, path.as_path(), stamp)),
+            }
+        }
+        let paths: Vec<&Path> = missing.iter().map(|(_, p, _)| *p).collect();
+        for ((id, _, stamp), text) in missing.iter().zip(read_all(&paths, read_text)) {
+            let folded = fold(&text);
+            fresh.insert((*id).clone(), CachedText { stamp: *stamp, text, folded });
+        }
+        let texts = self.texts.entry(dir.to_path_buf()).or_insert(fresh);
+        Ok(files.into_iter().filter_map(|(id, _, _)| texts.get(&id).map(|t| (id, t))).collect())
     }
 }
 
 /// 扫描项目目录，把元数据和实际的 .md 文件对齐，返回全部待办摘要。
 /// 给了预览缓存时带上正文开头（文件没变就用缓存的，不重新读），否则预览为空
-fn scan_project(dir: &Path, previews: Option<&mut PreviewCache>) -> Result<Vec<TodoSummary>> {
+fn scan_project(dir: &Path, previews: Option<&mut MemCache>) -> Result<Vec<TodoSummary>> {
     let mut meta = read_meta(dir)?;
-
-    let mut files: Vec<(String, PathBuf, fs::Metadata)> = Vec::new();
-    let entries = fs::read_dir(dir).map_err(|e| format!("读取项目目录失败：{e}"))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(md) = entry.metadata() else { continue };
-        if !md.is_file() || !is_markdown(&path) {
-            continue;
-        }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if stem.is_empty() || stem.starts_with('.') {
-            continue;
-        }
-        files.push((stem.to_string(), path, md));
-    }
+    let files = markdown_files(dir)?;
     // id → 在 files 里的位置；待办多时逐个比对太慢
     let index: HashMap<String, usize> = files.iter().enumerate().map(|(i, (id, _, _))| (id.clone(), i)).collect();
 
@@ -701,23 +783,49 @@ fn scan_project(dir: &Path, previews: Option<&mut PreviewCache>) -> Result<Vec<T
         .collect())
 }
 
-/// 读一批文件的开头生成预览。打开、读文件的时间主要花在等系统（和杀毒软件扫描）上，
-/// 刚启动、缓存还是空的时候要读几千个，所以多的时候分给几个线程一起读
+/// 项目目录里的正文文件：(待办 id, 路径, 文件信息)；跳过 . 开头的（保存时的临时文件等）
+fn markdown_files(dir: &Path) -> Result<Vec<(String, PathBuf, fs::Metadata)>> {
+    let mut files = Vec::new();
+    let entries = fs::read_dir(dir).map_err(|e| format!("读取项目目录失败：{e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(md) = entry.metadata() else { continue };
+        if !md.is_file() || !is_markdown(&path) {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if stem.is_empty() || stem.starts_with('.') {
+            continue;
+        }
+        files.push((stem.to_string(), path, md));
+    }
+    Ok(files)
+}
+
+/// 读一批文件的开头生成预览
 fn read_previews(paths: &[&Path]) -> Vec<String> {
+    read_all(paths, read_preview)
+}
+
+/// 逐个文件调用 read，结果和 paths 一一对应。打开、读文件的时间主要花在等系统（和杀毒软件扫描）上，
+/// 刚启动、缓存还是空的时候要读几千个，所以多的时候分给几个线程一起读
+fn read_all<T: Send + Clone + Default>(paths: &[&Path], read: fn(&Path) -> T) -> Vec<T> {
     const PARALLEL_MIN: usize = 16;
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 8);
     if paths.len() < PARALLEL_MIN {
-        return paths.iter().map(|p| read_preview(p)).collect();
+        return paths.iter().map(|p| read(p)).collect();
     }
     let chunk = paths.len().div_ceil(threads);
     std::thread::scope(|s| {
         let handles: Vec<_> = paths
             .chunks(chunk)
-            .map(|part| s.spawn(move || part.iter().map(|p| read_preview(p)).collect::<Vec<_>>()))
+            .map(|part| (part.len(), s.spawn(move || part.iter().map(|p| read(p)).collect::<Vec<_>>())))
             .collect();
         handles
             .into_iter()
-            .flat_map(|h| h.join().unwrap_or_else(|_| vec![String::new(); chunk]))
+            .flat_map(|(len, h)| h.join().unwrap_or_else(|_| vec![T::default(); len]))
             .collect()
     })
 }
@@ -848,6 +956,53 @@ fn read_preview(path: &Path) -> String {
     // 读满了说明后面还有内容，截断位置可能落在多字节字符中间
     let text = decode_text(&buf, (buf.len() as u64) < PREVIEW_READ_BYTES).text;
     make_preview(text.trim_end_matches('\u{FFFD}'))
+}
+
+/// 全文搜索用：读整个正文（识别编码），读不了的当成空的
+fn read_text(path: &Path) -> String {
+    fs::read(path).map(|b| decode_text(&b, true).text).unwrap_or_default()
+}
+
+/// 不区分大小写地比较时用的写法：逐字转成小写。转小写后变成好几个字的（极少见）保持原样，
+/// 这样转换前后字数一样，查到的位置能对回原文
+fn fold(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            let mut lower = c.to_lowercase();
+            match (lower.next(), lower.next()) {
+                (Some(l), None) => l,
+                _ => c,
+            }
+        })
+        .collect()
+}
+
+/// 全文搜索的结果里显示的一段：命中处（folded 里的字节位置 at，关键字 len 个字）前后各带一些字，
+/// 空白（含换行）合并成一个空格，前后被截掉的地方加省略号
+fn snippet(t: &CachedText, at: usize, len: usize) -> String {
+    let start = t.folded[..at].chars().count();
+    let from = start.saturating_sub(SNIPPET_BEFORE);
+    let to = start + len + SNIPPET_AFTER;
+    let mut out = String::new();
+    if from > 0 {
+        out.push('…');
+    }
+    let mut space = false;
+    for c in t.text.chars().skip(from).take(to - from) {
+        if c.is_whitespace() {
+            space = true;
+            continue;
+        }
+        if space && !out.is_empty() && !out.ends_with('…') {
+            out.push(' ');
+        }
+        space = false;
+        out.push(c);
+    }
+    if t.text.chars().nth(to).is_some() {
+        out.push('…');
+    }
+    out
 }
 
 /// 取正文开头的若干字符：去掉标题/列表/引用等 Markdown 行首标记，多行合并为一行
@@ -1472,6 +1627,98 @@ mod tests {
         let todos: usize = tree.projects.iter().map(|p| p.todos.len()).sum();
         let json = serde_json::to_vec(&tree).unwrap();
         println!("一个工作区：{} 个项目、{todos} 条待办，序列化后 {} KB", tree.projects.len(), json.len() / 1024);
+    }
+
+    #[test]
+    fn search_finds_whole_content() {
+        let (_tmp, s) = store("search");
+        s.create_workspace("工作").unwrap();
+        s.create_workspace("生活").unwrap();
+        s.create_project("工作", "周报").unwrap();
+        s.create_project("生活", "购物").unwrap();
+        // 关键字在正文很靠后的地方（预览只有开头 200 字）
+        let long = format!("# 本周进展\n\n{}\n\n下周要和 Alice 对一下支付接口的联调\n\n{}", "铺垫".repeat(300), "结尾".repeat(100));
+        let a = s.create_todo("工作", "周报", "第 40 周", &long).unwrap();
+        let b = s.create_todo("生活", "购物", "超市", "牛奶\n面包").unwrap();
+        s.create_todo("工作", "周报", "标题里有支付接口", "正文没有").unwrap();
+
+        let hits = s.search(None, "支付接口").unwrap();
+        assert_eq!(hits.len(), 1, "只查正文，标题由前端匹配");
+        let h = &hits[0];
+        assert_eq!((h.workspace.as_str(), h.project.as_str(), h.id.as_str()), ("工作", "周报", a.id.as_str()));
+        // 命中处前后各带一些字，前后截掉的地方有省略号
+        assert!(h.snippet.starts_with('…') && h.snippet.ends_with('…'), "{}", h.snippet);
+        assert!(h.snippet.contains("下周要和 Alice 对一下支付接口的联调"), "{}", h.snippet);
+
+        // 不区分大小写
+        assert_eq!(s.search(None, "alice").unwrap().len(), 1);
+        assert_eq!(s.search(None, "ALICE").unwrap().len(), 1);
+        // 只查给出的工作区，不存在的跳过
+        assert!(s.search(Some(&["生活".into(), "没有".into()]), "支付").unwrap().is_empty());
+        let only = s.search(Some(&["生活".into()]), "面包").unwrap();
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].id, b.id);
+        // 换行合并成空格；关键字前后空白不算
+        assert_eq!(only[0].snippet, "牛奶 面包");
+        assert_eq!(s.search(None, "  面包 ").unwrap().len(), 1);
+        assert!(s.search(None, "   ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_follows_file_changes() {
+        let (_tmp, s) = store("search-cache");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let t = s.create_todo("w", "p", "", "第一版：苹果").unwrap();
+        assert_eq!(s.search(None, "苹果").unwrap().len(), 1);
+        // 在软件里保存、在外部改过，都按新的正文查
+        s.save_todo_content("w", "p", &t.id, "第二版：香蕉", None, true).unwrap();
+        assert!(s.search(None, "苹果").unwrap().is_empty());
+        assert_eq!(s.search(None, "香蕉").unwrap().len(), 1);
+        let dir = s.project_path("w", "p").unwrap();
+        fs::write(dir.join(format!("{}.md", t.id)), "外部改的：橘子").unwrap();
+        assert_eq!(s.search(None, "橘子").unwrap().len(), 1);
+        // 直接放进来的 .md（还没登记过）、GBK 编码的也能查到；删掉的查不到，也不再占着缓存
+        fs::write(dir.join("拷进来的.md"), encoding_rs::GBK.encode("会议纪要：西瓜").0).unwrap();
+        assert_eq!(s.search(None, "西瓜").unwrap()[0].id, "拷进来的");
+        fs::remove_file(dir.join("拷进来的.md")).unwrap();
+        assert!(s.search(None, "西瓜").unwrap().is_empty());
+        assert!(!s.guard().texts[&dir].contains_key("拷进来的"));
+        // 工作区改名后旧目录的缓存丢掉，新名字下照样能查
+        s.rename_workspace("w", "w2").unwrap();
+        assert!(s.guard().texts.is_empty());
+        assert_eq!(s.search(None, "橘子").unwrap()[0].workspace, "w2");
+    }
+
+    #[test]
+    fn search_reads_many_files_in_parallel() {
+        let (_tmp, s) = store("search-many");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let dir = s.project_path("w", "p").unwrap();
+        for i in 0..41 {
+            fs::write(dir.join(format!("笔记{i:02}.md")), format!("开头\n第 {i} 条的关键字K{i}尾巴")).unwrap();
+        }
+        let hits = s.search(None, "关键字").unwrap();
+        assert_eq!(hits.len(), 41);
+        for h in hits {
+            let i: u32 = h.id.trim_start_matches("笔记").parse().unwrap();
+            assert_eq!(h.snippet, format!("开头 第 {i} 条的关键字K{i}尾巴"));
+        }
+    }
+
+    #[test]
+    fn snippet_cuts_around_the_match() {
+        let text = |s: &str| CachedText { stamp: FileStamp { modified: None, len: 0 }, text: s.into(), folded: fold(s) };
+        let t = text(&format!("{}关键字{}", "前".repeat(30), "后".repeat(100)));
+        let at = t.folded.find("关键字").unwrap();
+        let cut = snippet(&t, at, 3);
+        assert_eq!(cut, format!("…{}关键字{}…", "前".repeat(SNIPPET_BEFORE), "后".repeat(SNIPPET_AFTER)));
+        // 大小写不同的字母：位置按字数对回原文
+        let t = text("ÀBC Kelvin \u{212A}elvin");
+        assert_eq!(fold("KELVIN"), "kelvin");
+        let at = t.folded.find("kelvin").unwrap();
+        assert_eq!(snippet(&t, at, 6), "ÀBC Kelvin \u{212A}elvin");
     }
 
     #[test]

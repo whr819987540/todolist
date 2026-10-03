@@ -1,5 +1,6 @@
 import type { InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { type ContentHits, NO_HITS } from "../search";
 import type { WorkspaceTree } from "../types";
 import { useNow } from "../utils";
 import type { ListOptions } from "../workspaceState";
@@ -40,6 +41,8 @@ interface Props {
   setCollapsed: (workspace: string, fn: (prev: Collapsed) => Collapsed) => void;
   keyword: string;
   setKeyword: (v: string) => void;
+  /** 全文搜索的结果（正文里有关键字的待办）；还没查完时是 null */
+  hits: ContentHits | null;
   /** 各工作区的排序和隐藏已完成；侧栏顶部的按钮改的是右侧正在显示的工作区的 */
   listOptionsOf: (workspace: string) => ListOptions;
   setListOptions: (workspace: string, patch: Partial<ListOptions>) => void;
@@ -177,6 +180,7 @@ export default function Sidebar(props: Props) {
             collapsed={collapsedOf(tree.name)}
             setCollapsed={setCollapsed}
             keyword={kw}
+            hits={props.hits && (props.hits.get(tree.name) ?? NO_HITS)}
             {...listOptionsOf(tree.name)}
             now={now}
             today={today}

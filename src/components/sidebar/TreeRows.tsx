@@ -8,6 +8,7 @@ import {
 } from "@ant-design/icons";
 import { Dropdown, Tooltip, type MenuProps } from "antd";
 import { memo, useCallback, useMemo } from "react";
+import { hitKey, searchSnippet } from "../../search";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../../types";
 import { avatarColor, compactTime, displayTitle, firstChar, matchTodo, relativeTime, sortTodos } from "../../utils";
 import { type DragItem, type DragState, dropClass, isDraggingProject } from "../DragMove";
@@ -31,6 +32,8 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   collapsed: Collapsed;
   setCollapsed: (workspace: string, fn: (prev: Collapsed) => Collapsed) => void;
   keyword: string;
+  /** 全文搜索在这个工作区里的结果（正文里有关键字的待办，见 search.ts）；还没查完时是 null */
+  hits: ReadonlyMap<string, string> | null;
   hideDone: boolean;
   sortKey: SortKey;
   now: number;
@@ -41,19 +44,20 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   /** 右键「移动到」列出的项目，右键时才算；是不变的函数 */
   moveTargets: (workspace: string) => MoveTarget[];
 }) {
-  const { tree, sel, actions: a, collapsed, keyword: kw, hideDone, sortKey, setCollapsed } = p;
+  const { tree, sel, actions: a, collapsed, keyword: kw, hits, hideDone, sortKey, setCollapsed } = p;
 
+  // 搜索时：标题、正文开头（前端匹配）或正文全文（hits）里有关键字的待办，和名字里有关键字的项目
   const visible = useMemo(() => {
     const k = kw.toLowerCase();
     return tree.projects
       .map((project) => {
         let todos = sortTodos(project.todos, sortKey);
         if (hideDone) todos = todos.filter((t) => !t.done);
-        if (kw) todos = todos.filter((t) => matchTodo(t, kw));
+        if (kw) todos = todos.filter((t) => matchTodo(t, kw) || !!hits?.has(hitKey(project.name, t.id)));
         return { project, todos, nameMatch: !!k && project.name.toLowerCase().includes(k) };
       })
       .filter((x) => !kw || x.todos.length > 0 || x.nameMatch);
-  }, [tree, kw, hideDone, sortKey]);
+  }, [tree, kw, hits, hideDone, sortKey]);
 
   const total = countAll(tree);
   const done = countDone(tree);
@@ -118,6 +122,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
               actions={a}
               moveTargets={p.moveTargets}
               keyword={kw}
+              hits={hits}
               now={p.now}
               today={p.today}
               hideDone={hideDone}
@@ -136,7 +141,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
           )}
           {kw && visible.length === 0 && tree.projects.length > 0 && (
             <div className="tree-empty" style={{ paddingLeft: 30 }}>
-              没有找到包含“{kw}”的待办
+              {hits ? `没有找到包含“${kw}”的待办` : "正在搜索正文…"}
             </div>
           )}
         </div>
@@ -159,6 +164,8 @@ const ProjectBranch = memo(function ProjectBranch(p: {
   actions: Actions;
   moveTargets: (workspace: string) => MoveTarget[];
   keyword: string;
+  /** 全文搜索在这个工作区里的结果 */
+  hits: ReadonlyMap<string, string> | null;
   now: number;
   today: string;
   hideDone: boolean;
@@ -227,6 +234,7 @@ const ProjectBranch = memo(function ProjectBranch(p: {
               actions={a}
               moveTargets={p.moveTargets}
               keyword={p.keyword}
+              snippet={p.keyword ? searchSnippet(t, p.keyword, p.hits?.get(hitKey(project.name, t.id))) : null}
               now={p.now}
               today={p.today}
               dragged={p.draggingTodoId === t.id}
@@ -259,6 +267,8 @@ interface TodoRowProps {
   actions: Actions;
   moveTargets: (workspace: string) => MoveTarget[];
   keyword: string;
+  /** 搜索时显示在标题下面（代替创建、修改时间）的一段正文，标题里已经有关键字时为 null */
+  snippet: string | null;
   now: number;
   today: string;
   dragged: boolean;
@@ -325,11 +335,17 @@ const TodoRow = memo(function TodoRow(p: TodoRowProps) {
         <div className={`todo-title${fromContent ? " from-content" : ""}`}>
           <Highlight text={text} kw={p.keyword} />
         </div>
-        <div className="todo-meta">
-          创建 {compactTime(t.createdAt, p.now)}
-          <span className="sep">·</span>
-          修改 {relativeTime(t.updatedAt, p.now, true)}
-        </div>
+        {p.snippet ? (
+          <div className="todo-meta todo-snippet">
+            <Highlight text={p.snippet} kw={p.keyword} />
+          </div>
+        ) : (
+          <div className="todo-meta">
+            创建 {compactTime(t.createdAt, p.now)}
+            <span className="sep">·</span>
+            修改 {relativeTime(t.updatedAt, p.now, true)}
+          </div>
+        )}
       </div>
     </div>
   );

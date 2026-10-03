@@ -1,6 +1,7 @@
 import { CheckOutlined, FolderFilled } from "@ant-design/icons";
 import { Empty, Spin, Tooltip } from "antd";
 import { useMemo } from "react";
+import { type ContentHits, hitKey, searchSnippet } from "../search";
 import type { ProjectNode, TodoSummary, WorkspaceInfo, WorkspaceTree } from "../types";
 import { compareName, displayTitle, fullTime, matchTodo, relativeTime, useNow } from "../utils";
 import Highlight from "./Highlight";
@@ -12,37 +13,35 @@ interface Props {
   workspaces: WorkspaceInfo[];
   /** 全部工作区的项目和待办；null 表示还在加载 */
   trees: WorkspaceTree[] | null;
+  /** 全文搜索的结果（正文里有关键字的待办）；null 表示还在查 */
+  hits: ContentHits | null;
   renderCard: (ws: WorkspaceInfo) => React.ReactNode;
   onEnter: (workspace: string, sel?: Omit<Selection, "workspace">) => void;
 }
 
-/** 标题里没有关键字、是正文开头命中时，截取关键字附近的一段显示出来 */
-function snippet(t: TodoSummary, k: string): string | null {
-  if (!t.title.trim() || t.title.toLowerCase().includes(k)) return null;
-  const i = t.preview.toLowerCase().indexOf(k);
-  if (i < 0) return null;
-  const start = Math.max(0, i - 12);
-  return (start > 0 ? "…" : "") + t.preview.slice(start, i + k.length + 60);
-}
-
-/** 首页搜索：跨全部工作区查找工作区、项目和待办 */
-export default function SearchResults({ kw, workspaces, trees, renderCard, onEnter }: Props) {
+/** 首页搜索：跨全部工作区查找工作区、项目和待办（标题和正文全文） */
+export default function SearchResults({ kw, workspaces, trees, hits, renderCard, onEnter }: Props) {
   const now = useNow();
   const k = kw.toLowerCase();
 
   const { projects, todos } = useMemo(() => {
     const projects: { workspace: string; project: ProjectNode }[] = [];
-    const todos: { workspace: string; project: string; todo: TodoSummary }[] = [];
+    const todos: { workspace: string; project: string; todo: TodoSummary; snippet: string | null }[] = [];
     for (const tree of trees ?? []) {
+      const found = hits?.get(tree.name);
       for (const p of [...tree.projects].sort((a, b) => compareName(a.name, b.name))) {
         if (p.name.toLowerCase().includes(k)) projects.push({ workspace: tree.name, project: p });
-        for (const t of p.todos) if (matchTodo(t, kw)) todos.push({ workspace: tree.name, project: p.name, todo: t });
+        for (const t of p.todos) {
+          const hit = found?.get(hitKey(p.name, t.id));
+          if (matchTodo(t, kw) || hit !== undefined)
+            todos.push({ workspace: tree.name, project: p.name, todo: t, snippet: searchSnippet(t, kw, hit) });
+        }
       }
     }
     // 未完成在前，最近修改的在前
     todos.sort((a, b) => Number(a.todo.done) - Number(b.todo.done) || b.todo.updatedAt - a.todo.updatedAt);
     return { projects, todos };
-  }, [trees, kw, k]);
+  }, [trees, hits, kw, k]);
 
   const nothing = workspaces.length + projects.length + todos.length === 0;
 
@@ -61,7 +60,7 @@ export default function SearchResults({ kw, workspaces, trees, renderCard, onEnt
         </>
       )}
 
-      {!trees ? (
+      {!trees || (nothing && !hits) ? (
         <div className="search-loading">
           <Spin />
         </div>
@@ -102,9 +101,8 @@ export default function SearchResults({ kw, workspaces, trees, renderCard, onEnt
             <>
               <div className="section-title">待办（{todos.length}）</div>
               <div className="list">
-                {todos.map(({ workspace, project, todo: t }) => {
+                {todos.map(({ workspace, project, todo: t, snippet: snip }) => {
                   const { text, fromContent } = displayTitle(t);
-                  const snip = snippet(t, k);
                   return (
                     <div
                       key={`${workspace}/${project}/${t.id}`}

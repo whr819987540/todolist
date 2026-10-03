@@ -39,6 +39,15 @@ export interface TodoDetail {
   encoding: TextEncoding;
 }
 
+/** 全文搜索命中的一条待办（正文里有关键字） */
+export interface SearchHit {
+  workspace: string;
+  project: string;
+  id: string;
+  /** 正文里第一处命中附近的一段，合并成一行，前后被截掉的地方有省略号 */
+  snippet: string;
+}
+
 export interface SaveResult {
   saved: boolean;
   summary: TodoSummary;

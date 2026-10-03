@@ -23,6 +23,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useWindowFocus } from "../hooks";
+import { useContentSearch } from "../search";
 import { eventShortcut, isRefreshShortcut } from "../shortcuts";
 import { ThemeButton } from "../theme";
 import type { WorkspaceInfo, WorkspaceTree } from "../types";
@@ -47,6 +48,8 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
   const now = useNow();
   const kw = keyword.trim();
   const searching = kw !== "";
+  // 在全部工作区的正文全文里查；工作区列表刷新（切回窗口、F5）后重新查
+  const hits = useContentSearch(null, kw, list);
 
   const reload = useCallback(async () => {
     try {
@@ -264,6 +267,7 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
             kw={kw}
             workspaces={list.filter((ws) => ws.name.toLowerCase().includes(kw.toLowerCase()))}
             trees={trees}
+            hits={hits}
             renderCard={renderCard}
             onEnter={onEnter}
           />
