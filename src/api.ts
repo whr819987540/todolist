@@ -97,6 +97,11 @@ export const api = {
   setSaveOptions: (autoSave: boolean, saveDelaySecs: number) =>
     invoke<SettingsInfo>("set_save_options", { autoSave, saveDelaySecs }),
   setStartupView: (view: StartupView) => invoke<SettingsInfo>("set_startup_view", { view }),
+  /** 是否已设置开机自启（以注册表为准，在任务管理器里禁用了的算没开） */
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  /** 打开 / 关闭开机自启，返回改完后的状态 */
+  setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
+  setAutostartHidden: (hidden: boolean) => invoke<SettingsInfo>("set_autostart_hidden", { hidden }),
 
   getWebdav: () => invoke<WebDavInfo>("get_webdav"),
   /** password 为 null 时保留原来的密码 */

@@ -1,4 +1,5 @@
-import { App as AntApp, Radio } from "antd";
+import { App as AntApp, Checkbox, Radio, Switch } from "antd";
+import { useEffect, useState } from "react";
 import { api, errMsg } from "../../api";
 import { useSettings } from "../../settings";
 import type { StartupView } from "../../types";
@@ -12,23 +13,61 @@ const STARTUP_ITEMS: { value: StartupView; label: string; desc: string }[] = [
   },
 ];
 
-/** 常规：打开软件时显示的界面，下次启动时生效 */
+/** 常规：开机自启，打开软件时显示的界面（下次启动时生效） */
 export default function GeneralSettings() {
   const { message } = AntApp.useApp();
   const { info, setInfo } = useSettings();
+  // 开机自启记在注册表里（这台电脑上的设置），打开设置时读一次；null 是还没读出来
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.getAutostart().then(setAutostart, () => setAutostart(false));
+  }, []);
   if (!info) return <div className="setting-item" />;
 
-  const change = async (view: StartupView) => {
+  const run = async (fn: () => Promise<void>) => {
     try {
-      setInfo(await api.setStartupView(view));
+      await fn();
     } catch (e) {
       message.error(errMsg(e));
     }
   };
 
+  const toggleAutostart = (on: boolean) => {
+    setBusy(true);
+    run(async () => {
+      const now = await api.setAutostart(on);
+      setAutostart(now);
+      message.success(now ? "已设置开机时自动启动" : "已关闭开机自动启动");
+    }).finally(() => setBusy(false));
+  };
+
   return (
     <>
       <div className="setting-group">启动</div>
+      <div className="setting-item">
+        <div className="setting-switch-row">
+          <span className="setting-label">开机时自动启动</span>
+          <Switch
+            className="autostart-switch"
+            checked={!!autostart}
+            loading={autostart === null || busy}
+            onChange={toggleAutostart}
+          />
+        </div>
+        <div className="setting-desc">
+          登录 Windows 后自动运行。只对这台电脑生效，不随设置备份；在任务管理器的「启动应用」里禁用了的，这里显示为关闭。
+        </div>
+        <Checkbox
+          className="autostart-hidden"
+          disabled={!autostart}
+          checked={info.settings.autostartHidden}
+          onChange={(e) => run(async () => setInfo(await api.setAutostartHidden(e.target.checked)))}
+        >
+          开机启动后只在托盘里，不显示主窗口
+          {info.defaults.autostartHidden && <span className="muted">（默认）</span>}
+        </Checkbox>
+      </div>
       <div className="setting-item">
         <div className="setting-label">打开软件时</div>
         <div className="setting-desc">下次打开软件时生效；从托盘恢复窗口时总是保持原来的样子。</div>
@@ -36,7 +75,7 @@ export default function GeneralSettings() {
           className="startup-options"
           vertical
           value={info.settings.startupView}
-          onChange={(e) => change(e.target.value)}
+          onChange={(e) => run(async () => setInfo(await api.setStartupView(e.target.value)))}
         >
           {STARTUP_ITEMS.map((item) => (
             <Radio key={item.value} value={item.value}>

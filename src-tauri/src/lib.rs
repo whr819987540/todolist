@@ -1,3 +1,4 @@
+mod autostart;
 mod backup;
 mod settings;
 mod store;
@@ -515,6 +516,36 @@ fn set_startup_view(settings: State<'_, SettingsStore>, view: StartupView) -> Cm
     Ok(settings_info(&settings))
 }
 
+// ----- 开机自启 -----
+
+/// 开机自启的启动项名（注册表 Run 里），用产品名：卸载程序会删掉同名的这一项
+fn autostart_name(app: &AppHandle) -> String {
+    app.package_info().name.clone()
+}
+
+/// 是否已设置开机自启（以注册表为准，在任务管理器里禁用了的算没开）
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> bool {
+    autostart::is_enabled(&autostart_name(&app))
+}
+
+/// 打开 / 关闭开机自启，返回改完后的状态
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Cmd<bool> {
+    let exe = std::env::current_exe().map_err(|e| format!("找不到程序的位置：{e}"))?;
+    autostart::set(&autostart_name(&app), &exe, enabled)?;
+    Ok(autostart::is_enabled(&autostart_name(&app)))
+}
+
+/// 修改开机自启时是否只在托盘里、不显示主窗口
+#[tauri::command]
+fn set_autostart_hidden(settings: State<'_, SettingsStore>, hidden: bool) -> Cmd<SettingsInfo> {
+    let mut next = settings.get();
+    next.autostart_hidden = hidden;
+    settings.save(next)?;
+    Ok(settings_info(&settings))
+}
+
 // ----- 设置备份（WebDAV、本地文件） -----
 
 #[tauri::command]
@@ -672,6 +703,7 @@ pub fn run() {
         .setup(|app| {
             let store = Store::new(data_root(app)?)?;
             let settings = SettingsStore::load(store.root());
+            let settings_hidden = settings.get().autostart_hidden;
             // 注册失败（被其他程序占用）不影响启动，设置界面里会提示
             let _ = register_toggle_shortcut(app.handle(), settings.get().toggle_shortcut.as_deref());
             let webdav = WebDavStore::load(store.root(), &app.config().identifier);
@@ -679,9 +711,15 @@ pub fn run() {
             app.manage(settings);
             app.manage(webdav);
             setup_tray(app)?;
-            #[cfg(windows)]
+            // 主窗口一开始是隐藏的（tauri.conf.json 里 visible: false）：开机自启、设置了只在托盘里时不显示
+            let hidden = autostart::launched_at_login(std::env::args()) && settings_hidden;
             if let Some(w) = app.get_webview_window("main") {
+                #[cfg(windows)]
                 set_window_icons(&w);
+                if !hidden {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
             }
             Ok(())
         })
@@ -727,6 +765,9 @@ pub fn run() {
             set_editor_background,
             set_save_options,
             set_startup_view,
+            get_autostart,
+            set_autostart,
+            set_autostart_hidden,
             get_webdav,
             save_webdav,
             test_webdav,

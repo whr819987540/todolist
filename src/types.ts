@@ -92,6 +92,8 @@ export interface AppSettings {
   autoSave: boolean;
   /** 打开软件时显示的界面，下次启动时生效 */
   startupView: StartupView;
+  /** 开机自启时不显示主窗口，只在托盘里（开机自启本身记在注册表里） */
+  autostartHidden: boolean;
   /** 界面主题，窗口标题栏跟着切换 */
   theme: ThemeMode;
   /** 编辑快捷键里改过的：命令（editShortcuts.ts 的 EditCommandId）→ 快捷键，null 表示不使用；没改过的不在里面 */

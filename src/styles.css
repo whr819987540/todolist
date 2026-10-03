@@ -1388,6 +1388,9 @@ body.drag-moving .tree-row:hover .row-count {
   align-items: center;
   justify-content: space-between;
 }
+.autostart-hidden {
+  margin-top: 8px;
+}
 
 .settings-tabs .ant-tabs-nav {
   margin-bottom: 4px;

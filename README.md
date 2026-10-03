@@ -29,6 +29,7 @@
   - 关闭 auto save 时，失去焦点、隐藏到托盘都不保存；但修改后一直没保存的，满 1 小时会自动保存一次（从第一处未保存的修改开始计时，藏在托盘里时也照样），免得在托盘里挂好几天的程序把改动一直留在内存里
   - 用输入法打字时，拼音还没上屏不算修改，不会被存进文件
 - **托盘常驻**：点窗口的关闭按钮只会隐藏到系统托盘，程序继续运行；左键单击托盘图标恢复窗口，右键托盘图标选「退出」才真正退出（会先保存正在编辑的内容）
+- **开机自启**：在「设置 → 常规」里打开，登录 Windows 后自动运行，默认只在托盘里、不弹出主窗口（可以改成显示）；只对这台电脑生效，在任务管理器的「启动应用」里也能关掉，卸载时自动删掉启动项
 - **全局快捷键**：默认 Ctrl+Alt+T，在任何程序里按下都能呼出主窗口，主窗口在前台时按下则隐藏到托盘；点右上角的设置按钮可修改、恢复默认或不使用
 - **待办快捷键**：选中某条待办时，Ctrl+Alt+D 标记完成 / 未完成，Ctrl+Alt+O 用默认程序打开；同样可在设置里修改
 - **设置备份**：在「设置 → 备份与恢复」里把设置打包成 `TodoList-settings-年月日-时分秒.zip`，可以存到本地（默认存在数据目录里，也可以另选位置），也可以上传到 WebDAV 服务器（如坚果云）；恢复时可从服务器上的备份列表选择，也可选择本地的备份 zip（默认从数据目录里找，从 WebDAV 下载的也行）。备份只含设置（包括改过的快捷键），不含待办数据
@@ -49,7 +50,7 @@ TodoList\
     {项目}\
       .todos.json            标题、完成状态、创建/修改/完成时间
       20260926-153012.md     待办正文，一条待办一个文件
-  .settings.json             应用设置（快捷键和改过的编辑快捷键、主题、字号、编辑区背景色、保存方式、开屏方式），设置备份的内容就是这个文件
+  .settings.json             应用设置（快捷键和改过的编辑快捷键、主题、字号、编辑区背景色、保存方式、开屏方式、开机自启时是否显示主窗口），设置备份的内容就是这个文件
   .webdav.json               WebDAV 服务器地址、用户名、远程目录（密码存在 Windows 凭据管理器）
   .state.json                界面状态：选中的工作区、上次的位置、各工作区上次打开的待办、各待办的编辑位置和编辑模式
   TodoList-settings-*.zip    设置备份到本地时默认存在这里（选择恢复文件时也从这里开始找）
@@ -176,7 +177,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
   $env:TAURI_CONFIG='{"identifier":"com.whr.todolist.test"}'; npm run build:debug
   ```
 
-  换了 identifier 的构建在 WebView2 缓存（localStorage 里的侧栏宽度、折叠状态、排序）和凭据管理器里的 WebDAV 密码（`webdav.com.whr.todolist.test`）上与安装版分开，上次的位置、编辑位置和编辑模式在数据目录的 `.state.json` 里，要靠下面的 `TODOLIST_DATA_DIR` 分开；全局快捷键仍然会和安装版冲突，测试版里可以改成别的（如 Ctrl+Alt+Y）
+  换了 identifier 的构建在 WebView2 缓存（localStorage 里的侧栏宽度、折叠状态、排序）和凭据管理器里的 WebDAV 密码（`webdav.com.whr.todolist.test`）上与安装版分开，上次的位置、编辑位置和编辑模式在数据目录的 `.state.json` 里，要靠下面的 `TODOLIST_DATA_DIR` 分开；全局快捷键仍然会和安装版冲突，测试版里可以改成别的（如 Ctrl+Alt+Y）。开机自启的启动项名是产品名，测试版里打开、关闭开机自启会改到安装版的启动项；要分开就同时换一个产品名（`$env:TAURI_CONFIG='{"identifier":"com.whr.todolist.test","productName":"待办清单测试"}'`）
 - 运行测试构建时用 `TODOLIST_DATA_DIR` 指向临时目录，不要动真实数据：
 
   ```powershell
@@ -188,7 +189,8 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
 代码结构：
 
 - `src-tauri/src/store.rs`：文件存储、元数据对齐、名称校验，界面状态文件 `.state.json` 的读写（内容由前端决定）；左侧显示的正文开头（预览）缓存在内存里，按 .md 的修改时间和大小判断是否失效，文件没变就不重新读（窗口每次获得焦点都要重新加载选中的工作区，待办多时读几千个文件开头很慢），缓存是空的时（刚启动）分给几个线程一起读；全文搜索（`search`）用的正文全文同样缓存在内存里，按同样的办法判断是否失效，软件里保存时直接丢掉那一条（连着很快保存两次、长度又一样时修改时间和大小可能都没变）；缓存不写进任何文件，免得数据目录用网盘同步时多出冲突
-- `src-tauri/src/settings.rs`：应用设置（快捷键、改过的编辑快捷键、主题、字号、编辑区背景色、保存方式、开屏方式）的读写和字号、保存间隔的范围
+- `src-tauri/src/settings.rs`：应用设置（快捷键、改过的编辑快捷键、主题、字号、编辑区背景色、保存方式、开屏方式、开机自启时是否显示主窗口）的读写和字号、保存间隔的范围
+- `src-tauri/src/autostart.rs`：开机自启，读写注册表的 `Run`（启动项名是产品名，Tauri 的卸载程序不是升级时会删掉它）和任务管理器的禁用标记 `StartupApproved\Run`；开机自启时命令行带 `--autostart`，主窗口一开始是隐藏的（`tauri.conf.json` 里 `visible: false`），`lib.rs` 的 `setup` 里按设置决定显不显示
 - `src-tauri/src/backup.rs`：设置备份包的打包、解包、命名和读本地的备份文件
 - `src-tauri/src/webdav.rs`：WebDAV 连接配置、密码存取、客户端（含代理处理）
 - `src-tauri/src/lib.rs`：Tauri 命令、打开外部程序和链接、系统托盘、全局快捷键、窗口图标、本地备份、恢复设置时的文件对话框（tauri-plugin-dialog，只在 Rust 端调用，前端没有对话框的权限；都从数据目录打开）
@@ -213,7 +215,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
   - `find.ts`：正文里的查找 / 替换。搜索状态、匹配高亮和查找替换命令用 `@codemirror/search`，查找框自己实现（中文、第几个 / 共几个、输入时跳到最近的结果）；Ctrl+F、Ctrl+H 由 `WorkspaceView` 经 `TodoEditor` 转过来，焦点不在正文里时也能打开
   - `position.ts`：编辑位置（光标和选区另一端、光标在编辑区里的高度、它们前后的原文），打开待办和外部修改后重新加载时据此找回光标（选区）和滚动
 - `src/components/`：首页（含搜索）、工作区视图、侧栏树、概览、拖动移动（`DragMove.tsx`，用鼠标事件自己实现，没用 HTML5 拖放；放下的位置按侧栏节点上的 `data-drop-ws` / `data-drop-project` 找）、编辑器（`TodoEditor` 管定时保存（auto save 关闭时 1 小时兜底）、auto save、冲突（含「另存为新待办」：Rust 端 `create_todo` 可以带正文一次建好）和记下编辑位置，打字时不重新渲染，状态栏的字数、行数停顿片刻再算（`utils.ts` 的 `textStats`），`MarkdownEditor` 包装 CodeMirror）、设置
-  - 设置：`SettingsButton.tsx` 是设置按钮和对话框，五个页签各在 `settings/` 下一个文件——`GeneralSettings`（常规）、`ShortcutSettings`（快捷键：应用快捷键和编辑快捷键，录制时检查冲突）、`AppearanceSettings`（外观：主题、编辑区背景色、字号）、`SaveSettings`（保存）、`BackupSettings`（备份与恢复）；`ShortcutRow` 是录制一个快捷键的那一行
+  - 设置：`SettingsButton.tsx` 是设置按钮和对话框，五个页签各在 `settings/` 下一个文件——`GeneralSettings`（常规：开机自启、开屏方式）、`ShortcutSettings`（快捷键：应用快捷键和编辑快捷键，录制时检查冲突）、`AppearanceSettings`（外观：主题、编辑区背景色、字号）、`SaveSettings`（保存）、`BackupSettings`（备份与恢复）；`ShortcutRow` 是录制一个快捷键的那一行
   - 工作区视图：`WorkspaceView.tsx` 管选中的工作区、右侧显示的内容、加载和刷新、快捷键、侧栏宽度；新建、重命名、删除、移动、打开等操作在 `workspaceActions.ts` 的 `useWorkspaceActions`（`actionsFor(ws)` 每次渲染新建、用这次渲染的状态；`stableActions(ws)` 是传给侧栏行的不变对象，调用时转给最新的 `actionsFor`）
   - 侧栏：`Sidebar.tsx` 管树的焦点和键盘操作（↑↓←→、Enter、Alt+方向键），其余在 `sidebar/` 下——`SidebarToolbar`（顶部：返回首页、选中工作区的 `WorkspacePicker`、主题、设置、搜索、新建、排序、隐藏已完成、全部折叠 / 展开）、`TreeRows`（工作区、项目、待办的行）、`RowPopups`（待办行共用的悬停提示 `TodoTip` 和右键菜单）、`tree.ts`（右侧显示的内容 `Selection`、行上 `data-sel` 的键、折叠状态、计数）
   - 待办多（几千条）时侧栏也要快：`WorkspaceView` 刷新（窗口获得焦点、F5、保存后）时内容没变的工作区、项目、待办沿用原来的对象，什么都没变就不重新渲染；侧栏的工作区、项目、待办行（`sidebar/TreeRows.tsx`）都用 `memo`，只有自己的内容、选中、折叠、拖动状态变了才重新渲染（传给行的操作、拖动函数都是不变的对象，右键「移动到」列出的项目也是右键时才经不变的函数去算，别的待办、项目变了时行不跟着重新渲染；「x 分钟前」只有显示会变的行跟着每 30 秒刷新），待办行的悬停提示和右键菜单不每行各挂一个 antd 组件，整个侧栏共用一个（`sidebar/RowPopups.tsx`）；不在可见区域的项目里的待办不排版、不绘制（`.todo-group` 的 `content-visibility: auto`，加在项目这一级，加在每一行上反而让每一帧都变慢）

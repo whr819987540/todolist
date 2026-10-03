@@ -43,6 +43,8 @@ pub struct Settings {
     pub auto_save: bool,
     /// 打开软件时显示首页还是回到上次的位置
     pub startup_view: StartupView,
+    /// 开机自启时不显示主窗口，只在托盘里（开机自启本身记在注册表里，见 autostart.rs）
+    pub autostart_hidden: bool,
     /// 界面主题：浅色、深色或跟随系统
     pub theme: Theme,
     /// 编辑快捷键（正文里的加粗、标题等）里用户改过的：命令 → 快捷键，None 表示不使用。
@@ -80,6 +82,7 @@ impl Default for Settings {
             save_delay_secs: 180,
             auto_save: false,
             startup_view: StartupView::default(),
+            autostart_hidden: true,
             theme: Theme::default(),
             edit_shortcuts: BTreeMap::new(),
         }
@@ -288,6 +291,7 @@ mod tests {
         assert_eq!(s.save_delay_secs, 180);
         assert!(!s.auto_save);
         assert_eq!(s.startup_view, StartupView::Home);
+        assert!(s.autostart_hidden);
         assert_eq!(s.theme, Theme::System);
     }
 

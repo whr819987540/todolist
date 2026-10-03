@@ -18,6 +18,7 @@ const DEFAULTS: AppSettings = {
   saveDelaySecs: 180,
   autoSave: false,
   startupView: "home",
+  autostartHidden: true,
   theme: "system",
   editShortcuts: {},
 };
