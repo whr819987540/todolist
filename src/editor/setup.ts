@@ -10,6 +10,7 @@ import { editBindings } from "./editBindings";
 import { findExtensions } from "./find";
 import { ctrlClickLinks } from "./links";
 import { livePreview } from "./livePreview";
+import { trackReadingPos } from "./outline";
 import { type EditPosition, trackPosition } from "./position";
 
 /** live：实时渲染（隐藏标记，光标处显示原文）；source：源码模式（显示全部标记，只做语法高亮） */
@@ -28,6 +29,8 @@ export interface EditorOptions {
   onOpenLink: (url: string) => void;
   /** 光标移动、正文改动、滚动之后的编辑位置 */
   onPosition: (p: EditPosition) => void;
+  /** 正在看的位置变了（光标在可见区域里时是光标处，否则是可见区域顶部），大纲据此高亮当前标题 */
+  onReadingPos: (pos: number) => void;
 }
 
 const modeConf = new Compartment();
@@ -119,5 +122,6 @@ export function createExtensions(o: EditorOptions): Extension[] {
     findExtensions(),
     changeReporter(o),
     trackPosition(o.onPosition),
+    trackReadingPos(o.onReadingPos),
   ];
 }

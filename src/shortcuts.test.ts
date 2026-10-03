@@ -90,6 +90,10 @@ describe("录制快捷键时的检查", () => {
     }
   });
 
+  it("Ctrl+Shift+1（显示 / 隐藏大纲）算已占用", () => {
+    expect(checkShortcut("Ctrl+Shift+1")).toBe("Ctrl + Shift + 1 是常用的「显示 / 隐藏大纲」快捷键，请换一个");
+  });
+
   it("Ctrl+F、Ctrl+H（正文里的查找、替换）算已占用", () => {
     expect(checkShortcut("Ctrl+F")).toBe("Ctrl + F 是常用的「查找」快捷键，请换一个");
     expect(checkShortcut("Ctrl+H")).toBe("Ctrl + H 是常用的「替换」快捷键，请换一个");

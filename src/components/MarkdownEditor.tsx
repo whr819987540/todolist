@@ -4,6 +4,7 @@ import { EditorView } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import type { EditShortcutMap } from "../editShortcuts";
 import { openFind } from "../editor/find";
+import { jumpToHeading, type OutlineItem, outlineItems } from "../editor/outline";
 import { capturePosition, type EditPosition, restorePosition } from "../editor/position";
 import { createExtensions, type EditorMode, setMode, setReadOnly } from "../editor/setup";
 import type { UndoSnapshot } from "../workspaceState";
@@ -14,6 +15,10 @@ export interface MarkdownEditorHandle {
   focus(): void;
   /** 打开查找框（replace 为 true 时展开替换） */
   openFind(replace: boolean): boolean;
+  /** 现在正文里的标题 */
+  outline(): OutlineItem[];
+  /** 跳到 pos 处的标题：光标放在那一行末尾，标题滚到顶部 */
+  jumpTo(pos: number): void;
   /** 现在的正文和撤销记录；没有可以撤销、重做的修改时是 null */
   snapshot(): UndoSnapshot | null;
 }
@@ -37,6 +42,8 @@ interface Props {
   onOpenLink: (url: string) => void;
   /** 光标移动、正文改动、滚动之后的编辑位置 */
   onPosition: (p: EditPosition) => void;
+  /** 正在看的位置（光标在可见区域里时是光标处，否则是可见区域顶部） */
+  onReadingPos: (pos: number) => void;
   /** 编辑器销毁前（切到别的待办、返回首页等），交出正文和撤销记录 */
   onDestroy: (snap: UndoSnapshot | null) => void;
 }
@@ -63,6 +70,7 @@ export default function MarkdownEditor(props: Props) {
         onBlur: () => p().onBlur(),
         onOpenLink: (url) => p().onOpenLink(url),
         onPosition: (pos) => p().onPosition(pos),
+        onReadingPos: (pos) => p().onReadingPos(pos),
       });
     /** 选中 anchor 到 head（相同时只放光标）；给了撤销记录时接着用 */
     const createState = (doc: string, anchor: number, head: number, history: unknown = null) => {
@@ -103,6 +111,8 @@ export default function MarkdownEditor(props: Props) {
       },
       focus: () => view.focus(),
       openFind: (replace) => openFind(view, replace),
+      outline: () => outlineItems(view.state),
+      jumpTo: (pos) => jumpToHeading(view, pos),
       snapshot,
     };
     return () => {

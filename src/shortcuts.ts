@@ -67,7 +67,7 @@ const RESERVED: Record<string, string> = {
   "Ctrl+Z": "撤销", "Ctrl+Y": "重做", "Ctrl+Shift+Z": "重做",
   "Alt+ArrowLeft": "切换到左侧列表", "Alt+ArrowRight": "切换到右侧编辑区",
   "Alt+ArrowUp": "选中上一项", "Alt+ArrowDown": "选中下一项",
-  "Ctrl+Slash": "切换实时渲染 / 源码模式",
+  "Ctrl+Slash": "切换实时渲染 / 源码模式", "Ctrl+Shift+1": "显示 / 隐藏大纲",
   "Ctrl+ArrowLeft": "光标移到上一个词", "Ctrl+ArrowRight": "光标移到下一个词",
   "Ctrl+Home": "光标移到开头", "Ctrl+End": "光标移到末尾",
   "Ctrl+Backspace": "删除前一个词", "Ctrl+Delete": "删除后一个词",

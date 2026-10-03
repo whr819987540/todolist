@@ -7,6 +7,7 @@ import {
   LoadingOutlined,
   MoreOutlined,
   UndoOutlined,
+  UnorderedListOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
@@ -25,13 +26,23 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { webUrl } from "../editor/links";
+import { activeIndex, type OutlineItem } from "../editor/outline";
 import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
 import { registerFlusher, useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
-import { formatDuration, fullTime, MY_VERSION, myVersionTitle, relativeTime, textStats, useNow } from "../utils";
+import {
+  formatDuration,
+  fullTime,
+  MY_VERSION,
+  myVersionTitle,
+  relativeTime,
+  textStats,
+  useLocalState,
+  useNow,
+} from "../utils";
 import {
   keepUndo,
   readEditorMode,
@@ -41,6 +52,7 @@ import {
   writeEditPosition,
 } from "../workspaceState";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
+import Outline from "./Outline";
 
 export interface EditorHandle {
   /**
@@ -78,8 +90,14 @@ const WHEEL_STEP = 50;
 /** 光标、滚动停下来多久后记下编辑位置（ms）；离开这条待办、窗口失去焦点时立即记 */
 const POSITION_DELAY = 1000;
 
-/** 打字停下来多久后更新状态栏的字数、行数（ms） */
+/** 打字停下来多久后更新状态栏的字数、行数和大纲（ms） */
 const STATS_DELAY = 300;
+
+/** 正文里至少有这么多个标题时才显示大纲 */
+export const MIN_OUTLINE = 2;
+
+const sameOutline = (a: readonly OutlineItem[], b: readonly OutlineItem[]) =>
+  a.length === b.length && a.every((x, i) => x.pos === b[i].pos && x.level === b[i].level && x.text === b[i].text);
 
 /**
  * auto save 关闭时的兜底（秒）：有未保存的修改，从第一处开始满 1 小时也自动保存一次，
@@ -119,6 +137,11 @@ export default function TodoEditor(props: Props) {
   const [initialDoc, setInitialDoc] = useState("");
   // 状态栏的字数、行数：打字停下来一会儿再算，不是每次按键都对全文统计
   const [stats, setStats] = useState({ chars: 0, lines: 0 });
+  // 大纲（正文里的标题）同样打字停下来再更新；正在看的标题只在变了时重新渲染
+  const [outline, setOutline] = useState<OutlineItem[]>([]);
+  const [activeHeading, setActiveHeading] = useState(-1);
+  // 显示大纲是本机的显示偏好，所有待办共用
+  const [outlineOn, setOutlineOn] = useLocalState("outlineVisible", true);
   const [title, setTitle] = useState(summary.title);
   const [path, setPath] = useState("");
   const [encoding, setEncoding] = useState<TextEncoding>("UTF-8");
@@ -166,6 +189,10 @@ export default function TodoEditor(props: Props) {
     position: null as EditPosition | null,
     positionTimer: 0,
     statsTimer: 0,
+    /** 大纲和正在看的位置：正在看的标题据此算，变了才重新渲染 */
+    outline: [] as OutlineItem[],
+    readingPos: 0,
+    activeHeading: -1,
   }).current;
 
   const isDirty = () => s.content !== s.savedContent || s.title !== s.savedTitle;
@@ -284,6 +311,29 @@ export default function TodoEditor(props: Props) {
     s.positionTimer = window.setTimeout(savePosition, POSITION_DELAY);
   };
 
+  /** 正在看的标题：光标在可见区域里时是光标所在的那一节，否则是可见区域顶部的那一节 */
+  const updateActiveHeading = () => {
+    const i = activeIndex(s.outline, s.readingPos);
+    if (i === s.activeHeading) return;
+    s.activeHeading = i;
+    setActiveHeading(i);
+  };
+
+  /** 按现在的正文重新列出大纲（没变时不重新渲染） */
+  const refreshOutline = () => {
+    const items = mdRef.current?.outline() ?? [];
+    if (!sameOutline(items, s.outline)) {
+      s.outline = items;
+      setOutline(items);
+    }
+    updateActiveHeading();
+  };
+
+  const onReadingPos = (pos: number) => {
+    s.readingPos = pos;
+    updateActiveHeading();
+  };
+
   /** 立即存标题和正文，返回是否都存好了 */
   const flush = async () => {
     stopTimer();
@@ -340,6 +390,13 @@ export default function TodoEditor(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 正文加载出来、编辑器建好之后列出大纲（子组件的 effect 先执行，这时编辑器已经建好）
+  useEffect(() => {
+    if (!loading) refreshOutline();
+    // 只在加载完成时执行一次；之后打字、外部修改重新加载时另外更新
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
+
   // 标题在别处被改（例如刷新）且这里没有编辑中时，同步过来
   useEffect(() => {
     if (s.title === s.savedTitle && document.activeElement !== titleRef.current?.input) {
@@ -367,6 +424,7 @@ export default function TodoEditor(props: Props) {
     setEncoding(d.encoding);
     refreshStatus();
     mdRef.current?.reset(d.content);
+    refreshOutline();
   };
 
   // auto save：窗口失焦立即保存（编辑位置总是立即记下）；重新获得焦点时检查文件是否被外部程序改过
@@ -426,7 +484,10 @@ export default function TodoEditor(props: Props) {
     s.content = text;
     refreshStatus();
     window.clearTimeout(s.statsTimer);
-    s.statsTimer = window.setTimeout(() => setStats(textStats(s.content)), STATS_DELAY);
+    s.statsTimer = window.setTimeout(() => {
+      setStats(textStats(s.content));
+      refreshOutline();
+    }, STATS_DELAY);
   };
 
   /** composing：输入法组合中（拼音还没上屏），这时只更新输入框，不算修改 */
@@ -494,17 +555,30 @@ export default function TodoEditor(props: Props) {
     setMode(next);
     if (!s.detached) writeEditorMode(workspace, project, id, next);
   };
+  /** 显示 / 隐藏大纲（本机记住，所有待办共用）；标题不够多、打开了也不显示时提示一下 */
+  const toggleOutline = () => {
+    const next = !outlineOn;
+    setOutlineOn(next);
+    if (next && s.outline.length < MIN_OUTLINE)
+      message.info(`已开启大纲，正文里有 ${MIN_OUTLINE} 个以上标题时显示在右侧`);
+  };
+
   const toggleModeRef = useRef(toggleMode);
+  const toggleOutlineRef = useRef(toggleOutline);
   useEffect(() => {
     toggleModeRef.current = toggleMode;
+    toggleOutlineRef.current = toggleOutline;
   });
 
-  // Ctrl+/ 切换实时渲染 / 源码模式（同 Typora），焦点在标题上时也能用
+  // Ctrl+/ 切换实时渲染 / 源码模式（同 Typora），Ctrl+Shift+1 显示 / 隐藏大纲（同 Typora），焦点在标题上时也能用
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (eventShortcut(e) !== "Ctrl+Slash") return;
+      const combo = eventShortcut(e);
+      if (combo !== "Ctrl+Slash" && combo !== "Ctrl+Shift+1") return;
       e.preventDefault();
-      if (!e.repeat) toggleModeRef.current();
+      if (e.repeat) return;
+      if (combo === "Ctrl+Slash") toggleModeRef.current();
+      else toggleOutlineRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -567,79 +641,90 @@ export default function TodoEditor(props: Props) {
         </div>
       </header>
 
-      <div className="editor-body" ref={bodyRef}>
-        <Input
-          ref={titleRef}
-          className={`editor-title${summary.done ? " done" : ""}`}
-          variant="borderless"
-          placeholder="无标题（左侧将显示正文开头）"
-          value={title}
-          maxLength={200}
-          onChange={(e) => onTitleChange(e.target.value, (e.nativeEvent as InputEvent).isComposing)}
-          onCompositionEnd={(e) => {
-            onTitleChange(e.currentTarget.value);
-            // 组合中失去焦点的，上屏后补上失去焦点时的保存
-            if (autoSave && document.activeElement !== e.currentTarget) saveTitle();
-          }}
-          onBlur={() => autoSave && saveTitle()}
-          onPressEnter={() => mdRef.current?.focus()}
-        />
-        <div className="editor-meta">
-          {summary.done ? (
-            <Tag color="success" icon={<CheckCircleFilled />} variant="filled">
-              已完成
-            </Tag>
+      <div className="editor-main">
+        <div className="editor-body" ref={bodyRef}>
+          <Input
+            ref={titleRef}
+            className={`editor-title${summary.done ? " done" : ""}`}
+            variant="borderless"
+            placeholder="无标题（左侧将显示正文开头）"
+            value={title}
+            maxLength={200}
+            onChange={(e) => onTitleChange(e.target.value, (e.nativeEvent as InputEvent).isComposing)}
+            onCompositionEnd={(e) => {
+              onTitleChange(e.currentTarget.value);
+              // 组合中失去焦点的，上屏后补上失去焦点时的保存
+              if (autoSave && document.activeElement !== e.currentTarget) saveTitle();
+            }}
+            onBlur={() => autoSave && saveTitle()}
+            onPressEnter={() => mdRef.current?.focus()}
+          />
+          <div className="editor-meta">
+            {summary.done ? (
+              <Tag color="success" icon={<CheckCircleFilled />} variant="filled">
+                已完成
+              </Tag>
+            ) : (
+              <Tag color="processing" variant="filled">
+                进行中
+              </Tag>
+            )}
+            <span title={fullTime(summary.createdAt)}>创建于 {fullTime(summary.createdAt).slice(0, 16)}</span>
+            <span className="sep">|</span>
+            <span title={fullTime(summary.updatedAt)}>
+              最后修改 {fullTime(summary.updatedAt).slice(0, 16)}（{relativeTime(summary.updatedAt, now)}）
+            </span>
+            {summary.done && summary.doneAt && (
+              <>
+                <span className="sep">|</span>
+                <span>完成于 {fullTime(summary.doneAt).slice(0, 16)}</span>
+              </>
+            )}
+          </div>
+
+          {loading ? (
+            <div className="editor-loading">
+              <Spin />
+            </div>
+          ) : loadError ? (
+            <div className="editor-loading error-text">{loadError}</div>
           ) : (
-            <Tag color="processing" variant="filled">
-              进行中
-            </Tag>
-          )}
-          <span title={fullTime(summary.createdAt)}>创建于 {fullTime(summary.createdAt).slice(0, 16)}</span>
-          <span className="sep">|</span>
-          <span title={fullTime(summary.updatedAt)}>
-            最后修改 {fullTime(summary.updatedAt).slice(0, 16)}（{relativeTime(summary.updatedAt, now)}）
-          </span>
-          {summary.done && summary.doneAt && (
             <>
-              <span className="sep">|</span>
-              <span>完成于 {fullTime(summary.doneAt).slice(0, 16)}</span>
+              {readOnly && (
+                <Alert
+                  className="editor-alert"
+                  type="warning"
+                  showIcon
+                  title="认不出这条待办正文的编码（不是 UTF-8 或 GBK），为免损坏原文件，这里只读显示；需要修改请用默认程序打开"
+                />
+              )}
+              <MarkdownEditor
+                handleRef={mdRef}
+                initialDoc={initialDoc}
+                initialPosition={initialPosition}
+                initialHistory={initialHistory}
+                mode={mode}
+                readOnly={readOnly}
+                placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
+                appShortcuts={[keys?.toggleDoneShortcut, keys?.openExternalShortcut]}
+                editShortcuts={editShortcuts}
+                onChange={onContentChange}
+                onBlur={() => autoSave && saveContent()}
+                onOpenLink={openLink}
+                onPosition={onPosition}
+                onReadingPos={onReadingPos}
+                onDestroy={(snap) => snap && !s.detached && keepUndo(workspace, project, id, snap)}
+              />
             </>
           )}
         </div>
-
-        {loading ? (
-          <div className="editor-loading">
-            <Spin />
-          </div>
-        ) : loadError ? (
-          <div className="editor-loading error-text">{loadError}</div>
-        ) : (
-          <>
-            {readOnly && (
-              <Alert
-                className="editor-alert"
-                type="warning"
-                showIcon
-                title="认不出这条待办正文的编码（不是 UTF-8 或 GBK），为免损坏原文件，这里只读显示；需要修改请用默认程序打开"
-              />
-            )}
-            <MarkdownEditor
-              handleRef={mdRef}
-              initialDoc={initialDoc}
-              initialPosition={initialPosition}
-              initialHistory={initialHistory}
-              mode={mode}
-              readOnly={readOnly}
-              placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
-              appShortcuts={[keys?.toggleDoneShortcut, keys?.openExternalShortcut]}
-              editShortcuts={editShortcuts}
-              onChange={onContentChange}
-              onBlur={() => autoSave && saveContent()}
-              onOpenLink={openLink}
-              onPosition={onPosition}
-              onDestroy={(snap) => snap && !s.detached && keepUndo(workspace, project, id, snap)}
-            />
-          </>
+        {outlineOn && !loading && !loadError && outline.length >= MIN_OUTLINE && (
+          <Outline
+            items={outline}
+            active={activeHeading}
+            onJump={(item) => mdRef.current?.jumpTo(item.pos)}
+            onClose={() => setOutlineOn(false)}
+          />
         )}
       </div>
 
@@ -678,6 +763,18 @@ export default function TodoEditor(props: Props) {
         >
           <span className="statusbar-mode" onClick={toggleMode}>
             {mode === "live" ? <EyeOutlined /> : <CodeOutlined />} {MODE_LABELS[mode]}
+          </span>
+        </Tooltip>
+        <Tooltip
+          title={
+            <>
+              点击{outlineOn ? "隐藏" : "显示"}大纲（Ctrl + Shift + 1），所有待办共用
+              <div>正文里有 {MIN_OUTLINE} 个以上标题时显示在右侧，编辑区太窄时不显示</div>
+            </>
+          }
+        >
+          <span className={`statusbar-outline${outlineOn ? "" : " off"}`} onClick={toggleOutline}>
+            <UnorderedListOutlined /> 大纲{outlineOn && outline.length > 0 ? `（${outline.length}）` : ""}
           </span>
         </Tooltip>
         {keys && (
