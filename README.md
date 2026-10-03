@@ -18,6 +18,7 @@
   - 按 Ctrl+/ 或点状态栏上的「实时渲染 / 源码模式」切换，每条待办分别记住；没切换过的待办用实时渲染（以前的版本里选了源码模式的，沿用源码模式）。两种模式都只改变显示，文件按原样保存，不会被重新排版；图片和表格暂时显示原文
   - 按住 Ctrl 单击链接用浏览器打开；回车自动续写列表；在列表里按 Tab / Shift+Tab 把这一项（连同子项）缩进成上一项的子项 / 提到上一级，有序列表自动重新编号；不在列表里时 Tab 插入两个空格
   - **编辑快捷键**默认和 Typora 一样：Ctrl+B 加粗、Ctrl+I 斜体、Ctrl+U 下划线、Ctrl+K 超链接、Ctrl+1～6 标题、Ctrl+Shift+[ / ] 有序 / 无序列表、Tab / Shift+Tab 缩进列表、Ctrl+D 选中当前词等，完整列表见下文「快捷键」；都可以在「设置 → 快捷键」里改成自己习惯的按键。再按一次取消；只增删选中处的 Markdown 标记，不会重排别处的写法
+  - **查找 / 替换**：按 Ctrl+F 在正文里查找，输入时直接跳到最近的结果，显示第几个 / 共几个，Enter / Shift+Enter（或 F3 / Shift+F3）找下一个 / 上一个，可以区分大小写、全字匹配、用正则；Ctrl+H 展开替换，逐个或全部替换；Esc 关闭查找框
   - 切换回某条待办时，光标和滚动回到上次编辑的地方，离开时选中的文字仍然选中；正文在外部被改过时按光标前后的文字找回位置，被大幅修改、找不到时回到开头
   - 切到别的待办再切回来，仍能用 Ctrl+Z / Ctrl+Y 撤销、重做之前的修改（只在这次运行期间；正文在外部被改过时从头记起）
   - 代码块：输入 ```语言 后回车会自动补上结尾的 ```；在代码块里按 Ctrl+Enter，或在文末代码块的最后一行按 ↓，跳出代码块（缺结尾的 ``` 时自动补上）
@@ -77,7 +78,8 @@ TodoList\
 | --- | --- |
 | Ctrl+N | 在当前项目新建待办（首页为新建工作区） |
 | Ctrl+S | 立即保存（不受 auto save 开关影响） |
-| Ctrl+Shift+F | 搜索（首页跨全部工作区，侧栏里搜索选中工作区的待办）；Ctrl+F 目前同样聚焦搜索框 |
+| Ctrl+Shift+F | 搜索（首页跨全部工作区，侧栏里搜索选中工作区的待办） |
+| Ctrl+F / Ctrl+H | 在正在编辑的待办正文里查找 / 替换（焦点在左侧列表时也行）；没有打开待办时 Ctrl+F 聚焦搜索框 |
 | Esc | 在侧栏搜索框里：清空搜索，焦点回到左侧列表 |
 | F5 / Ctrl+R | 刷新：从磁盘重新读取（不会像网页那样整页重新加载）；带别的修饰键的不算 |
 | Ctrl+Alt+T | 全局快捷键：显示主窗口 / 隐藏到托盘（可在设置里修改） |
@@ -115,6 +117,8 @@ TodoList\
 | Ctrl+Z / Ctrl+Y | 撤销 / 重做（固定） |
 | Ctrl+Enter | 在代码块里：跳到代码块下面新的一行（固定） |
 | Ctrl+单击链接 | 用浏览器打开正文里的链接（固定） |
+| Ctrl+F / Ctrl+H | 查找 / 替换（固定） |
+| F3 / Shift+F3 | 查找下一个 / 上一个（固定；在查找框里按 Enter / Shift+Enter 也行） |
 
 格式类（加粗到清除格式）：选中的文字已经是这种格式时去掉，否则加上，跨多行时每行分别加；没选中文字时，光标在这种格式里就去掉它，否则插入一对标记、光标放在中间。段落类（标题到代码块）作用于选中的各行，引用、列表、代码块再按一次去掉。列表缩进后有序列表跟着重新编号，原本就不是连续编号的（如全写成 `1.`）不动。光标在代码块里时格式、段落类不起作用。
 
@@ -131,7 +135,7 @@ npm run tauri build     # 正式打包，安装包在 src-tauri/target/release/b
 npm run release         # 打包并安装到本机，见下文
 npm run release:fast    # 同上，但用 release-fast profile 构建，快很多
 npm run lint            # ESLint 检查前端代码（含 React hooks 的规则），要零错误、零警告
-npm test                # 前端单元测试（vitest：编辑快捷键、列表缩进、代码块、编辑位置、后退 / 前进、快捷键检查等）
+npm test                # 前端单元测试（vitest：编辑快捷键、列表缩进、代码块、查找、编辑位置、后退 / 前进、快捷键检查等）
 cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
 ```
 
@@ -202,6 +206,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
   - `livePreview.ts`：实时渲染，按语法树隐藏标记（含 `<u>` 标签）、替换成列表符号 / 任务框 / 分隔线，光标处显示原文
   - `links.ts`：解析链接地址、Ctrl+单击打开
   - `codeFences.ts`：代码块自动补结尾、Ctrl+Enter / ↓ 跳出代码块
+  - `find.ts`：正文里的查找 / 替换。搜索状态、匹配高亮和查找替换命令用 `@codemirror/search`，查找框自己实现（中文、第几个 / 共几个、输入时跳到最近的结果）；Ctrl+F、Ctrl+H 由 `WorkspaceView` 经 `TodoEditor` 转过来，焦点不在正文里时也能打开
   - `position.ts`：编辑位置（光标和选区另一端、光标在编辑区里的高度、它们前后的原文），打开待办和外部修改后重新加载时据此找回光标（选区）和滚动
 - `src/components/`：首页（含搜索）、工作区视图、侧栏树、概览、拖动移动（`DragMove.tsx`，用鼠标事件自己实现，没用 HTML5 拖放；放下的位置按侧栏节点上的 `data-drop-ws` / `data-drop-project` 找）、编辑器（`TodoEditor` 管定时保存（auto save 关闭时 1 小时兜底）、auto save、冲突（含「另存为新待办」：Rust 端 `create_todo` 可以带正文一次建好）和记下编辑位置，打字时不重新渲染，状态栏的字数、行数停顿片刻再算（`utils.ts` 的 `textStats`），`MarkdownEditor` 包装 CodeMirror）、设置
   - 设置：`SettingsButton.tsx` 是设置按钮和对话框，五个页签各在 `settings/` 下一个文件——`GeneralSettings`（常规）、`ShortcutSettings`（快捷键：应用快捷键和编辑快捷键，录制时检查冲突）、`AppearanceSettings`（外观：主题、编辑区背景色、字号）、`SaveSettings`（保存）、`BackupSettings`（备份与恢复）；`ShortcutRow` 是录制一个快捷键的那一行

@@ -90,6 +90,11 @@ describe("录制快捷键时的检查", () => {
     }
   });
 
+  it("Ctrl+F、Ctrl+H（正文里的查找、替换）算已占用", () => {
+    expect(checkShortcut("Ctrl+F")).toBe("Ctrl + F 是常用的「查找」快捷键，请换一个");
+    expect(checkShortcut("Ctrl+H")).toBe("Ctrl + H 是常用的「替换」快捷键，请换一个");
+  });
+
   it("Ctrl+Shift+F（侧栏 / 首页的搜索）算已占用", () => {
     expect(checkShortcut("Ctrl+Shift+F")).toBe("Ctrl + Shift + F 是常用的「搜索」快捷键，请换一个");
     expect(reservedShortcut("shift+ctrl+KeyF")).toBe("搜索");

@@ -93,6 +93,9 @@ export const EDIT_SHORTCUT_GROUPS: readonly { title: string; items: readonly Edi
       { label: "重做", fixed: ["Ctrl+Y", "Ctrl+Shift+Z"] },
       { label: "跳出代码块", fixed: ["Ctrl+Enter"] },
       { label: "打开链接", fixed: [], shown: ["Ctrl+单击"] },
+      { label: "查找", fixed: ["Ctrl+F"] },
+      { label: "替换", fixed: ["Ctrl+H"] },
+      { label: "查找下一个 / 上一个", fixed: ["F3", "Shift+F3"] },
     ],
   },
 ];

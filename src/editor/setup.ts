@@ -7,6 +7,7 @@ import { eventShortcut, sameShortcut } from "../shortcuts";
 import { appearance } from "./appearance";
 import { codeFenceKeymap } from "./codeFences";
 import { editBindings } from "./editBindings";
+import { findExtensions } from "./find";
 import { ctrlClickLinks } from "./links";
 import { livePreview } from "./livePreview";
 import { type EditPosition, trackPosition } from "./position";
@@ -114,6 +115,8 @@ export function createExtensions(o: EditorOptions): Extension[] {
     modeConf.of(modeExtension(o.mode)),
     readOnlyConf.of(EditorState.readOnly.of(o.readOnly)),
     ctrlClickLinks(o.onOpenLink),
+    // 查找 / 替换（Ctrl+F、Ctrl+H 由 WorkspaceView 转过来，见 find.ts）
+    findExtensions(),
     changeReporter(o),
     trackPosition(o.onPosition),
   ];

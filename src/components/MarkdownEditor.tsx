@@ -3,6 +3,7 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import type { EditShortcutMap } from "../editShortcuts";
+import { openFind } from "../editor/find";
 import { capturePosition, type EditPosition, restorePosition } from "../editor/position";
 import { createExtensions, type EditorMode, setMode, setReadOnly } from "../editor/setup";
 import type { UndoSnapshot } from "../workspaceState";
@@ -11,6 +12,8 @@ export interface MarkdownEditorHandle {
   /** 换成磁盘上的新内容：撤销记录清空，光标（选区）和滚动尽量留在原来那段文字处；找不到光标处的文字时回到开头 */
   reset(doc: string): void;
   focus(): void;
+  /** 打开查找框（replace 为 true 时展开替换） */
+  openFind(replace: boolean): boolean;
   /** 现在的正文和撤销记录；没有可以撤销、重做的修改时是 null */
   snapshot(): UndoSnapshot | null;
 }
@@ -99,6 +102,7 @@ export default function MarkdownEditor(props: Props) {
         if (scroll) view.dispatch({ effects: scroll });
       },
       focus: () => view.focus(),
+      openFind: (replace) => openFind(view, replace),
       snapshot,
     };
     return () => {

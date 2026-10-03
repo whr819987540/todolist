@@ -50,6 +50,8 @@ export interface EditorHandle {
   flush(): Promise<boolean>;
   /** 待办已被删除/移走：之后不再尝试保存。撤销记录先按原来的位置留下，由 workspaceState 跟到新位置 */
   detach(): void;
+  /** 在正文里查找（Ctrl+F）；replace 为 true 时同时展开替换（Ctrl+H）。正文还没加载出来时返回 false */
+  find(replace: boolean): boolean;
 }
 
 interface Props {
@@ -324,6 +326,7 @@ export default function TodoEditor(props: Props) {
         s.detached = true;
         stopTimer();
       },
+      find: (replace) => mdRef.current?.openFind(replace) ?? false,
     };
     return () => {
       cancelled = true;

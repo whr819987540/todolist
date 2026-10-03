@@ -61,13 +61,16 @@ describe("默认按键", () => {
     }
   });
 
-  it("固定按键：Tab / Shift+Tab 缩进，Ctrl+Z / Ctrl+Y 撤销重做，Ctrl+Enter 跳出代码块", () => {
+  it("固定按键：Tab / Shift+Tab 缩进，Ctrl+Z / Ctrl+Y 撤销重做，Ctrl+Enter 跳出代码块，Ctrl+F / Ctrl+H 查找替换", () => {
     const fixed = Object.fromEntries(EDIT_SHORTCUTS.filter((s) => s.fixed).map((s) => [s.label, s.fixed]));
     expect(fixed["增加缩进"]).toEqual(["Tab"]);
     expect(fixed["减少缩进"]).toEqual(["Shift+Tab"]);
     expect(fixed["撤销"]).toEqual(["Ctrl+Z"]);
     expect(fixed["重做"]).toContain("Ctrl+Y");
     expect(fixed["跳出代码块"]).toEqual(["Ctrl+Enter"]);
+    expect(fixed["查找"]).toEqual(["Ctrl+F"]);
+    expect(fixed["替换"]).toEqual(["Ctrl+H"]);
+    expect(fixed["查找下一个 / 上一个"]).toEqual(["F3", "Shift+F3"]);
   });
 });
 

@@ -404,10 +404,15 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         e.preventDefault();
         // 有冲突（弹出了冲突对话框）、保存失败（已提示）时不提示「已保存」
         flushEditor().then((saved) => saved && message.success("已保存"));
-      } else if (combo === "Ctrl+Shift+F" || combo === "Ctrl+F") {
-        // 侧栏搜索是 Ctrl+Shift+F；Ctrl+F 暂时也聚焦侧栏搜索框
+      } else if (combo === "Ctrl+Shift+F") {
         e.preventDefault();
         searchRef.current?.focus({ cursor: "all" });
+      } else if (combo === "Ctrl+F" || combo === "Ctrl+H") {
+        // 在正文里查找 / 替换；没有打开待办时 Ctrl+F 聚焦侧栏搜索框。对话框里不响应
+        e.preventDefault();
+        if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
+        if (editorRef.current?.find(combo === "Ctrl+H")) return;
+        if (combo === "Ctrl+F") searchRef.current?.focus({ cursor: "all" });
       } else if (ctrl && key === "n") {
         e.preventDefault();
         const projects = selTree?.projects ?? [];
