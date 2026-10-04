@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use store::{
-    SaveResult, SearchHit, Store, TodoDetail, TodoSummary, WorkspaceInfo, WorkspaceProjects, WorkspaceTree,
+    RecycleEntry, RestoreResult, SaveResult, SearchHit, Store, TodoDetail, TodoSummary, WorkspaceInfo,
+    WorkspaceProjects, WorkspaceTree, RECYCLE_KEEP_DAYS,
 };
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -79,8 +80,9 @@ async fn rename_workspace(
     Ok(new_name)
 }
 
+/// 放进软件的回收站，返回回收站里这一项的 id（撤销删除时用）
 #[tauri::command]
-async fn delete_workspace(store: State<'_, Store>, name: String) -> Cmd<()> {
+async fn delete_workspace(store: State<'_, Store>, name: String) -> Cmd<String> {
     store.delete_workspace(&name)
 }
 
@@ -111,8 +113,9 @@ async fn rename_project(
     Ok(new_name)
 }
 
+/// 放进软件的回收站，返回回收站里这一项的 id
 #[tauri::command]
-async fn delete_project(store: State<'_, Store>, workspace: String, name: String) -> Cmd<()> {
+async fn delete_project(store: State<'_, Store>, workspace: String, name: String) -> Cmd<String> {
     store.delete_project(&workspace, &name)
 }
 
@@ -218,9 +221,39 @@ async fn reorder_todos(store: State<'_, Store>, workspace: String, project: Stri
     store.reorder_todos(&workspace, &project, &ids)
 }
 
+/// 放进软件的回收站，返回回收站里这一项的 id
 #[tauri::command]
-async fn delete_todo(store: State<'_, Store>, workspace: String, project: String, id: String) -> Cmd<()> {
+async fn delete_todo(store: State<'_, Store>, workspace: String, project: String, id: String) -> Cmd<String> {
     store.delete_todo(&workspace, &project, &id)
+}
+
+// ----- 软件的回收站 -----
+
+#[tauri::command]
+async fn list_recycle(store: State<'_, Store>) -> Cmd<Vec<RecycleEntry>> {
+    store.list_recycle()
+}
+
+/// 恢复到原来的位置（撤销删除、在回收站里恢复）；恢复了的话通知主窗口刷新
+#[tauri::command]
+async fn restore_recycled(app: AppHandle, store: State<'_, Store>, ids: Vec<String>) -> Cmd<RestoreResult> {
+    let result = store.restore(&ids);
+    if !result.restored.is_empty() {
+        let _ = app.emit_to("main", "data-changed", ());
+    }
+    Ok(result)
+}
+
+/// 彻底删除：移到系统回收站，返回移走了几项
+#[tauri::command]
+async fn purge_recycled(store: State<'_, Store>, ids: Vec<String>) -> Cmd<usize> {
+    store.purge(&ids)
+}
+
+/// 清空软件的回收站（都移到系统回收站）
+#[tauri::command]
+async fn empty_recycle(store: State<'_, Store>) -> Cmd<usize> {
+    store.empty_recycle()
 }
 
 #[tauri::command]
@@ -928,10 +961,12 @@ pub fn run() {
             app.manage(settings);
             app.manage(webdav);
             setup_tray(app)?;
-            // 启动后过一会儿（不和主窗口抢启动时间）先把快速记录小窗建好，第一次按快捷键时不用等它加载
+            // 启动后过一会儿（不和主窗口抢启动时间）先把快速记录小窗建好，第一次按快捷键时不用等它加载；
+            // 软件回收站里放了超过 30 天的移到系统回收站
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(3));
+                let _ = handle.state::<Store>().purge_expired(RECYCLE_KEEP_DAYS);
                 let h = handle.clone();
                 let _ = handle.run_on_main_thread(move || {
                     quick_window(&h);
@@ -975,6 +1010,10 @@ pub fn run() {
             set_todo_pinned,
             reorder_todos,
             delete_todo,
+            list_recycle,
+            restore_recycled,
+            purge_recycled,
+            empty_recycle,
             move_todo,
             search_todos,
             read_ui_state,

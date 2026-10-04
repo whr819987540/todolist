@@ -52,6 +52,43 @@ export interface SearchHit {
   snippet: string;
 }
 
+/** 软件回收站里一项是什么 */
+export type RecycleKind = "todo" | "project" | "workspace";
+
+/** 软件回收站里的一项 */
+export interface RecycleEntry {
+  id: string;
+  kind: RecycleKind;
+  /** 原来在哪个工作区（删除的是工作区时是它自己） */
+  workspace: string;
+  /** 原来在哪个项目（删除的是项目时是它自己；工作区没有） */
+  project: string | null;
+  /** 待办的标题（没有标题时为空，显示 preview）、项目名或工作区名 */
+  title: string;
+  preview: string;
+  done: boolean;
+  deletedAt: number;
+  /** 项目、工作区里有几条待办 */
+  todoCount: number;
+}
+
+/** 恢复到了哪里 */
+export interface Restored {
+  kind: RecycleKind;
+  workspace: string;
+  project: string | null;
+  /** 恢复的待办现在的 id（文件名被占用时换了一个） */
+  todoId: string | null;
+  /** 项目、工作区原来的名字被占用了，改了名（加「（恢复）」） */
+  renamed: boolean;
+}
+
+export interface RestoreResult {
+  restored: Restored[];
+  /** 没恢复成的原因 */
+  errors: string[];
+}
+
 export interface SaveResult {
   saved: boolean;
   summary: TodoSummary;

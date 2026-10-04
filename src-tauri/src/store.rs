@@ -9,6 +9,9 @@
 //!       .todos.json          标题、完成状态、创建/修改时间等元数据
 //!       20260926-153012.md   待办正文（Markdown 纯文本）
 //!   .state.json              界面状态：上次的位置、各待办的编辑位置等，内容由前端决定
+//!   .recycle/                软件的回收站：删除的工作区、项目、待办先放在这里，可以恢复
+//!     {条目 id}/entry.json   原来在哪里、标题和完成状态等
+//!     {条目 id}/{原名}       删除的 .md 文件或目录
 //! ```
 //!
 //! Markdown 文件是“待办是否存在”的唯一依据：元数据里有但文件不在的条目会被清理，
@@ -34,6 +37,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const META_FILE: &str = ".todos.json";
 pub const UI_STATE_FILE: &str = ".state.json";
 const TRASH_DIR: &str = ".trash";
+pub const RECYCLE_DIR: &str = ".recycle";
+const ENTRY_FILE: &str = "entry.json";
+/// 软件回收站里放了这么多天的，移到系统回收站
+pub const RECYCLE_KEEP_DAYS: i64 = 30;
 const PREVIEW_CHARS: usize = 200;
 const PREVIEW_READ_BYTES: u64 = 4096;
 const MAX_NAME_CHARS: usize = 64;
@@ -182,6 +189,92 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
+/// 软件回收站里一项是什么
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecycleKind {
+    Todo,
+    Project,
+    Workspace,
+}
+
+/// 回收站里每一项的说明（entry.json）
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecycleFile {
+    kind: RecycleKind,
+    /// 原来在哪个工作区（删除的是工作区时是它自己）
+    workspace: String,
+    /// 原来在哪个项目（删除的是项目时是它自己；删除工作区时没有）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
+    /// 删除的文件 / 目录在这一项里的名字（原来的名字）
+    name: String,
+    deleted_at: i64,
+    /// 删除的待办的标题、完成状态等，恢复时还原
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    todo: Option<TodoMeta>,
+    /// 删除的待办的正文开头，没有标题时显示
+    #[serde(default)]
+    preview: String,
+    /// 删除的项目、工作区里有几条待办
+    #[serde(default)]
+    todo_count: usize,
+}
+
+impl RecycleFile {
+    fn new(kind: RecycleKind, workspace: &str, project: Option<&str>, name: &str, todo_count: usize) -> Self {
+        Self {
+            kind,
+            workspace: workspace.into(),
+            project: project.map(Into::into),
+            name: name.into(),
+            deleted_at: now_ms(),
+            todo: None,
+            preview: String::new(),
+            todo_count,
+        }
+    }
+}
+
+/// 回收站列表里的一项
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecycleEntry {
+    pub id: String,
+    pub kind: RecycleKind,
+    pub workspace: String,
+    pub project: Option<String>,
+    /// 待办的标题（没有标题时为空，显示 preview）、项目名或工作区名
+    pub title: String,
+    pub preview: String,
+    pub done: bool,
+    pub deleted_at: i64,
+    /// 项目、工作区里有几条待办
+    pub todo_count: usize,
+}
+
+/// 恢复到了哪里
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Restored {
+    pub kind: RecycleKind,
+    pub workspace: String,
+    pub project: Option<String>,
+    /// 恢复的待办现在的 id（文件名被占用时换了一个）
+    pub todo_id: Option<String>,
+    /// 项目、工作区原来的名字被占用了，改了名（加「（恢复）」）
+    pub renamed: bool,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreResult {
+    pub restored: Vec<Restored>,
+    /// 没恢复成的原因
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveResult {
@@ -314,12 +407,17 @@ impl Store {
         Ok(new_name)
     }
 
-    pub fn delete_workspace(&self, name: &str) -> Result<()> {
+    /// 放进软件的回收站，返回回收站里这一项的 id（撤销删除时用）
+    pub fn delete_workspace(&self, name: &str) -> Result<String> {
         let mut g = self.guard();
         let dir = self.ws_dir(name)?;
-        self.move_to_trash(&dir)?;
+        let mut count = 0;
+        for (_, pdir) in list_subdirs(&dir)? {
+            count += markdown_files(&pdir)?.len();
+        }
+        let id = self.recycle(&dir, RecycleFile::new(RecycleKind::Workspace, name, None, name, count))?;
         g.forget_under(&dir);
-        Ok(())
+        Ok(id)
     }
 
     pub fn load_workspace(&self, ws: &str) -> Result<WorkspaceTree> {
@@ -360,10 +458,14 @@ impl Store {
         Ok(new_name)
     }
 
-    pub fn delete_project(&self, ws: &str, name: &str) -> Result<()> {
-        let _g = self.guard();
+    /// 放进软件的回收站，返回回收站里这一项的 id
+    pub fn delete_project(&self, ws: &str, name: &str) -> Result<String> {
+        let mut g = self.guard();
         let pdir = self.project_dir(ws, name)?;
-        self.move_to_trash(&pdir)
+        let count = markdown_files(&pdir)?.len();
+        let id = self.recycle(&pdir, RecycleFile::new(RecycleKind::Project, ws, Some(name), name, count))?;
+        g.forget_under(&pdir);
+        Ok(id)
     }
 
     /// 把项目连同其中的待办移到另一个工作区，项目名不变；目标工作区里已有同名项目时不移动
@@ -587,17 +689,20 @@ impl Store {
         ))
     }
 
-    pub fn delete_todo(&self, ws: &str, project: &str, id: &str) -> Result<()> {
-        let _g = self.guard();
+    /// 放进软件的回收站（连同标题、完成状态等，恢复时还原），返回回收站里这一项的 id
+    pub fn delete_todo(&self, ws: &str, project: &str, id: &str) -> Result<String> {
+        let mut g = self.guard();
         let dir = self.project_dir(ws, project)?;
         let path = Self::todo_file(&dir, id)?;
-        self.move_to_trash(&path)?;
-        let mut meta = read_meta(&dir)?;
-        if let Some(idx) = meta.find(id) {
-            meta.todos.remove(idx);
-            write_meta(&dir, &meta)?;
-        }
-        Ok(())
+        let (mut meta, idx) = meta_with_entry(&dir, id)?;
+        let mut file = RecycleFile::new(RecycleKind::Todo, ws, Some(project), &format!("{id}.md"), 0);
+        file.todo = Some(meta.todos[idx].clone());
+        file.preview = read_preview(&path);
+        let rid = self.recycle(&path, file)?;
+        meta.todos.remove(idx);
+        write_meta(&dir, &meta)?;
+        g.forget_todo(&dir, id);
+        Ok(rid)
     }
 
     /// 把待办移动到另一个项目（可以在别的工作区里）。目标项目里若有同名文件会换一个新 id。
@@ -694,16 +799,219 @@ impl Store {
         atomic_write(&self.root.join(UI_STATE_FILE), data.as_bytes()).map_err(|e| format!("保存界面状态失败：{e}"))
     }
 
+    // ----- 软件的回收站 -----
+
+    fn recycle_root(&self) -> PathBuf {
+        self.root.join(RECYCLE_DIR)
+    }
+
+    /// 把 path（待办的 .md、项目或工作区的目录）连同说明放进回收站，返回这一项的 id。
+    /// 先写说明再移文件，移不动（被别的程序占用）时什么都不留
+    fn recycle(&self, path: &Path, file: RecycleFile) -> Result<String> {
+        let root = self.recycle_root();
+        fs::create_dir_all(&root).map_err(|e| format!("删除失败：{e}"))?;
+        let base = Local::now().format("%Y%m%d-%H%M%S-%3f").to_string();
+        let id = (1..)
+            .map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") })
+            .find(|id| !root.join(id).exists())
+            .expect("infinite iterator");
+        let dir = root.join(&id);
+        let json = serde_json::to_vec_pretty(&file).map_err(|e| e.to_string())?;
+        let written = fs::create_dir(&dir).and_then(|_| fs::write(dir.join(ENTRY_FILE), json));
+        if let Err(e) = written {
+            let _ = fs::remove_dir_all(&dir);
+            return Err(format!("删除失败：{e}"));
+        }
+        if let Err(e) = fs::rename(path, dir.join(&file.name)) {
+            let _ = fs::remove_dir_all(&dir);
+            return Err(format!("删除失败，可能有文件正被其他程序占用：{e}"));
+        }
+        Ok(id)
+    }
+
+    /// 回收站里的东西，最近删除的在前
+    pub fn list_recycle(&self) -> Result<Vec<RecycleEntry>> {
+        let _g = self.guard();
+        let mut out: Vec<RecycleEntry> = self
+            .recycle_entries()?
+            .into_iter()
+            .map(|(id, f)| RecycleEntry {
+                title: match &f.todo {
+                    Some(t) => t.title.clone(),
+                    None => f.name.clone(),
+                },
+                done: f.todo.as_ref().is_some_and(|t| t.done),
+                id,
+                kind: f.kind,
+                workspace: f.workspace,
+                project: f.project,
+                preview: f.preview,
+                deleted_at: f.deleted_at,
+                todo_count: f.todo_count,
+            })
+            .collect();
+        out.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at).then_with(|| b.id.cmp(&a.id)));
+        Ok(out)
+    }
+
+    /// 回收站里的各项（id 和说明）；说明读不出来、删除的东西已经不在的跳过
+    fn recycle_entries(&self) -> Result<Vec<(String, RecycleFile)>> {
+        let root = self.recycle_root();
+        if !root.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for entry in fs::read_dir(&root).map_err(|e| format!("读取回收站失败：{e}"))?.flatten() {
+            let Some(id) = entry.file_name().to_str().map(str::to_string) else { continue };
+            if let Some(f) = read_recycle_file(&entry.path()) {
+                out.push((id, f));
+            }
+        }
+        Ok(out)
+    }
+
+    /// 恢复到原来的位置。原来的工作区、项目已经不在时重新建；项目、工作区原来的名字被占用时改名（加「（恢复）」）；
+    /// 待办的 id（文件名）被占用时换一个。一项失败不影响其他的
+    pub fn restore(&self, ids: &[String]) -> RestoreResult {
+        let mut g = self.guard();
+        let mut result = RestoreResult::default();
+        for id in ids {
+            match self.restore_one(&mut g, id) {
+                Ok(r) => result.restored.push(r),
+                Err(e) => result.errors.push(e),
+            }
+        }
+        result
+    }
+
+    fn restore_one(&self, g: &mut MemCache, id: &str) -> Result<Restored> {
+        check_component(id, "回收站里的项")?;
+        let dir = self.recycle_root().join(id);
+        let gone = || "回收站里已经没有这一项，可能已经恢复或彻底删除了".to_string();
+        let f = read_recycle_file(&dir).ok_or_else(gone)?;
+        let payload = dir.join(&f.name);
+        check_component(&f.workspace, "工作区")?;
+        let restored = match f.kind {
+            RecycleKind::Todo => {
+                let project = f.project.clone().ok_or_else(gone)?;
+                check_component(&project, "项目")?;
+                let pdir = self.root.join(&f.workspace).join(&project);
+                fs::create_dir_all(&pdir).map_err(|e| format!("恢复失败：{e}"))?;
+                let mut meta = read_meta(&pdir)?;
+                let stem = f.name.strip_suffix(".md").unwrap_or(&f.name).to_string();
+                let mut todo = f.todo.clone().unwrap_or_else(|| {
+                    let now = now_ms();
+                    TodoMeta {
+                        id: stem.clone(),
+                        title: if is_generated_id(&stem) { String::new() } else { stem.clone() },
+                        done: false,
+                        created_at: now,
+                        updated_at: now,
+                        done_at: None,
+                        pinned: false,
+                        order: None,
+                    }
+                });
+                let mut new_id = stem;
+                if pdir.join(format!("{new_id}.md")).exists() || meta.find(&new_id).is_some() {
+                    new_id = unique_id(&pdir, &meta);
+                }
+                fs::rename(&payload, pdir.join(format!("{new_id}.md"))).map_err(|e| format!("恢复失败：{e}"))?;
+                todo.id = new_id.clone();
+                // 原来排的位置在别的待办调整过顺序后不一定还对，当成新来的排在最前面
+                todo.order = None;
+                meta.todos.push(todo);
+                write_meta(&pdir, &meta)?;
+                g.forget_todo(&pdir, &new_id);
+                Restored {
+                    kind: f.kind,
+                    workspace: f.workspace.clone(),
+                    project: Some(project),
+                    todo_id: Some(new_id),
+                    renamed: false,
+                }
+            }
+            RecycleKind::Project => {
+                let ws_dir = self.root.join(&f.workspace);
+                fs::create_dir_all(&ws_dir).map_err(|e| format!("恢复失败：{e}"))?;
+                let (name, renamed) = free_name(&ws_dir, &f.name);
+                fs::rename(&payload, ws_dir.join(&name)).map_err(|e| format!("恢复失败：{e}"))?;
+                g.forget_under(&ws_dir.join(&name));
+                Restored { kind: f.kind, workspace: f.workspace.clone(), project: Some(name), todo_id: None, renamed }
+            }
+            RecycleKind::Workspace => {
+                let (name, renamed) = free_name(&self.root, &f.name);
+                fs::rename(&payload, self.root.join(&name)).map_err(|e| format!("恢复失败：{e}"))?;
+                g.forget_under(&self.root.join(&name));
+                Restored { kind: f.kind, workspace: name, project: None, todo_id: None, renamed }
+            }
+        };
+        let _ = fs::remove_dir_all(&dir);
+        Ok(restored)
+    }
+
+    /// 彻底删除：从软件的回收站移到系统回收站，返回移走了几项
+    pub fn purge(&self, ids: &[String]) -> Result<usize> {
+        let _g = self.guard();
+        let mut n = 0;
+        for id in ids {
+            check_component(id, "回收站里的项")?;
+            let dir = self.recycle_root().join(id);
+            if self.purge_dir(&dir)? {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
+    /// 清空软件的回收站（都移到系统回收站）
+    pub fn empty_recycle(&self) -> Result<usize> {
+        let ids: Vec<String> = {
+            let _g = self.guard();
+            self.recycle_entries()?.into_iter().map(|(id, _)| id).collect()
+        };
+        self.purge(&ids)
+    }
+
+    /// 放了超过 days 天的移到系统回收站（启动时调用），返回移走了几项
+    pub fn purge_expired(&self, days: i64) -> Result<usize> {
+        let cutoff = now_ms() - days * 86_400_000;
+        let ids: Vec<String> = {
+            let _g = self.guard();
+            self.recycle_entries()?
+                .into_iter()
+                .filter(|(_, f)| f.deleted_at < cutoff)
+                .map(|(id, _)| id)
+                .collect()
+        };
+        self.purge(&ids)
+    }
+
+    /// 把回收站里的一项（删除的文件或目录）移到系统回收站，再删掉说明；这一项不在时返回 false
+    fn purge_dir(&self, dir: &Path) -> Result<bool> {
+        let Some(f) = read_recycle_file(dir) else {
+            return Ok(false);
+        };
+        let payload = dir.join(&f.name);
+        if payload.exists() {
+            self.move_to_trash(&payload)?;
+        }
+        let _ = fs::remove_dir_all(dir);
+        Ok(true)
+    }
+
     // ----- 删除 -----
 
-    /// 优先放进系统回收站；回收站不可用时退而移到数据目录下的 .trash
+    /// 优先放进系统回收站；回收站不可用时退而移到数据目录下的 .trash。
+    /// 单元测试里不碰系统回收站（Linux 上会真的放进用户的回收站），直接移到 .trash
     fn move_to_trash(&self, path: &Path) -> Result<()> {
         let target = path.to_path_buf();
         // trash 在 Windows 上会初始化 COM，放到全新线程里做，避免和当前线程的 COM 模式冲突
-        let recycled = std::thread::spawn(move || trash::delete(&target))
-            .join()
-            .map(|r| r.is_ok())
-            .unwrap_or(false);
+        let recycled = !cfg!(test)
+            && std::thread::spawn(move || trash::delete(&target))
+                .join()
+                .map(|r| r.is_ok())
+                .unwrap_or(false);
         if recycled {
             return Ok(());
         }
@@ -880,6 +1188,27 @@ fn scan_project(dir: &Path, previews: Option<&mut MemCache>) -> Result<Vec<TodoS
         .zip(previews_of)
         .map(|((m, _, md), preview)| summary_of(m, to_ms(md.modified()).unwrap_or(0), preview))
         .collect())
+}
+
+/// 读回收站里一项的说明；读不出来，或删除的东西已经不在时返回 None
+fn read_recycle_file(dir: &Path) -> Option<RecycleFile> {
+    let bytes = fs::read(dir.join(ENTRY_FILE)).ok()?;
+    let f: RecycleFile = serde_json::from_slice(strip_bom(&bytes)).ok()?;
+    // 名字是原来的文件 / 目录名，不能带路径
+    check_component(&f.name, "回收站里的项").ok()?;
+    dir.join(&f.name).exists().then_some(f)
+}
+
+/// 在 parent 里恢复名为 name 的目录用的名字：被占用时加「（恢复）」「（恢复 2）」…；返回名字和是否改了名
+fn free_name(parent: &Path, name: &str) -> (String, bool) {
+    if !parent.join(name).exists() {
+        return (name.to_string(), false);
+    }
+    let name = (1..)
+        .map(|n| if n == 1 { format!("{name}（恢复）") } else { format!("{name}（恢复 {n}）") })
+        .find(|n| !parent.join(n).exists())
+        .expect("infinite iterator");
+    (name, true)
 }
 
 /// 项目目录里的正文文件：(待办 id, 路径, 文件信息)；跳过 . 开头的（保存时的临时文件等）
@@ -1440,6 +1769,143 @@ mod tests {
         let moved = s.move_todo("w", "p", &a.id, "w", "q").unwrap();
         assert_eq!(moved.order, None);
         assert!(s.reorder_todos("w", "不存在", &[]).is_err());
+    }
+
+    #[test]
+    fn deleted_todo_is_restored_with_its_metadata() {
+        let (_tmp, s) = store("recycle-todo");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let t = s.create_todo("w", "p", "周报", "# 正文\n内容").unwrap();
+        s.set_todo_done("w", "p", &t.id, true).unwrap();
+        s.set_todo_pinned("w", "p", &t.id, true).unwrap();
+        let before = s.load_workspace("w").unwrap().projects[0].todos[0].clone();
+
+        let rid = s.delete_todo("w", "p", &t.id).unwrap();
+        assert!(s.load_workspace("w").unwrap().projects[0].todos.is_empty());
+        // 在软件的回收站里，不会被当成工作区，也不会被搜到
+        assert_eq!(s.list_workspaces().unwrap().len(), 1);
+        assert!(s.search(None, "内容").unwrap().is_empty());
+        let list = s.list_recycle().unwrap();
+        assert_eq!(list.len(), 1);
+        let e = &list[0];
+        assert_eq!((e.id.as_str(), e.kind, e.title.as_str(), e.done), (rid.as_str(), RecycleKind::Todo, "周报", true));
+        assert_eq!((e.workspace.as_str(), e.project.as_deref()), ("w", Some("p")));
+        assert_eq!(e.preview, "正文 内容");
+
+        let r = s.restore(std::slice::from_ref(&rid));
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(r.restored[0].todo_id.as_deref(), Some(t.id.as_str()));
+        let after = &s.load_workspace("w").unwrap().projects[0].todos[0];
+        assert_eq!((after.title.as_str(), after.done, after.pinned), ("周报", true, true));
+        assert_eq!((after.created_at, after.done_at), (before.created_at, before.done_at));
+        assert_eq!(s.read_todo("w", "p", &t.id).unwrap().content, "# 正文\n内容");
+        assert!(s.list_recycle().unwrap().is_empty());
+        // 已经恢复过的再恢复：说明没有了
+        assert_eq!(s.restore(&[rid]).errors.len(), 1);
+    }
+
+    #[test]
+    fn restore_todo_when_place_is_gone_or_taken() {
+        let (_tmp, s) = store("recycle-gone");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let t = s.create_todo("w", "p", "旧的", "旧正文").unwrap();
+        let rid = s.delete_todo("w", "p", &t.id).unwrap();
+        // 同名文件又出现了（同一秒新建、外部拷进来）：换一个 id
+        fs::write(s.project_path("w", "p").unwrap().join(format!("{}.md", t.id)), "新文件").unwrap();
+        let r = s.restore(&[rid]);
+        let new_id = r.restored[0].todo_id.clone().unwrap();
+        assert_ne!(new_id, t.id);
+        assert_eq!(s.read_todo("w", "p", &new_id).unwrap().content, "旧正文");
+        assert_eq!(s.read_todo("w", "p", &t.id).unwrap().content, "新文件");
+
+        // 原来的项目、工作区都删掉了：恢复时重新建
+        let rid = s.delete_todo("w", "p", &new_id).unwrap();
+        let pid = s.delete_project("w", "p").unwrap();
+        let wid = s.delete_workspace("w").unwrap();
+        let r = s.restore(&[rid]);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        let tree = s.load_workspace("w").unwrap();
+        assert_eq!(tree.projects[0].name, "p");
+        assert_eq!(tree.projects[0].todos[0].title, "旧的");
+        // 再恢复原来的项目、工作区：名字被占用了，加「（恢复）」
+        let r = s.restore(&[pid, wid]);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(r.restored[0].project.as_deref(), Some("p（恢复）"));
+        assert!(r.restored[0].renamed);
+        assert_eq!(r.restored[1].workspace, "w（恢复）");
+        let mut names: Vec<String> = s.list_workspaces().unwrap().into_iter().map(|w| w.name).collect();
+        names.sort();
+        assert_eq!(names, ["w", "w（恢复）"]);
+        // 恢复的项目回到了 w 里（里面是后来外部放进去的那条），删工作区时它已经是空的
+        let tree = s.load_workspace("w").unwrap();
+        let restored = tree.projects.iter().find(|p| p.name == "p（恢复）").unwrap();
+        assert_eq!(restored.todos.len(), 1);
+        assert!(s.load_workspace("w（恢复）").unwrap().projects.is_empty());
+    }
+
+    #[test]
+    fn deleted_project_and_workspace_come_back_whole() {
+        let (_tmp, s) = store("recycle-dirs");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let t = s.create_todo("w", "p", "带着走", "").unwrap();
+        s.set_todo_done("w", "p", &t.id, true).unwrap();
+        s.create_todo("w", "p", "第二条", "").unwrap();
+
+        let pid = s.delete_project("w", "p").unwrap();
+        let e = &s.list_recycle().unwrap()[0];
+        assert_eq!((e.kind, e.title.as_str(), e.todo_count), (RecycleKind::Project, "p", 2));
+        assert!(s.load_workspace("w").unwrap().projects.is_empty());
+        let r = s.restore(&[pid]);
+        assert!(!r.restored[0].renamed);
+        let todos = &s.load_workspace("w").unwrap().projects[0].todos;
+        assert!(todos.iter().any(|x| x.title == "带着走" && x.done));
+
+        let wid = s.delete_workspace("w").unwrap();
+        assert!(s.list_workspaces().unwrap().is_empty());
+        let e = &s.list_recycle().unwrap()[0];
+        assert_eq!((e.kind, e.title.as_str(), e.todo_count), (RecycleKind::Workspace, "w", 2));
+        s.restore(&[wid]);
+        assert_eq!(s.load_workspace("w").unwrap().projects[0].todos.len(), 2);
+    }
+
+    #[test]
+    fn purge_moves_to_system_trash() {
+        let (_tmp, s) = store("recycle-purge");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let a = s.create_todo("w", "p", "a", "").unwrap();
+        let b = s.create_todo("w", "p", "b", "").unwrap();
+        let c = s.create_todo("w", "p", "c", "").unwrap();
+        let ra = s.delete_todo("w", "p", &a.id).unwrap();
+        let rb = s.delete_todo("w", "p", &b.id).unwrap();
+        let rc = s.delete_todo("w", "p", &c.id).unwrap();
+        // 列表里最近删除的在前
+        let ids: Vec<String> = s.list_recycle().unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, [rc.clone(), rb.clone(), ra.clone()]);
+
+        assert_eq!(s.purge(std::slice::from_ref(&ra)).unwrap(), 1);
+        assert_eq!(s.list_recycle().unwrap().len(), 2);
+        // 单元测试里「系统回收站」是数据目录下的 .trash
+        let trashed = fs::read_dir(s.root().join(TRASH_DIR)).unwrap().count();
+        assert_eq!(trashed, 1);
+
+        // 放了超过 30 天的移走
+        let entry = s.root().join(RECYCLE_DIR).join(&rb).join(ENTRY_FILE);
+        let mut f: RecycleFile = serde_json::from_slice(&fs::read(&entry).unwrap()).unwrap();
+        f.deleted_at -= (RECYCLE_KEEP_DAYS + 1) * 86_400_000;
+        fs::write(&entry, serde_json::to_vec(&f).unwrap()).unwrap();
+        assert_eq!(s.purge_expired(RECYCLE_KEEP_DAYS).unwrap(), 1);
+        let left: Vec<String> = s.list_recycle().unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(left, [rc]);
+
+        assert_eq!(s.empty_recycle().unwrap(), 1);
+        assert!(s.list_recycle().unwrap().is_empty());
+        assert_eq!(fs::read_dir(s.root().join(TRASH_DIR)).unwrap().count(), 3);
+        // 名字里带路径的不认
+        assert!(s.purge(&["../w".into()]).is_err());
     }
 
     #[test]

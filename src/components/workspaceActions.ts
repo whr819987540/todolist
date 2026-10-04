@@ -19,6 +19,7 @@ import type { Actions } from "./menus";
 import type { useNameDialog } from "./NameDialog";
 import { type Collapsed, type Selection, WS_KEY } from "./sidebar/tree";
 import type { EditorHandle } from "./TodoEditor";
+import { useUndoDelete } from "./undo";
 
 /** 去重后按名称排序：侧栏里选中的工作区按这个顺序显示 */
 export const sortNames = (names: string[]) => [...new Set(names)].sort(compareName);
@@ -84,6 +85,7 @@ export interface BatchActions {
  */
 export function useWorkspaceActions(ctx: ActionContext) {
   const { message, modal } = AntApp.useApp();
+  const undoDelete = useUndoDelete();
   const {
     sel,
     setSel,
@@ -174,13 +176,17 @@ export function useWorkspaceActions(ctx: ActionContext) {
         const count = tree?.projects.reduce((n, p) => n + p.todos.length, 0) ?? 0;
         confirmDelete(
           `删除工作区「${ws}」？`,
-          `其中的 ${tree?.projects.length ?? 0} 个项目、${count} 条待办将一并移到回收站。`,
+          `其中的 ${tree?.projects.length ?? 0} 个项目、${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
             if (inSel) await flushEditor();
-            await api.deleteWorkspace(ws);
+            const rid = await api.deleteWorkspace(ws);
             if (inSel) editorRef.current?.detach();
             forgetWorkspaceMemory(ws);
-            message.success("已移到回收站");
+            // 撤销后重新选中它（只剩它一个、已经回了首页时，首页会刷新出来）
+            undoDelete(`已删除工作区「${ws}」`, [rid], ({ restored }) => {
+              const back = restored[0]?.workspace;
+              if (back) setWorkspaces((list) => sortNames([...list, back]));
+            });
             const rest = workspaces.filter((w) => w !== ws);
             if (rest.length) changeWorkspaces(rest);
             else onHome();
@@ -222,17 +228,21 @@ export function useWorkspaceActions(ctx: ActionContext) {
         }),
       deleteProject: (project) => {
         const count = tree?.projects.find((p) => p.name === project)?.todos.length ?? 0;
-        confirmDelete(`删除项目「${project}」？`, `其中的 ${count} 条待办将一并移到回收站。`, async () => {
-          if (isSelProject(project)) await flushEditor();
-          await api.deleteProject(ws, project);
-          if (isSelProject(project)) {
-            editorRef.current?.detach();
-            setSel({ workspace: ws });
-          }
-          forgetProjectState(ws, project);
-          await reload();
-          message.success("已移到回收站");
-        });
+        confirmDelete(
+          `删除项目「${project}」？`,
+          `其中的 ${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
+          async () => {
+            if (isSelProject(project)) await flushEditor();
+            const rid = await api.deleteProject(ws, project);
+            if (isSelProject(project)) {
+              editorRef.current?.detach();
+              setSel({ workspace: ws });
+            }
+            forgetProjectState(ws, project);
+            await reload();
+            undoDelete(`已删除项目「${project}」`, [rid]);
+          },
+        );
       },
       moveProject: (project, targetWs) =>
         run(async () => {
@@ -273,17 +283,23 @@ export function useWorkspaceActions(ctx: ActionContext) {
           patchTodo(ws, project, await api.setTodoPinned(ws, project, t.id, !t.pinned));
         }),
       deleteTodo: (project, t) =>
-        confirmDelete(`删除待办「${displayTitle(t).text}」？`, "对应的 Markdown 文件将被移到回收站。", async () => {
+        confirmDelete(`删除待办「${displayTitle(t).text}」？`, "将被移到回收站，可以在回收站里恢复。", async () => {
           const isSel = isSelTodo(project, t.id);
           if (isSel) await flushEditor();
-          await api.deleteTodo(ws, project, t.id);
+          const rid = await api.deleteTodo(ws, project, t.id);
           if (isSel) {
             editorRef.current?.detach();
             setSel({ workspace: ws, project });
           }
           forgetTodoState(ws, project, t.id);
           updateTodos(ws, project, (todos) => todos.filter((x) => x.id !== t.id));
-          message.success("已移到回收站");
+          // 撤销时，删的是正打开着的那条就重新打开它
+          undoDelete(`已删除待办「${displayTitle(t).text}」`, [rid], async ({ restored }) => {
+            const r = restored[0];
+            if (!isSel || !r?.project || !r.todoId) return;
+            await reload();
+            setSel({ workspace: r.workspace, project: r.project, todoId: r.todoId });
+          });
         }),
       moveTodo: (project, t, target, targetWs = ws) =>
         run(async () => {
@@ -374,18 +390,19 @@ export function useWorkspaceActions(ctx: ActionContext) {
     remove: (items) =>
       modal.confirm({
         title: `删除选中的 ${items.length} 条待办？`,
-        content: "对应的 Markdown 文件将被移到回收站。",
+        content: "将被移到回收站，可以在回收站里恢复。",
         okText: "删除",
         okButtonProps: { danger: true },
         cancelText: "取消",
         onOk: async () => {
+          const ids: string[] = [];
           const ok = await each(items, async ({ workspace, project, todo: t }) => {
-            await api.deleteTodo(workspace, project, t.id);
+            ids.push(await api.deleteTodo(workspace, project, t.id));
             forgetTodoState(workspace, project, t.id);
             updateTodos(workspace, project, (todos) => todos.filter((x) => x.id !== t.id));
           });
           clearPicked();
-          if (ok) message.success(`已把 ${ok} 条移到回收站`);
+          if (ok) undoDelete(`已删除 ${ok} 条待办`, ids);
         },
       }),
   };

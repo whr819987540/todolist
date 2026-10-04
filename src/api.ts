@@ -3,6 +3,8 @@ import type {
   EditorBackground,
   FontArea,
   QuickTarget,
+  RecycleEntry,
+  RestoreResult,
   RemoteBackup,
   SaveResult,
   SearchHit,
@@ -26,15 +28,17 @@ export const api = {
   createWorkspace: (name: string) => invoke<string>("create_workspace", { name }),
   renameWorkspace: (name: string, newName: string) =>
     invoke<string>("rename_workspace", { name, newName }),
-  deleteWorkspace: (name: string) => invoke<void>("delete_workspace", { name }),
+  /** 放进软件的回收站，返回回收站里这一项的 id（撤销删除时用） */
+  deleteWorkspace: (name: string) => invoke<string>("delete_workspace", { name }),
   loadWorkspace: (workspace: string) => invoke<WorkspaceTree>("load_workspace", { workspace }),
 
   createProject: (workspace: string, name: string) =>
     invoke<string>("create_project", { workspace, name }),
   renameProject: (workspace: string, name: string, newName: string) =>
     invoke<string>("rename_project", { workspace, name, newName }),
+  /** 放进软件的回收站，返回回收站里这一项的 id */
   deleteProject: (workspace: string, name: string) =>
-    invoke<void>("delete_project", { workspace, name }),
+    invoke<string>("delete_project", { workspace, name }),
   /** 连同其中的待办移到另一个工作区，项目名不变 */
   moveProject: (workspace: string, name: string, targetWorkspace: string) =>
     invoke<void>("move_project", { workspace, name, targetWorkspace }),
@@ -63,8 +67,18 @@ export const api = {
   /** 手动排序：ids 是项目里待办从前到后的顺序（修改时间不变） */
   reorderTodos: (workspace: string, project: string, ids: string[]) =>
     invoke<void>("reorder_todos", { workspace, project, ids }),
+  /** 放进软件的回收站，返回回收站里这一项的 id */
   deleteTodo: (workspace: string, project: string, id: string) =>
-    invoke<void>("delete_todo", { workspace, project, id }),
+    invoke<string>("delete_todo", { workspace, project, id }),
+
+  /** 软件回收站里的东西，最近删除的在前 */
+  listRecycle: () => invoke<RecycleEntry[]>("list_recycle"),
+  /** 恢复到原来的位置（撤销删除也是它）；恢复了的话主窗口会收到 data-changed 刷新 */
+  restoreRecycled: (ids: string[]) => invoke<RestoreResult>("restore_recycled", { ids }),
+  /** 彻底删除：移到 Windows 回收站，返回移走了几项 */
+  purgeRecycled: (ids: string[]) => invoke<number>("purge_recycled", { ids }),
+  /** 清空软件的回收站（都移到 Windows 回收站） */
+  emptyRecycle: () => invoke<number>("empty_recycle"),
   /** 移到另一个项目，可以在别的工作区里；返回移过去后的摘要（id 可能因为重名而变） */
   moveTodo: (workspace: string, project: string, id: string, targetWorkspace: string, targetProject: string) =>
     invoke<TodoSummary>("move_todo", { workspace, project, id, targetWorkspace, targetProject }),

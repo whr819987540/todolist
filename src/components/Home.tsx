@@ -32,6 +32,8 @@ import { forgetWorkspaceState, renameWorkspaceState } from "../workspaceState";
 import Highlight from "./Highlight";
 import Logo from "./Logo";
 import { useNameDialog } from "./NameDialog";
+import RecycleBinButton from "./RecycleBin";
+import { useUndoDelete } from "./undo";
 import SearchResults from "./SearchResults";
 import SettingsButton from "./SettingsButton";
 import type { Selection } from "./sidebar/tree";
@@ -39,6 +41,7 @@ import type { Selection } from "./sidebar/tree";
 /** 首页：全部工作区 */
 export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: Omit<Selection, "workspace">) => void }) {
   const { message, modal } = AntApp.useApp();
+  const undoDelete = useUndoDelete();
   const [list, setList] = useState<WorkspaceInfo[] | null>(null);
   const [root, setRoot] = useState("");
   const [keyword, setKeyword] = useState("");
@@ -139,15 +142,15 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
   const remove = (ws: WorkspaceInfo) =>
     modal.confirm({
       title: `删除工作区「${ws.name}」？`,
-      content: `其中的 ${ws.projectCount} 个项目、${ws.todoCount} 条待办将一并移到回收站。`,
+      content: `其中的 ${ws.projectCount} 个项目、${ws.todoCount} 条待办将一并移到回收站，可以在回收站里恢复。`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
       onOk: async () => {
         try {
-          await api.deleteWorkspace(ws.name);
+          const rid = await api.deleteWorkspace(ws.name);
           forgetWorkspaceState(ws.name);
-          message.success("已移到回收站");
+          undoDelete(`已删除工作区「${ws.name}」`, [rid]);
         } catch (e) {
           message.error(errMsg(e));
         }
@@ -226,6 +229,7 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
           <Tooltip title="刷新（F5）">
             <Button icon={<ReloadOutlined />} onClick={reload} />
           </Tooltip>
+          <RecycleBinButton />
           <Button icon={<FolderOpenOutlined />} onClick={() => api.openFolder()}>
             打开数据目录
           </Button>

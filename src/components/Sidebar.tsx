@@ -7,6 +7,7 @@ import { useNow } from "../utils";
 import type { ListOptions } from "../workspaceState";
 import type { DragMove } from "./DragMove";
 import { type Actions, moveTargets } from "./menus";
+import RecycleBinButton from "./RecycleBin";
 import { useRowPopups } from "./sidebar/RowPopups";
 import SidebarToolbar from "./sidebar/SidebarToolbar";
 import { type Collapsed, countAll, countDone, parseSelKey, type Selection, selKey, WS_KEY } from "./sidebar/tree";
@@ -207,7 +208,10 @@ export default function Sidebar(props: Props) {
       {popups.node}
 
       <div className="sidebar-foot">
-        {multi && `${trees.length} 个工作区，`}共 {total} 条待办，已完成 {done} 条
+        <span className="sidebar-stats">
+          {multi && `${trees.length} 个工作区，`}共 {total} 条待办，已完成 {done} 条
+        </span>
+        <RecycleBinButton variant="link" />
       </div>
     </aside>
   );
