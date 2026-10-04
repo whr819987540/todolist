@@ -12,6 +12,7 @@ use settings::{
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use store::{
@@ -25,7 +26,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-use tauri_plugin_window_state::StateFlags;
+use tauri_plugin_window_state::{StateFlags, WindowExt};
 use webdav::{WebDav, WebDavConfig, WebDavInfo, WebDavStore};
 
 type Cmd<T> = Result<T, String>;
@@ -474,9 +475,20 @@ async fn quick_capture(
 
 // ----- 系统托盘 -----
 
+/// 记住窗口大小、位置和最大化（不记可见性，否则从托盘退出后会记成“隐藏”）
+fn window_state_flags() -> StateFlags {
+    StateFlags::all() & !StateFlags::VISIBLE
+}
+
+/// 开机自启、只在托盘里时还没恢复「最大化」：恢复最大化会把隐藏的窗口显示出来，等第一次显示主窗口时再恢复
+static MAXIMIZE_ON_SHOW: AtomicBool = AtomicBool::new(false);
+
 /// 把主窗口从托盘 / 最小化状态调回前台
 fn show_main_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        if MAXIMIZE_ON_SHOW.swap(false, Ordering::Relaxed) {
+            let _ = w.restore_state(StateFlags::MAXIMIZED);
+        }
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
@@ -935,7 +947,9 @@ pub fn run() {
         // 记住窗口大小和位置；不记可见性，否则从托盘退出后会记成“隐藏”
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                .with_state_flags(window_state_flags())
+                // 主窗口的大小、位置在 setup 里恢复：开机自启只在托盘里时不能恢复最大化（会把窗口显示出来）
+                .skip_initial_state("main")
                 // 快速记录小窗每次都放在鼠标所在的屏幕上，不记位置
                 .with_denylist(&[QUICK])
                 .build(),
@@ -977,7 +991,11 @@ pub fn run() {
             if let Some(w) = app.get_webview_window("main") {
                 #[cfg(windows)]
                 set_window_icons(&w);
-                if !hidden {
+                if hidden {
+                    let _ = w.restore_state(window_state_flags() & !StateFlags::MAXIMIZED);
+                    MAXIMIZE_ON_SHOW.store(true, Ordering::Relaxed);
+                } else {
+                    let _ = w.restore_state(window_state_flags());
                     let _ = w.show();
                     let _ = w.set_focus();
                 }
