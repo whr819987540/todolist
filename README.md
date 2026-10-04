@@ -12,6 +12,7 @@
 - **后退 / 前进**：用鼠标侧键的后退键、前进键在看过的地方之间来回（首页、工作区概览、项目概览、待办），和浏览器一样；只记这次运行期间的
 - **键盘操作**：Alt+← / → 在左侧列表和右侧编辑区之间切换，Alt+↑ / ↓ 在左侧的工作区、项目、待办之间上下移动
 - **待办条目**：左侧显示标题；没有标题时显示正文开头（按侧栏宽度自动截断）。每条带完成勾选框、创建时间、最新修改时间，悬停可看完整时间
+- **批量操作**：在左侧列表里 Ctrl+单击加选、Shift+单击选中一段，右侧显示批量操作：一起标记完成 / 未完成、置顶、移动到其他项目、删除；也可以右键选中的待办，或把它们一起拖到左侧的其他项目上。Esc 取消选择，Delete 删除
 - **置顶**：右键待办选「置顶」，它就排在所在项目的最前面（已完成的仍沉底），标题前有图钉
 - **手动排序**：在左侧列表或项目概览里把待办拖到同一项目的另一条待办上方 / 下方，调整它的位置，这个工作区随即改成手动排序（排序按钮里可以换回）；新建的待办排在最前面
 - **正文编辑**：右侧编辑 Markdown；右键待办可「用默认程序打开」，交给系统关联的 Markdown 软件
@@ -221,7 +222,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
   - `position.ts`：编辑位置（光标和选区另一端、光标在编辑区里的高度、它们前后的原文），打开待办和外部修改后重新加载时据此找回光标（选区）和滚动
 - `src/components/`：首页（含搜索）、工作区视图、侧栏树、概览、拖动移动（`DragMove.tsx`，用鼠标事件自己实现，没用 HTML5 拖放；放下的位置按侧栏节点上的 `data-drop-ws` / `data-drop-project` 找；指针在同一项目的另一条待办行（`data-sel`，左侧列表和项目概览里都有）上时是调整顺序，`workspaceActions` 的 `reorderTodo` 按现在显示的顺序算出新顺序（`utils.ts` 的 `reorderedIds`）存下）、编辑器（`TodoEditor` 管定时保存（auto save 关闭时 1 小时兜底）、auto save、冲突（含「另存为新待办」：Rust 端 `create_todo` 可以带正文一次建好）和记下编辑位置，打字时不重新渲染，状态栏的字数、行数停顿片刻再算（`utils.ts` 的 `textStats`），`MarkdownEditor` 包装 CodeMirror）、设置
   - 设置：`SettingsButton.tsx` 是设置按钮和对话框，五个页签各在 `settings/` 下一个文件——`GeneralSettings`（常规：开机自启、开屏方式）、`ShortcutSettings`（快捷键：应用快捷键和编辑快捷键，录制时检查冲突）、`AppearanceSettings`（外观：主题、编辑区背景色、字号）、`SaveSettings`（保存）、`BackupSettings`（备份与恢复）；`ShortcutRow` 是录制一个快捷键的那一行
-  - 工作区视图：`WorkspaceView.tsx` 管选中的工作区、右侧显示的内容、加载和刷新、快捷键、侧栏宽度；新建、重命名、删除、移动、打开等操作在 `workspaceActions.ts` 的 `useWorkspaceActions`（`actionsFor(ws)` 每次渲染新建、用这次渲染的状态；`stableActions(ws)` 是传给侧栏行的不变对象，调用时转给最新的 `actionsFor`）
+  - 工作区视图：`WorkspaceView.tsx` 管选中的工作区、右侧显示的内容、多选（批量操作，`picking.ts` 算 Ctrl / Shift+单击后选中哪些，右侧的 `BatchPanel.tsx`，批量的菜单在 `menus.tsx`、操作在 `workspaceActions.ts` 的 `batch`）、加载和刷新、快捷键、侧栏宽度；新建、重命名、删除、移动、打开等操作在 `workspaceActions.ts` 的 `useWorkspaceActions`（`actionsFor(ws)` 每次渲染新建、用这次渲染的状态；`stableActions(ws)` 是传给侧栏行的不变对象，调用时转给最新的 `actionsFor`）
   - 侧栏：`Sidebar.tsx` 管树的焦点和键盘操作（↑↓←→、Enter、Alt+方向键），其余在 `sidebar/` 下——`SidebarToolbar`（顶部：返回首页、选中工作区的 `WorkspacePicker`、主题、设置、搜索、新建、排序、隐藏已完成、全部折叠 / 展开）、`TreeRows`（工作区、项目、待办的行）、`RowPopups`（待办行共用的悬停提示 `TodoTip` 和右键菜单）、`tree.ts`（右侧显示的内容 `Selection`、行上 `data-sel` 的键、折叠状态、计数）
   - 待办多（几千条）时侧栏也要快：`WorkspaceView` 刷新（窗口获得焦点、F5、保存后）时内容没变的工作区、项目、待办沿用原来的对象，什么都没变就不重新渲染；侧栏的工作区、项目、待办行（`sidebar/TreeRows.tsx`）都用 `memo`，只有自己的内容、选中、折叠、拖动状态变了才重新渲染（传给行的操作、拖动函数都是不变的对象，右键「移动到」列出的项目也是右键时才经不变的函数去算，别的待办、项目变了时行不跟着重新渲染；「x 分钟前」只有显示会变的行跟着每 30 秒刷新），待办行的悬停提示和右键菜单不每行各挂一个 antd 组件，整个侧栏共用一个（`sidebar/RowPopups.tsx`）；不在可见区域的项目里的待办不排版、不绘制（`.todo-group` 的 `content-visibility: auto`，加在项目这一级，加在每一行上反而让每一帧都变慢）
 - `scripts/release.mjs`：改版本号、打包并安装到本机（`npm run release`，`release:fast` 传 `--fast`）

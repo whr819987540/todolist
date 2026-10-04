@@ -666,6 +666,20 @@ mark {
   padding-top: 6px;
   padding-bottom: 6px;
 }
+/* 批量操作多选了的待办 */
+.todo-row.picked,
+.todo-row.picked:hover {
+  background: var(--c-primary-bg-hover);
+}
+.todo-row.picked .todo-title {
+  color: var(--c-primary);
+}
+.batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 24px;
+}
 .todo-row.selected::before {
   content: "";
   position: absolute;

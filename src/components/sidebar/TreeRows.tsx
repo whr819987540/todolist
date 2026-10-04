@@ -8,6 +8,7 @@ import {
   RightOutlined,
 } from "@ant-design/icons";
 import { Dropdown, Tooltip, type MenuProps } from "antd";
+import type { OpenMenu } from "./RowPopups";
 import { memo, useCallback, useMemo } from "react";
 import { hitKey, searchSnippet } from "../../search";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../../types";
@@ -15,11 +16,13 @@ import { avatarColor, compactTime, displayTitle, firstChar, matchTodo, relativeT
 import { type DragItem, type DragState, dropClass, isDraggingProject, reorderMark } from "../DragMove";
 import Highlight from "../Highlight";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "../menus";
-import type { OpenMenu } from "./RowPopups";
 import { type Collapsed, countAll, countDone, type Selection, selKey, WS_KEY } from "./tree";
 
 /** 拖动：没在拖时 state 是 null；start 是不变的函数 */
 type DragStart = (e: React.MouseEvent, item: DragItem) => void;
+
+/** 单击待办（Ctrl / Shift+单击是多选）；是不变的函数 */
+type TodoClick = (e: React.MouseEvent, s: Selection) => void;
 
 /**
  * 一个工作区：工作区行 + 下面的项目和待办。
@@ -44,6 +47,10 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   onContextMenu: OpenMenu;
   /** 右键「移动到」列出的项目，右键时才算；是不变的函数 */
   moveTargets: (workspace: string) => MoveTarget[];
+  /** 这个工作区里多选了的待办（行上的 data-sel） */
+  picked: ReadonlySet<string>;
+  onTodoClick: TodoClick;
+  pickedMenu: () => MenuProps | null;
 }) {
   const { tree, sel, actions: a, collapsed, keyword: kw, hits, hideDone, sortKey, setCollapsed } = p;
 
@@ -134,6 +141,9 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
               reorderPlace={reorderMark(drag, tree.name, project.name)?.place}
               dragStart={p.dragStart}
               onContextMenu={p.onContextMenu}
+              picked={p.picked}
+              onTodoClick={p.onTodoClick}
+              pickedMenu={p.pickedMenu}
             />
           ))}
           {tree.projects.length === 0 && (
@@ -183,6 +193,9 @@ const ProjectBranch = memo(function ProjectBranch(p: {
   reorderPlace?: "before" | "after";
   dragStart: DragStart;
   onContextMenu: OpenMenu;
+  picked: ReadonlySet<string>;
+  onTodoClick: TodoClick;
+  pickedMenu: () => MenuProps | null;
 }) {
   const { project, todos, actions: a } = p;
   const undone = project.todos.filter((t) => !t.done).length;
@@ -233,6 +246,9 @@ const ProjectBranch = memo(function ProjectBranch(p: {
           {todos.map((t) => (
             <TodoRow
               key={t.id}
+              picked={p.picked.has(selKey({ workspace: p.workspace, project: project.name, todoId: t.id }))}
+              onTodoClick={p.onTodoClick}
+              pickedMenu={p.pickedMenu}
               workspace={p.workspace}
               project={project.name}
               todo={t}
@@ -267,6 +283,10 @@ const ProjectBranch = memo(function ProjectBranch(p: {
 });
 
 interface TodoRowProps {
+  /** 多选了这一条（批量操作） */
+  picked: boolean;
+  onTodoClick: TodoClick;
+  pickedMenu: () => MenuProps | null;
   workspace: string;
   project: string;
   todo: TodoSummary;
@@ -322,11 +342,13 @@ const TodoRow = memo(function TodoRow(p: TodoRowProps) {
       role="treeitem"
       aria-selected={p.selected}
       data-sel={selKey({ workspace: p.workspace, project: p.project, todoId: t.id })}
-      className={`tree-row todo-row${p.selected ? " selected" : ""}${t.done ? " done" : ""}${p.dragged ? " drag-source" : ""}${p.dropMark ? ` drop-${p.dropMark}` : ""}`}
+      className={`tree-row todo-row${p.selected ? " selected" : ""}${p.picked ? " picked" : ""}${t.done ? " done" : ""}${p.dragged ? " drag-source" : ""}${p.dropMark ? ` drop-${p.dropMark}` : ""}`}
       style={{ paddingLeft: 44 }}
       onMouseDown={(e) => p.dragStart(e, { kind: "todo", workspace: p.workspace, project: p.project, todo: t })}
-      onClick={() => a.selectTodo(p.project, t.id)}
-      onContextMenu={(e) => p.onContextMenu(e, todoMenu(a, p.project, t, p.moveTargets(p.workspace)))}
+      onClick={(e) => p.onTodoClick(e, { workspace: p.workspace, project: p.project, todoId: t.id })}
+      onContextMenu={(e) =>
+        p.onContextMenu(e, (p.picked && p.pickedMenu()) || todoMenu(a, p.project, t, p.moveTargets(p.workspace)))
+      }
     >
       <span
         className={`check${t.done ? " checked" : ""}`}

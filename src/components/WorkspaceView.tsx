@@ -1,7 +1,8 @@
 import { App as AntApp, Spin, type InputRef } from "antd";
-import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useAppEvent, useWindowFocus } from "../hooks";
+import { rangePick, togglePick } from "../picking";
 import { useContentSearch } from "../search";
 import { type How, visit } from "../navHistory";
 import { useSettings } from "../settings";
@@ -20,13 +21,14 @@ import {
   writeLastView,
   writeOpenWorkspaces,
 } from "../workspaceState";
-import { useDragMove } from "./DragMove";
+import BatchPanel from "./BatchPanel";
+import { type DragItem, type TodoAt, useDragMove } from "./DragMove";
 import { useNameDialog } from "./NameDialog";
 import { ProjectOverview, WorkspaceOverview } from "./Overview";
 import Sidebar, { type SidebarHandle } from "./Sidebar";
-import { type Selection, WS_KEY } from "./sidebar/tree";
+import { parseSelKey, type Selection, selKey, WS_KEY } from "./sidebar/tree";
 import TodoEditor, { type EditorHandle } from "./TodoEditor";
-import { moveTargets, todoMenu } from "./menus";
+import { batchMenu, moveTargets, todoMenu } from "./menus";
 import { sortNames, useWorkspaceActions } from "./workspaceActions";
 
 /** 供 App 的后退、前进（鼠标侧键）调用 */
@@ -137,10 +139,19 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const [sel, setSelState] = useState<Selection>({ workspace: initialWorkspace, ...initialSel });
   // 右侧这次改显示的内容是怎么来的，记后退、前进时用
   const selHow = useRef<How>("push");
-  const setSel = useCallback((s: Selection, how: How = "push") => {
-    selHow.current = how;
-    setSelState(s);
-  }, []);
+  // 批量操作：在左侧列表里多选的待办（行上的 data-sel），按选中的先后；Shift+单击从 pickAnchor 选到点的那条
+  const [picked, setPicked] = useState<string[]>([]);
+  const pickAnchor = useRef<string | null>(null);
+  const clearPicked = useCallback(() => setPicked((p) => (p.length ? [] : p)), []);
+  // 右侧改显示别的内容（单击、键盘、后退前进等）时取消多选
+  const setSel = useCallback(
+    (s: Selection, how: How = "push") => {
+      selHow.current = how;
+      setSelState(s);
+      clearPicked();
+    },
+    [clearPicked],
+  );
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null);
   // 用键盘在左侧列表里移到的选中项：这时焦点留在列表，右侧不自动聚焦输入框
   const [kbSel, setKbSel] = useState<Selection | null>(null);
@@ -341,7 +352,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     onHome();
   };
 
-  const { actionsFor, stableActions } = useWorkspaceActions({
+  const { actionsFor, stableActions, batch } = useWorkspaceActions({
     sel,
     setSel,
     treeOf,
@@ -361,20 +372,102 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     updateTodos,
     patchTodo,
     setFocusTitleId,
+    clearPicked,
   });
 
-  // 把待办拖到左侧的另一个项目上、项目拖到另一个工作区上
+  // 多选的待办（还在、所在的工作区还选中着的），按左侧列表里的位置找到对应的待办
+  const pickedItems = useMemo(() => {
+    const out: TodoAt[] = [];
+    for (const key of picked) {
+      const s = parseSelKey(key);
+      if (!workspaces.includes(s.workspace)) continue;
+      const todo = loaded
+        ?.find((t) => t.name === s.workspace)
+        ?.projects.find((p) => p.name === s.project)
+        ?.todos.find((t) => t.id === s.todoId);
+      if (todo && s.project) out.push({ workspace: s.workspace, project: s.project, todo });
+    }
+    return out;
+  }, [picked, loaded, workspaces]);
+  const batchMode = pickedItems.length > 1;
+  // 侧栏的行按工作区拿到选中的键：没有选中的工作区是同一个空集合，不必重新渲染
+  const pickedByWs = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const x of pickedItems) {
+      const set = m.get(x.workspace) ?? new Set<string>();
+      set.add(selKey({ workspace: x.workspace, project: x.project, todoId: x.todo.id }));
+      m.set(x.workspace, set);
+    }
+    return m;
+  }, [pickedItems]);
+
+  // 把待办拖到左侧的另一个项目上、项目拖到另一个工作区上；多选了的待办一起拖
   const drag = useDragMove({
     trees: trees ?? [],
     expand: (ws) => expand(ws, WS_KEY),
     canReorder: !keyword.trim(),
     onDrop: (item, target) => {
+      if (item.kind === "todos") {
+        if (target.project) batch.move(item.items, target.project, target.workspace);
+        return;
+      }
       const a = actionsFor(item.workspace);
       if (item.kind === "project") a.moveProject(item.project, target.workspace);
       else if (target.todoId && target.place) a.reorderTodo(item.project, item.todo.id, target.todoId, target.place);
       else if (target.project) a.moveTodo(item.project, item.todo, target.project, target.workspace);
     },
   });
+
+  // 侧栏的行用到的几个不变的函数（行只在自己的内容变了时才重新渲染），调用时用最新的状态
+  const latest = useRef({ picked, pickedItems, sel, batch, trees, dragStart: drag.start });
+  useEffect(() => {
+    latest.current = { picked, pickedItems, sel, batch, trees, dragStart: drag.start };
+  });
+  /** 单击左侧列表里的待办：Ctrl+单击加选 / 取消，Shift+单击选中一段，否则打开它 */
+  const onTodoClick = useCallback(
+    (e: React.MouseEvent, s: Selection) => {
+      const key = selKey(s);
+      const { picked, sel } = latest.current;
+      const current = sel.todoId ? selKey(sel) : null;
+      let next: string[] | null = null;
+      if (e.ctrlKey || e.metaKey) {
+        next = togglePick(picked, key, current);
+        pickAnchor.current = key;
+      } else if (e.shiftKey) {
+        const anchor = pickAnchor.current ?? current;
+        const order = [...document.querySelectorAll<HTMLElement>(".sidebar .todo-row[data-sel]")].map((r) => r.dataset.sel!);
+        next = anchor ? rangePick(order, anchor, key) : null;
+      }
+      if (next && next.length > 1) {
+        setPicked(next);
+        return;
+      }
+      // 普通单击，或多选只剩一条：打开它
+      pickAnchor.current = key;
+      const only = next?.length === 1 ? parseSelKey(next[0]) : s;
+      setFocusTitleId(null);
+      setSel(only);
+    },
+    [setSel],
+  );
+  /** 在多选的待办上右键：批量操作的菜单 */
+  const pickedMenu = useCallback(() => {
+    const { pickedItems, batch, trees } = latest.current;
+    if (pickedItems.length < 2) return null;
+    return batchMenu(pickedItems, moveTargets(trees ?? [], pickedItems[0].workspace), batch, clearPicked);
+  }, [clearPicked]);
+  /** 按住多选了的待办拖动时，选中的一起拖 */
+  const dragStart = useCallback((e: React.MouseEvent, item: DragItem) => {
+    const { pickedItems, dragStart } = latest.current;
+    if (item.kind === "todo" && pickedItems.length > 1) {
+      const key = selKey({ workspace: item.workspace, project: item.project, todoId: item.todo.id });
+      if (pickedItems.some((x) => selKey({ workspace: x.workspace, project: x.project, todoId: x.todo.id }) === key)) {
+        dragStart(e, { kind: "todos", items: pickedItems });
+        return;
+      }
+    }
+    dragStart(e, item);
+  }, []);
 
   /** 焦点移到右侧：待办的正文、项目概览的快速添加框，概览页没有输入框时落在右侧区域本身 */
   const focusMain = () => {
@@ -395,8 +488,29 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       const key = e.key.toLowerCase();
       const { actionsFor, sel, selTree, selTodo, keys } = kbRef.current;
       const a = actionsFor(sel.workspace);
-      // 设置里可修改的快捷键，作用于当前选中的待办（优先于下面的内置快捷键）
       const combo = eventShortcut(e);
+      // 多选了待办时：Esc 取消选择，Delete 删除，「标记完成 / 未完成」的快捷键作用于选中的这些（输入框、对话框里不管）
+      const { pickedItems, batch } = latest.current;
+      const target = e.target as Element | null;
+      if (pickedItems.length > 1 && !target?.closest?.(".ant-modal, input, textarea, [contenteditable='true']")) {
+        // 右键菜单、下拉菜单开着时 Esc 是关菜单
+        if (e.key === "Escape" && !document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden)")) {
+          e.preventDefault();
+          clearPicked();
+          return;
+        }
+        if (e.key === "Delete" && !e.repeat) {
+          e.preventDefault();
+          batch.remove(pickedItems);
+          return;
+        }
+        if (combo && keys && sameShortcut(combo, keys.toggleDoneShortcut)) {
+          e.preventDefault();
+          if (!e.repeat) batch.setDone(pickedItems, pickedItems.some((x) => !x.todo.done));
+          return;
+        }
+      }
+      // 设置里可修改的快捷键，作用于当前选中的待办（优先于下面的内置快捷键）
       if (sel.project && selTodo && combo && keys) {
         if (sameShortcut(combo, keys.toggleDoneShortcut)) {
           e.preventDefault();
@@ -444,7 +558,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [reload, message]);
+  }, [reload, message, clearPicked]);
 
   // 拖动调整侧栏宽度
   const startResize = (e: React.MouseEvent) => {
@@ -473,7 +587,16 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
 
   const a = actionsFor(sel.workspace);
   let main: React.ReactNode;
-  if (!selTree) {
+  if (batchMode) {
+    main = (
+      <BatchPanel
+        items={pickedItems}
+        targets={moveTargets(trees, pickedItems[0].workspace)}
+        actions={batch}
+        onClear={clearPicked}
+      />
+    );
+  } else if (!selTree) {
     // 选中的工作区刚改名，正在重新加载
     main = (
       <div className="fullscreen-center">
@@ -542,7 +665,10 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         hits={hits}
         listOptionsOf={listOptions.get}
         setListOptions={setListOptions}
-        drag={drag}
+        drag={{ state: drag.state, start: dragStart }}
+        pickedOf={(ws) => pickedByWs.get(ws)}
+        onTodoClick={onTodoClick}
+        pickedMenu={pickedMenu}
       />
       <div className="resizer" onMouseDown={startResize} onDoubleClick={() => setWidth(300)} title="拖动调整宽度，双击恢复默认" />
       <main className="main" ref={mainRef} tabIndex={-1}>

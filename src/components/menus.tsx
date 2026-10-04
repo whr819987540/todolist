@@ -1,5 +1,6 @@
 import {
   CheckCircleOutlined,
+  CloseOutlined,
   DeleteOutlined,
   EditOutlined,
   ExportOutlined,
@@ -13,6 +14,8 @@ import {
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import type { TodoSummary, WorkspaceTree } from "../types";
+import type { TodoAt } from "./DragMove";
+import type { BatchActions } from "./workspaceActions";
 
 /** 工作区视图里所有可触发的操作，由 WorkspaceView 实现，侧栏、概览、编辑器共用 */
 export interface Actions {
@@ -166,5 +169,58 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: r
       else if (key === "reveal") a.revealTodo(project, t);
       else if (key === "delete") a.deleteTodo(project, t);
     }),
+  };
+}
+
+const BATCH_MOVE_PREFIX = "batch-move:";
+
+
+/** 「移动到」的菜单：侧栏里显示的各工作区的项目，按工作区分组（只显示一个工作区时不分组） */
+export function batchMoveMenu(targets: readonly MoveTarget[], onMove: (workspace: string, project: string) => void): MenuProps {
+  const item = (workspace: string, p: string) => ({
+    key: BATCH_MOVE_PREFIX + JSON.stringify([workspace, p]),
+    icon: <FolderOutlined />,
+    label: p,
+  });
+  const items: NonNullable<MenuProps["items"]> =
+    targets.length === 1
+      ? targets[0].projects.map((p) => item(targets[0].workspace, p))
+      : targets
+          .filter((t) => t.projects.length)
+          .map((t) => ({ type: "group" as const, key: `group:${t.workspace}`, label: t.workspace, children: t.projects.map((p) => item(t.workspace, p)) }));
+  return {
+    items,
+    className: "move-menu",
+    onClick: ({ key, domEvent }) => {
+      domEvent.stopPropagation();
+      const [workspace, project] = JSON.parse(key.slice(BATCH_MOVE_PREFIX.length)) as [string, string];
+      onMove(workspace, project);
+    },
+  };
+}
+
+/** 多选的待办在右键菜单里能做的事 */
+export function batchMenu(items: TodoAt[], targets: readonly MoveTarget[], a: BatchActions, clear: () => void): MenuProps {
+  const move = batchMoveMenu(targets, (ws, p) => a.move(items, p, ws));
+  return {
+    items: [
+      { key: "done", icon: <CheckCircleOutlined />, label: `${items.length} 条标记为已完成` },
+      { key: "undone", icon: <UndoOutlined />, label: "标记为未完成" },
+      { key: "pin", icon: <PushpinOutlined />, label: "置顶" },
+      { key: "unpin", icon: <PushpinOutlined />, label: "取消置顶" },
+      { key: "move", icon: <SwapOutlined />, label: "移动到", children: move.items, popupClassName: "move-menu" },
+      { type: "divider" },
+      { key: "clear", icon: <CloseOutlined />, label: "取消选择" },
+      { key: "delete", icon: <DeleteOutlined />, label: `删除 ${items.length} 条`, danger: true },
+    ],
+    onClick: (info) => {
+      info.domEvent.stopPropagation();
+      const { key } = info;
+      if (key.startsWith(BATCH_MOVE_PREFIX)) move.onClick?.(info);
+      else if (key === "done" || key === "undone") a.setDone(items, key === "done");
+      else if (key === "pin" || key === "unpin") a.setPinned(items, key === "pin");
+      else if (key === "delete") a.remove(items);
+      else if (key === "clear") clear();
+    },
   };
 }

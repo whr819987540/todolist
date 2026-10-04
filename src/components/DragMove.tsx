@@ -11,9 +11,17 @@ import { parseSelKey } from "./sidebar/tree";
 // 自己做也好控制放下的位置、跟着指针的说明和自动滚动。
 // 能放下的地方是侧栏里标了 data-drop-ws（工作区）、data-drop-project（项目）的节点，调整顺序时是待办行（data-sel）。
 
-/** 拖动中的东西：待办拖到别的项目，项目拖到别的工作区 */
+/** 一条待办和它在哪里 */
+export interface TodoAt {
+  workspace: string;
+  project: string;
+  todo: TodoSummary;
+}
+
+/** 拖动中的东西：待办拖到别的项目（或同一项目里调整顺序），多选的几条待办一起拖到别的项目，项目拖到别的工作区 */
 export type DragItem =
-  | { kind: "todo"; workspace: string; project: string; todo: TodoSummary }
+  | ({ kind: "todo" } & TodoAt)
+  | { kind: "todos"; items: TodoAt[] }
   | { kind: "project"; workspace: string; project: string };
 
 /** 放下的地方：待办放在项目上，项目放在工作区上；调整顺序时是同一项目里另一条待办的前面 / 后面 */
@@ -140,6 +148,12 @@ function judge(
     if (trees.find((t) => t.name === target.workspace)?.projects.some((p) => p.name.toLowerCase() === name))
       return { status: "refused", hint: `「${target.workspace}」里已有同名项目` };
     return { status: "ok", hint: `移动到工作区「${target.workspace}」` };
+  }
+  if (item.kind === "todos") {
+    if (!target?.project) return { status: "none", hint: "拖到左侧的项目上" };
+    const n = item.items.filter((x) => x.workspace !== target.workspace || x.project !== target.project).length;
+    if (!n) return { status: "none", hint: "都已在这个项目里" };
+    return { status: "ok", hint: `把 ${n} 条移动到「${target.workspace} / ${target.project}」` };
   }
   if (!target?.project) return { status: "none", hint: "拖到左侧的项目上，或拖到其他待办上调整顺序" };
   if (target.workspace === item.workspace && target.project === item.project)
@@ -292,8 +306,14 @@ export function useDragMove(opts: {
   const ghost = state && item && (
     <div ref={ghostRef} className={`drag-ghost ${state.status}`}>
       <div className="drag-ghost-name">
-        {item.kind === "todo" ? <FileTextOutlined /> : <FolderFilled className="project-icon" />}
-        <span>{item.kind === "todo" ? displayTitle(item.todo).text : item.project}</span>
+        {item.kind === "project" ? <FolderFilled className="project-icon" /> : <FileTextOutlined />}
+        <span>
+          {item.kind === "todo"
+            ? displayTitle(item.todo).text
+            : item.kind === "todos"
+              ? `${item.items.length} 条待办`
+              : item.project}
+        </span>
       </div>
       <div className="drag-ghost-hint">{state.hint}</div>
     </div>

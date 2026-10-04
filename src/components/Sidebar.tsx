@@ -1,6 +1,7 @@
 import type { InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { type ContentHits, NO_HITS } from "../search";
+import type { MenuProps } from "antd";
 import type { WorkspaceTree } from "../types";
 import { useNow } from "../utils";
 import type { ListOptions } from "../workspaceState";
@@ -48,7 +49,16 @@ interface Props {
   setListOptions: (workspace: string, patch: Partial<ListOptions>) => void;
   /** 拖动待办到别的项目、项目到别的工作区 */
   drag: DragMove;
+  /** 这个工作区里多选了的待办（行上的 data-sel），没有时是 undefined */
+  pickedOf: (workspace: string) => ReadonlySet<string> | undefined;
+  /** 单击待办（Ctrl / Shift+单击是多选）；不变的函数 */
+  onTodoClick: (e: React.MouseEvent, s: Selection) => void;
+  /** 在多选了的待办上右键时的菜单；不变的函数 */
+  pickedMenu: () => MenuProps | null;
 }
+
+/** 没有多选的工作区都用这一个，行不必重新渲染 */
+const NONE: ReadonlySet<string> = new Set();
 
 export default function Sidebar(props: Props) {
   const { trees, sel, actionsFor, collapsedOf, setCollapsed, keyword, listOptionsOf, handleRef, searchRef } = props;
@@ -186,6 +196,9 @@ export default function Sidebar(props: Props) {
             today={today}
             dragState={props.drag.state}
             dragStart={props.drag.start}
+            picked={props.pickedOf(tree.name) ?? NONE}
+            onTodoClick={props.onTodoClick}
+            pickedMenu={props.pickedMenu}
             onContextMenu={popups.openMenu}
             moveTargets={moveTargetsOf}
           />

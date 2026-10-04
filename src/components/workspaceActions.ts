@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { api, errMsg } from "../api";
 import type { How } from "../navHistory";
 import type { TodoSummary, WorkspaceTree } from "../types";
+import type { TodoAt } from "./DragMove";
 import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
 import {
   forgetProjectState,
@@ -62,6 +63,18 @@ export interface ActionContext {
   patchTodo: (ws: string, project: string, s: TodoSummary) => void;
   /** 新建的待办打开后聚焦标题 */
   setFocusTitleId: (id: string | null) => void;
+  /** 批量操作做完（移动、删除）后取消多选 */
+  clearPicked: () => void;
+}
+
+/** 多选的几条待办一起做的操作（可以跨项目、跨工作区） */
+export interface BatchActions {
+  setDone(items: TodoAt[], done: boolean): void;
+  setPinned(items: TodoAt[], pinned: boolean): void;
+  /** 移到 targetWs 的项目 target；已经在那里的不动 */
+  move(items: TodoAt[], target: string, targetWs: string): void;
+  /** 确认后删除 */
+  remove(items: TodoAt[]): void;
 }
 
 /**
@@ -91,6 +104,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
     updateTodos,
     patchTodo,
     setFocusTitleId,
+    clearPicked,
   } = ctx;
   const setCollapsed = collapsed.set;
 
@@ -306,6 +320,76 @@ export function useWorkspaceActions(ctx: ActionContext) {
     };
   };
 
+  /**
+   * 逐条执行 fn，返回成功的条数；有失败的弹出提示（失败的条数和第一条的原因），成功的照常算。
+   * 多选的待办不会有打开着的（多选时右侧是批量操作，编辑器已经存好、关掉了），不用先存盘
+   */
+  const each = async (items: TodoAt[], fn: (x: TodoAt) => Promise<void>): Promise<number> => {
+    let ok = 0;
+    const errors: string[] = [];
+    for (const x of items) {
+      try {
+        await fn(x);
+        ok++;
+      } catch (e) {
+        errors.push(errMsg(e));
+      }
+    }
+    if (errors.length) message.error(`${errors.length} 条没有成功：${errors[0]}`);
+    return ok;
+  };
+
+  const batch: BatchActions = {
+    setDone: async (items, done) => {
+      const todo = items.filter((x) => x.todo.done !== done);
+      const ok = await each(todo, async ({ workspace, project, todo: t }) =>
+        patchTodo(workspace, project, await api.setTodoDone(workspace, project, t.id, done)),
+      );
+      if (ok) message.success(`已把 ${ok} 条标记为${done ? "已完成" : "未完成"}`);
+      else if (!todo.length) message.info(`选中的都已经是${done ? "已完成" : "未完成"}的`);
+    },
+    setPinned: async (items, pinned) => {
+      const todo = items.filter((x) => x.todo.pinned !== pinned);
+      const ok = await each(todo, async ({ workspace, project, todo: t }) =>
+        patchTodo(workspace, project, await api.setTodoPinned(workspace, project, t.id, pinned)),
+      );
+      if (ok) message.success(`已${pinned ? "置顶" : "取消置顶"} ${ok} 条`);
+      else if (!todo.length) message.info(`选中的都已经${pinned ? "置顶" : "没有置顶"}`);
+    },
+    move: async (items, target, targetWs) => {
+      const todo = items.filter((x) => x.workspace !== targetWs || x.project !== target);
+      let selMoved: Selection | null = null;
+      const ok = await each(todo, async ({ workspace, project, todo: t }) => {
+        const moved = await api.moveTodo(workspace, project, t.id, targetWs, target);
+        moveTodoState(workspace, project, t.id, [targetWs, target, moved.id]);
+        if (sel.workspace === workspace && sel.project === project && sel.todoId === t.id)
+          selMoved = { workspace: targetWs, project: target, todoId: moved.id };
+      });
+      clearPicked();
+      await reload();
+      reveal(targetWs, target);
+      if (selMoved) setSel(selMoved, "replace");
+      if (ok) message.success(`已把 ${ok} 条移动到「${targetWs} / ${target}」`);
+    },
+    remove: (items) =>
+      modal.confirm({
+        title: `删除选中的 ${items.length} 条待办？`,
+        content: "对应的 Markdown 文件将被移到回收站。",
+        okText: "删除",
+        okButtonProps: { danger: true },
+        cancelText: "取消",
+        onOk: async () => {
+          const ok = await each(items, async ({ workspace, project, todo: t }) => {
+            await api.deleteTodo(workspace, project, t.id);
+            forgetTodoState(workspace, project, t.id);
+            updateTodos(workspace, project, (todos) => todos.filter((x) => x.id !== t.id));
+          });
+          clearPicked();
+          if (ok) message.success(`已把 ${ok} 条移到回收站`);
+        },
+      }),
+  };
+
   // 侧栏的行只在自己的内容变了时才重新渲染，传给它们的操作要是不变的对象：每个工作区一个，调用时转给最新的 actionsFor
   const actionsRef = useRef(actionsFor);
   useEffect(() => {
@@ -328,5 +412,5 @@ export function useWorkspaceActions(ctx: ActionContext) {
     };
   }, []);
 
-  return { actionsFor, stableActions };
+  return { actionsFor, stableActions, batch };
 }
