@@ -220,6 +220,9 @@ struct RecycleFile {
     /// 删除的项目、工作区里有几条待办
     #[serde(default)]
     todo_count: usize,
+    /// 移到系统回收站的时间：从系统回收站还原回来的，按它重新算 30 天，不按删除时间（否则下次启动又被移走）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    purged_at: Option<i64>,
 }
 
 impl RecycleFile {
@@ -233,6 +236,7 @@ impl RecycleFile {
             todo: None,
             preview: String::new(),
             todo_count,
+            purged_at: None,
         }
     }
 }
@@ -983,7 +987,7 @@ impl Store {
             let _g = self.guard();
             self.recycle_entries()?
                 .into_iter()
-                .filter(|(_, f)| f.deleted_at < cutoff)
+                .filter(|(_, f)| f.purged_at.unwrap_or(f.deleted_at) < cutoff)
                 .map(|(id, _)| id)
                 .collect()
         };
@@ -993,9 +997,13 @@ impl Store {
     /// 把回收站里的一项连同说明整个移到系统回收站：从系统回收站还原时回到软件的回收站，还能从那里恢复到原来的位置。
     /// 先把目录改成看得懂的名字（标题或名称加上 id），在系统回收站里认得出是什么；这一项不在时返回 false
     fn purge_dir(&self, dir: &Path) -> Result<bool> {
-        let Some(f) = read_recycle_file(dir) else {
+        let Some(mut f) = read_recycle_file(dir) else {
             return Ok(false);
         };
+        f.purged_at = Some(now_ms());
+        if let Ok(json) = serde_json::to_vec_pretty(&f) {
+            let _ = fs::write(dir.join(ENTRY_FILE), json);
+        }
         let id = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let readable = dir.with_file_name(readable_entry_name(&f, &id));
         let target = if readable != dir && !readable.exists() && fs::rename(dir, &readable).is_ok() {
@@ -1947,6 +1955,25 @@ mod tests {
         assert_eq!(fs::read_dir(s.root().join(TRASH_DIR)).unwrap().count(), 2);
         // 名字里带路径的不认
         assert!(s.purge(&["../w".into()]).is_err());
+    }
+
+    #[test]
+    fn restored_from_system_trash_is_not_expired_again() {
+        let (_tmp, s) = store("recycle-again");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let t = s.create_todo("w", "p", "老的", "").unwrap();
+        let rid = s.delete_todo("w", "p", &t.id).unwrap();
+        let entry = s.root().join(RECYCLE_DIR).join(&rid).join(ENTRY_FILE);
+        let mut f: RecycleFile = serde_json::from_slice(&fs::read(&entry).unwrap()).unwrap();
+        f.deleted_at -= (RECYCLE_KEEP_DAYS + 1) * 86_400_000;
+        fs::write(&entry, serde_json::to_vec(&f).unwrap()).unwrap();
+        assert_eq!(s.purge_expired(RECYCLE_KEEP_DAYS).unwrap(), 1);
+        // 从系统回收站（单元测试里是 .trash）还原回 .recycle：记着移走的时间，下次启动不会又被移走
+        let trashed = fs::read_dir(s.root().join(TRASH_DIR)).unwrap().next().unwrap().unwrap().path();
+        fs::rename(&trashed, s.root().join(RECYCLE_DIR).join("还原回来的")).unwrap();
+        assert_eq!(s.purge_expired(RECYCLE_KEEP_DAYS).unwrap(), 0);
+        assert_eq!(s.list_recycle().unwrap()[0].title, "老的");
     }
 
     #[test]

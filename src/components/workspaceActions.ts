@@ -86,6 +86,11 @@ export interface BatchActions {
 export function useWorkspaceActions(ctx: ActionContext) {
   const { message, modal } = AntApp.useApp();
   const undoDelete = useUndoDelete();
+  // 撤销删除时（提示停留的几秒里选中的工作区可能变了）用最新的 reload
+  const reloadRef = useRef(ctx.reload);
+  useEffect(() => {
+    reloadRef.current = ctx.reload;
+  });
   const {
     sel,
     setSel,
@@ -297,7 +302,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           undoDelete(`已删除待办「${displayTitle(t).text}」`, [rid], async ({ restored }) => {
             const r = restored[0];
             if (!isSel || !r?.project || !r.todoId) return;
-            await reload();
+            await reloadRef.current();
             setSel({ workspace: r.workspace, project: r.project, todoId: r.todoId });
           });
         }),
