@@ -3,7 +3,7 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import type { EditShortcutMap } from "../editShortcuts";
-import { openFind } from "../editor/find";
+import { keepFindOpen, openFind } from "../editor/find";
 import { jumpToHeading, type OutlineItem, outlineItems } from "../editor/outline";
 import { capturePosition, type EditPosition, restorePosition } from "../editor/position";
 import { createExtensions, type EditorMode, setMode, setReadOnly } from "../editor/setup";
@@ -105,7 +105,8 @@ export default function MarkdownEditor(props: Props) {
       reset(doc) {
         const scrollTop = view.scrollDOM.scrollTop;
         const { anchor, head, scroll } = restorePosition(doc, capturePosition(view));
-        view.setState(createState(doc, anchor, head));
+        // 换掉整个状态时查找框会关掉，按原来的条件重新打开
+        keepFindOpen(view, () => view.setState(createState(doc, anchor, head)));
         view.scrollDOM.scrollTop = scroll ? scrollTop : 0;
         if (scroll) view.dispatch({ effects: scroll });
       },

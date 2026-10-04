@@ -29,14 +29,14 @@ export interface MatchInfo {
   capped: boolean;
 }
 
-/** 现在的查找条件在正文里的匹配个数、选中的是第几个；查找条件为空或正则写错时 total 为 0 */
-export function matchInfo(state: EditorState, query: SearchQuery = getSearchQuery(state)): MatchInfo {
+/** 现在的查找条件在正文里的匹配个数（最多数到 limit 个）、选中的是第几个；查找条件为空或正则写错时 total 为 0 */
+export function matchInfo(state: EditorState, query: SearchQuery = getSearchQuery(state), limit = MAX_COUNT): MatchInfo {
   const info: MatchInfo = { total: 0, current: 0, capped: false };
   if (!query.valid) return info;
   const { from, to } = state.selection.main;
   const cursor = query.getCursor(state);
   for (let r = cursor.next(); !r.done; r = cursor.next()) {
-    if (info.total >= MAX_COUNT) {
+    if (info.total >= limit) {
       info.capped = true;
       break;
     }
@@ -71,12 +71,13 @@ let lastQuery: SearchQuery | null = null;
  * 不用编辑器里原有的条件：编辑器刚创建时它取自当时的选区（恢复的编辑位置），不是用户查过的
  */
 export function initialQuery(state: EditorState, last: SearchQuery | null): SearchQuery {
-  const base = last ?? new SearchQuery({ search: "" });
+  const base = last ?? new SearchQuery({ search: "", literal: true });
   const text = selectedText(state);
   if (!text) return base;
   return new SearchQuery({
     search: text,
     caseSensitive: base.caseSensitive,
+    literal: true,
     regexp: false,
     wholeWord: base.wholeWord,
     replace: base.replace,
@@ -262,8 +263,10 @@ class FindPanel implements Panel {
   /** 按输入框和选项更新查找条件；查找内容变了时跳到离打开查找框时的光标最近的匹配 */
   private commit() {
     const active = (key: string) => this.options.find((o) => o.key === key)!.btn.classList.contains("active");
+    // literal：按原样查，不把 \n、\t 当成换行、制表符（路径里的反斜杠也能查）；要查换行用正则
     const query = new SearchQuery({
       search: this.searchField.value,
+      literal: true,
       caseSensitive: active("caseSensitive"),
       wholeWord: active("wholeWord"),
       regexp: active("regexp"),
@@ -290,7 +293,7 @@ class FindPanel implements Panel {
   }
 
   private replaceAll() {
-    const before = matchInfo(this.view.state, this.query).total;
+    const before = matchInfo(this.view.state, this.query, Infinity).total;
     if (!replaceAll(this.view)) return;
     this.count.textContent = `已替换 ${before} 处`;
     this.count.classList.remove("none");
@@ -390,16 +393,30 @@ const findTheme = EditorView.theme({
   },
 });
 
+/**
+ * F3 / Shift+F3：找下一个 / 上一个。查找框没开着时先按 Ctrl+F 的规则打开（选中的文字，或最近一次查过的），
+ * 焦点留在正文里
+ */
+const step = (forward: boolean) => (view: EditorView) => {
+  if (!searchPanelOpen(view.state)) {
+    const hadFocus = view.hasFocus;
+    openFind(view);
+    if (hadFocus) view.focus();
+  }
+  return (forward ? findNext : findPrevious)(view);
+};
+
 /** 编辑器里的查找：搜索状态、匹配高亮、查找框；F3 / Shift+F3 找下一个 / 上一个，Esc 关闭查找框 */
 export function findExtensions(): Extension {
   return [
     search({
       top: true,
+      literal: true,
       createPanel: (view) => new FindPanel(view),
       scrollToMatch: (range) => EditorView.scrollIntoView(range, { y: "nearest", yMargin: 80 }),
     }),
     keymap.of([
-      { key: "F3", run: findNext, shift: findPrevious, scope: "editor search-panel", preventDefault: true },
+      { key: "F3", run: step(true), shift: step(false), scope: "editor search-panel", preventDefault: true },
       { key: "Escape", run: closeSearchPanel, scope: "editor search-panel" },
     ]),
     findTheme,
@@ -410,9 +427,10 @@ export function findExtensions(): Extension {
 export function openFind(view: EditorView, replace = false): boolean {
   if (!searchPanelOpen(view.state)) {
     const query = initialQuery(view.state, lastQuery);
+    // 先打开再设条件：openSearchPanel 打开时会按选区另设一个条件（多行的选区也拿来查，还丢掉替换内容）
+    openSearchPanel(view);
     if (!query.eq(getSearchQuery(view.state))) view.dispatch({ effects: setSearchQuery.of(query) });
     if (query.search) lastQuery = query;
-    openSearchPanel(view);
   } else {
     const text = selectedText(view.state);
     const cur = getSearchQuery(view.state);
@@ -423,4 +441,19 @@ export function openFind(view: EditorView, replace = false): boolean {
   if (replace) panel.focusReplace();
   else panel.focusSearch();
   return true;
+}
+
+/**
+ * 换掉编辑器的整个状态（外部修改后重新加载正文，view.setState）时查找框会关掉：run 之后按原来的条件重新打开，
+ * 焦点放回原来的地方
+ */
+export function keepFindOpen(view: EditorView, run: () => void) {
+  const open = searchPanelOpen(view.state);
+  const query = getSearchQuery(view.state);
+  const prev = document.activeElement as HTMLElement | null;
+  run();
+  if (!open) return;
+  openSearchPanel(view);
+  view.dispatch({ effects: setSearchQuery.of(query) });
+  if (prev?.isConnected && prev !== document.activeElement) prev.focus({ preventScroll: true });
 }

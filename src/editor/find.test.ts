@@ -48,6 +48,17 @@ describe("匹配个数和第几个", () => {
     expect(matchLabel(q(""), matchInfo(state, q("")))).toBe("");
   });
 
+  it("按原样查：反斜杠、\\n 不转义（Windows 路径也能查到）", () => {
+    const state = makeState("文件在 C:\\new\\temp 里");
+    expect(matchInfo(state, q("C:\\new\\temp", { literal: true })).total).toBe(1);
+    // 不按原样查时 \n 会被当成换行，找不到
+    expect(matchInfo(state, q("C:\\new\\temp")).total).toBe(0);
+  });
+
+  it("太多时数到上限为止；全部替换前要数清楚时可以不设上限", () => {
+    expect(matchInfo(makeState("a".repeat(MAX_COUNT + 50)), q("a"), Infinity).total).toBe(MAX_COUNT + 50);
+  });
+
   it("太多时数到上限为止", () => {
     const state = makeState("a".repeat(MAX_COUNT + 50));
     const info = matchInfo(state, q("a"));
@@ -84,7 +95,11 @@ describe("打开查找框时查什么", () => {
 
   it("拿选中的文字查时按普通文字查，不当成正则", () => {
     const state = withSearch("价格是«(1+2)»元");
-    expect(initialQuery(state, q("x", { regexp: true }))).toMatchObject({ search: "(1+2)", regexp: false });
+    expect(initialQuery(state, q("x", { regexp: true }))).toMatchObject({ search: "(1+2)", regexp: false, literal: true });
+  });
+
+  it("选中文字时保留上次的替换内容", () => {
+    expect(initialQuery(withSearch("把«周报»改掉"), q("x", { replace: "月报" })).replace).toBe("月报");
   });
 });
 
