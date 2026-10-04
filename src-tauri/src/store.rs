@@ -987,16 +987,20 @@ impl Store {
         self.purge(&ids)
     }
 
-    /// 把回收站里的一项（删除的文件或目录）移到系统回收站，再删掉说明；这一项不在时返回 false
+    /// 把回收站里的一项连同说明整个移到系统回收站：从系统回收站还原时回到软件的回收站，还能从那里恢复到原来的位置。
+    /// 先把目录改成看得懂的名字（标题或名称加上 id），在系统回收站里认得出是什么；这一项不在时返回 false
     fn purge_dir(&self, dir: &Path) -> Result<bool> {
         let Some(f) = read_recycle_file(dir) else {
             return Ok(false);
         };
-        let payload = dir.join(&f.name);
-        if payload.exists() {
-            self.move_to_trash(&payload)?;
-        }
-        let _ = fs::remove_dir_all(dir);
+        let id = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let readable = dir.with_file_name(readable_entry_name(&f, &id));
+        let target = if readable != dir && !readable.exists() && fs::rename(dir, &readable).is_ok() {
+            readable
+        } else {
+            dir.to_path_buf()
+        };
+        self.move_to_trash(&target)?;
         Ok(true)
     }
 
@@ -1197,6 +1201,28 @@ fn read_recycle_file(dir: &Path) -> Option<RecycleFile> {
     // 名字是原来的文件 / 目录名，不能带路径
     check_component(&f.name, "回收站里的项").ok()?;
     dir.join(&f.name).exists().then_some(f)
+}
+
+/// 回收站里一项移到系统回收站时用的目录名：待办的标题（没有时用正文开头）、项目名或工作区名，加上 id（保证不重名）。
+/// 不能用在文件名里的字符换成 _，太长的截短
+fn readable_entry_name(f: &RecycleFile, id: &str) -> String {
+    let label = match &f.todo {
+        Some(t) if !t.title.trim().is_empty() => t.title.clone(),
+        Some(_) if !f.preview.is_empty() => f.preview.clone(),
+        Some(_) => "空白待办".into(),
+        None => f.name.clone(),
+    };
+    let label: String = label
+        .chars()
+        .map(|c| if INVALID_CHARS.contains(&c) || c.is_control() { '_' } else { c })
+        .take(40)
+        .collect();
+    let label = label.trim().trim_start_matches('.').trim_end_matches(['.', ' ']);
+    if label.is_empty() {
+        id.to_string()
+    } else {
+        format!("{label}（{id}）")
+    }
 }
 
 /// 在 parent 里恢复名为 name 的目录用的名字：被占用时加「（恢复）」「（恢复 2）」…；返回名字和是否改了名
@@ -1888,9 +1914,21 @@ mod tests {
 
         assert_eq!(s.purge(std::slice::from_ref(&ra)).unwrap(), 1);
         assert_eq!(s.list_recycle().unwrap().len(), 2);
-        // 单元测试里「系统回收站」是数据目录下的 .trash
-        let trashed = fs::read_dir(s.root().join(TRASH_DIR)).unwrap().count();
-        assert_eq!(trashed, 1);
+        // 单元测试里「系统回收站」是数据目录下的 .trash。连同说明整个移过去，名字看得出是哪条
+        let trashed: Vec<PathBuf> = fs::read_dir(s.root().join(TRASH_DIR)).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(trashed.len(), 1);
+        let name = trashed[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.contains(&format!("a（{ra}）")), "{name}");
+        assert!(trashed[0].join(ENTRY_FILE).is_file());
+        assert!(trashed[0].join(format!("{}.md", a.id)).is_file());
+        // 从系统回收站还原（放回 .recycle）后，又出现在软件的回收站里，还能恢复到原来的位置
+        let back = s.root().join(RECYCLE_DIR).join(&name[name.find('a').unwrap()..].replace('/', "_"));
+        fs::rename(&trashed[0], &back).unwrap();
+        let listed = s.list_recycle().unwrap();
+        let again = listed.iter().find(|e| e.title == "a").unwrap();
+        let r = s.restore(std::slice::from_ref(&again.id));
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert!(s.read_todo("w", "p", &a.id).is_ok());
 
         // 放了超过 30 天的移走
         let entry = s.root().join(RECYCLE_DIR).join(&rb).join(ENTRY_FILE);
@@ -1903,9 +1941,31 @@ mod tests {
 
         assert_eq!(s.empty_recycle().unwrap(), 1);
         assert!(s.list_recycle().unwrap().is_empty());
-        assert_eq!(fs::read_dir(s.root().join(TRASH_DIR)).unwrap().count(), 3);
+        assert_eq!(fs::read_dir(s.root().join(TRASH_DIR)).unwrap().count(), 2);
         // 名字里带路径的不认
         assert!(s.purge(&["../w".into()]).is_err());
+    }
+
+    #[test]
+    fn readable_names_for_system_trash() {
+        let mut f = RecycleFile::new(RecycleKind::Project, "w", Some("需求: 开发?"), "需求: 开发?", 0);
+        assert_eq!(readable_entry_name(&f, "1"), "需求_ 开发_（1）");
+        f.todo = Some(TodoMeta {
+            id: "x".into(),
+            title: "  ".into(),
+            done: false,
+            created_at: 0,
+            updated_at: 0,
+            done_at: None,
+            pinned: false,
+            order: None,
+        });
+        f.preview = "正文开头".repeat(20);
+        assert_eq!(readable_entry_name(&f, "2"), format!("{}（2）", "正文开头".repeat(10)));
+        f.preview.clear();
+        assert_eq!(readable_entry_name(&f, "3"), "空白待办（3）");
+        let ws = RecycleFile::new(RecycleKind::Workspace, ".隐藏", None, "...", 0);
+        assert_eq!(readable_entry_name(&ws, "4"), "4");
     }
 
     #[test]

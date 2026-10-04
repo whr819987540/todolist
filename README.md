@@ -67,7 +67,7 @@ TodoList\
 - 直接往项目文件夹里放 `.md` 文件，软件会自动识别为新待办（文件名作为标题）
 - 正文按 UTF-8 保存；放进来的 GBK（ANSI）或带 BOM 的 UTF-16 文件也能正常显示，在软件里改过后转存为 UTF-8；认不出编码的文件只读显示，需要修改时用默认程序打开
 - `.todos.json` 损坏时会备份为 `.todos.json.broken-时间戳` 并重建，正文不受影响
-- 删除的工作区 / 项目 / 待办先进软件的回收站（`.recycle`），可以撤销、恢复；在回收站里彻底删除、清空或放满 30 天的进入 Windows 回收站（Windows 回收站不可用时移到数据目录下的 `.trash`）
+- 删除的工作区 / 项目 / 待办先进软件的回收站（`.recycle`），可以撤销、恢复；在回收站里彻底删除、清空或放满 30 天的连同说明进入 Windows 回收站（名字是标题加 id；从 Windows 回收站还原后回到 `.recycle`，又能在软件里恢复；Windows 回收站不可用时移到数据目录下的 `.trash`）
 - WebDAV 密码保存在 Windows 凭据管理器（普通凭据 `webdav.com.whr.todolist`），不写进任何文件，也不会进入备份包
 - 访问 WebDAV 时使用 Windows 的代理设置（或环境变量 `HTTPS_PROXY`），代理例外和 `NO_PROXY` 里的地址直连
 
