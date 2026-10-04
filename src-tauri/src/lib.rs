@@ -353,12 +353,13 @@ fn quit_app(app: AppHandle) {
 
 const QUICK: &str = "quick";
 
-/// 快速记录小窗：第一次用时才建，之后隐藏起来留着（启动后过一会儿也会先建好，第一次按快捷键不用等）
+/// 快速记录小窗：第一次用时才建，之后隐藏起来留着（启动后过一会儿也会先建好，第一次按快捷键不用等）。
+/// 不能在主线程的事件处理里调用：WebView2 在那里同步建窗口可能卡死（Tauri 文档的已知问题），要在别的线程里建
 fn quick_window(app: &AppHandle) -> Option<WebviewWindow> {
     if let Some(w) = app.get_webview_window(QUICK) {
         return Some(w);
     }
-    WebviewWindowBuilder::new(app, QUICK, WebviewUrl::App("quick.html".into()))
+    let built = WebviewWindowBuilder::new(app, QUICK, WebviewUrl::App("quick.html".into()))
         .title("快速记录")
         .inner_size(600.0, 248.0)
         .resizable(false)
@@ -368,8 +369,9 @@ fn quick_window(app: &AppHandle) -> Option<WebviewWindow> {
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
-        .build()
-        .ok()
+        .build();
+    // 两处同时在建（启动时预先建的和按了快捷键的）：后建的会因为 label 重复失败，用先建好的
+    built.ok().or_else(|| app.get_webview_window(QUICK))
 }
 
 /// 放在鼠标所在的屏幕上，水平居中、偏上
@@ -388,11 +390,23 @@ fn place_quick_window(app: &AppHandle, w: &WebviewWindow) {
     let _ = w.set_position(PhysicalPosition::new(x, y));
 }
 
-/// 弹出快速记录小窗并聚焦输入框
+/// 弹出快速记录小窗并聚焦输入框。由全局快捷键、托盘菜单（主线程的事件处理）调用：小窗还没建好时换到别的线程里建
 fn show_quick_capture(app: &AppHandle) {
-    let Some(w) = quick_window(app) else { return };
+    if let Some(w) = app.get_webview_window(QUICK) {
+        present_quick_window(app, &w);
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Some(w) = quick_window(&app) {
+            present_quick_window(&app, &w);
+        }
+    });
+}
+
+fn present_quick_window(app: &AppHandle, w: &WebviewWindow) {
     if !w.is_visible().unwrap_or(false) {
-        place_quick_window(app, &w);
+        place_quick_window(app, w);
     }
     let _ = w.show();
     let _ = w.set_focus();
@@ -981,10 +995,7 @@ pub fn run() {
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(3));
                 let _ = handle.state::<Store>().purge_expired(RECYCLE_KEEP_DAYS);
-                let h = handle.clone();
-                let _ = handle.run_on_main_thread(move || {
-                    quick_window(&h);
-                });
+                quick_window(&handle);
             });
             // 主窗口一开始是隐藏的（tauri.conf.json 里 visible: false）：开机自启、设置了只在托盘里时不显示
             let hidden = autostart::launched_at_login(std::env::args()) && settings_hidden;
