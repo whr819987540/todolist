@@ -777,6 +777,15 @@ body.drag-moving .tree-row:hover .row-count {
 }
 
 /* 指针下可以放下的项目：连同其中的待办整块框起来 */
+/* 调整顺序：插入线画在放下的位置 */
+.todo-row.drop-before,
+.list-row.drop-before {
+  box-shadow: inset 0 2px 0 var(--c-primary);
+}
+.todo-row.drop-after,
+.list-row.drop-after {
+  box-shadow: inset 0 -2px 0 var(--c-primary);
+}
 .drop-target {
   border-radius: 8px;
   background: color-mix(in srgb, var(--c-primary) 7%, transparent);

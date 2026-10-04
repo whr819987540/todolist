@@ -367,9 +367,11 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const drag = useDragMove({
     trees: trees ?? [],
     expand: (ws) => expand(ws, WS_KEY),
+    canReorder: !keyword.trim(),
     onDrop: (item, target) => {
       const a = actionsFor(item.workspace);
       if (item.kind === "project") a.moveProject(item.project, target.workspace);
+      else if (target.todoId && target.place) a.reorderTodo(item.project, item.todo.id, target.todoId, target.place);
       else if (target.project) a.moveTodo(item.project, item.todo, target.project, target.workspace);
     },
   });

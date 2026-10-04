@@ -41,6 +41,8 @@ export interface Actions {
   deleteTodo(project: string, t: TodoSummary): void;
   /** 移到另一个项目；targetWorkspace 不填时是同一工作区里的 */
   moveTodo(project: string, t: TodoSummary, target: string, targetWorkspace?: string): void;
+  /** 调整顺序：挪到同一项目里 targetId 那条的前面 / 后面，没在手动排序时改成手动排序 */
+  reorderTodo(project: string, id: string, targetId: string, place: "before" | "after"): void;
   openExternal(project: string, t: TodoSummary): void;
   revealTodo(project: string, t: TodoSummary): void;
 }

@@ -8,6 +8,7 @@ import {
   myVersionTitle,
   relativeTime,
   shortTime,
+  reorderedIds,
   sortTodos,
   textStats,
 } from "./utils";
@@ -21,6 +22,7 @@ const todo = (p: Partial<TodoSummary>): TodoSummary => ({
   updatedAt: 0,
   doneAt: null,
   pinned: false,
+  order: null,
   ...p,
 });
 
@@ -109,6 +111,18 @@ describe("排序（sortTodos）", () => {
     expect(ids(sortTodos([a, b, c, d, e], "updated"))).toEqual(["d", "a", "b", "e", "c"]);
   });
 
+  it("手动排序：没排过位置的在前（新建的在前），排过的按位置", () => {
+    const x = todo({ id: "x", createdAt: 5, order: 1 });
+    const y = todo({ id: "y", createdAt: 6, order: 0 });
+    const n1 = todo({ id: "n1", createdAt: 7 });
+    const n2 = todo({ id: "n2", createdAt: 8 });
+    expect(ids(sortTodos([x, n1, y, n2], "manual"))).toEqual(["n2", "n1", "y", "x"]);
+    // 置顶、已完成照样分开
+    const p = todo({ id: "p", order: 9, pinned: true });
+    const d = todo({ id: "d", order: -1, done: true });
+    expect(ids(sortTodos([x, y, p, d], "manual"))).toEqual(["p", "y", "x", "d"]);
+  });
+
   it("不改原来的数组", () => {
     const list = [a, b, c];
     sortTodos(list, "title");
@@ -158,5 +172,26 @@ describe("时间显示", () => {
     expect(formatDuration(45)).toBe("45 秒");
     expect(formatDuration(180)).toBe("3 分钟");
     expect(formatDuration(90)).toBe("1 分 30 秒");
+  });
+});
+
+describe("拖动调整顺序后的顺序（reorderedIds）", () => {
+  const list = ["a", "b", "c", "d"].map((id) => todo({ id }));
+
+  it("挪到目标的前面 / 后面", () => {
+    expect(reorderedIds(list, "a", "c", "before")).toEqual(["b", "a", "c", "d"]);
+    expect(reorderedIds(list, "a", "c", "after")).toEqual(["b", "c", "a", "d"]);
+    expect(reorderedIds(list, "d", "a", "before")).toEqual(["d", "a", "b", "c"]);
+    expect(reorderedIds(list, "b", "d", "after")).toEqual(["a", "c", "d", "b"]);
+  });
+
+  it("放回原处时顺序不变", () => {
+    expect(reorderedIds(list, "b", "c", "before")).toEqual(["a", "b", "c", "d"]);
+    expect(reorderedIds(list, "b", "a", "after")).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("目标或拖的那条不在了（刚被删掉）时不变", () => {
+    expect(reorderedIds(list, "a", "x", "before")).toEqual(["a", "b", "c", "d"]);
+    expect(reorderedIds(list, "x", "a", "before")).toEqual(["a", "b", "c", "d"]);
   });
 });

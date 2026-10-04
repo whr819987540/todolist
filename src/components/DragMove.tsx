@@ -2,22 +2,26 @@ import { FileTextOutlined, FolderFilled } from "@ant-design/icons";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { displayTitle } from "../utils";
+import { parseSelKey } from "./sidebar/tree";
 
 // 拖动移动：在左侧列表或概览里按住待办，拖到左侧的另一个项目上（可以是别的工作区的）松开；
 // 按住项目，拖到左侧的另一个工作区上松开。
+// 在同一个项目里把待办拖到另一条待办上（左侧列表或项目概览里），放在它的前面 / 后面，调整顺序（手动排序）。
 // 用鼠标事件自己实现，不用 HTML5 拖放：WebView2 里拖放默认被 Tauri 接管（给拖文件进窗口用），
 // 自己做也好控制放下的位置、跟着指针的说明和自动滚动。
-// 能放下的地方是侧栏里标了 data-drop-ws（工作区）、data-drop-project（项目）的节点。
+// 能放下的地方是侧栏里标了 data-drop-ws（工作区）、data-drop-project（项目）的节点，调整顺序时是待办行（data-sel）。
 
 /** 拖动中的东西：待办拖到别的项目，项目拖到别的工作区 */
 export type DragItem =
   | { kind: "todo"; workspace: string; project: string; todo: TodoSummary }
   | { kind: "project"; workspace: string; project: string };
 
-/** 放下的地方：待办放在项目上，项目放在工作区上 */
+/** 放下的地方：待办放在项目上，项目放在工作区上；调整顺序时是同一项目里另一条待办的前面 / 后面 */
 export interface DropTarget {
   workspace: string;
   project?: string;
+  todoId?: string;
+  place?: "before" | "after";
 }
 
 /** ok：可以放下；refused：指针下的地方放不下（工作区里已有同名项目）；none：指针不在能放的地方，或者就在原处 */
@@ -56,18 +60,39 @@ export const isDraggingTodo = (s: DragState | null, workspace: string, project: 
 export const isDraggingProject = (s: DragState | null, workspace: string, project: string) =>
   s?.item.kind === "project" && s.item.workspace === workspace && s.item.project === project;
 
-/** 指针下放下的地方加的样式：能放下时高亮，放不下时标红；不是指针下的地方返回 undefined */
+/** 指针下放下的地方加的样式：能放下时高亮，放不下时标红；不是指针下的地方（含调整顺序时）返回 undefined */
 export function dropClass(s: DragState | null, workspace: string, project?: string): string | undefined {
-  if (!s || s.status === "none" || s.target?.workspace !== workspace || s.target.project !== project) return undefined;
+  if (!s || s.status === "none" || s.target?.todoId) return undefined;
+  if (s.target?.workspace !== workspace || s.target.project !== project) return undefined;
   return s.status === "ok" ? "drop-target" : "drop-refused";
 }
 
-const sameTarget = (a: DropTarget | null, b: DropTarget | null) =>
-  a?.workspace === b?.workspace && a?.project === b?.project;
+/** 调整顺序时插入线画在哪个项目的哪条待办的前面 / 后面；不在调整这个项目的顺序时返回 undefined */
+export function reorderMark(s: DragState | null, workspace: string, project: string): { id: string; place: "before" | "after" } | undefined {
+  const t = s?.status === "ok" ? s.target : null;
+  if (!t?.todoId || !t.place || t.workspace !== workspace || t.project !== project) return undefined;
+  return { id: t.todoId, place: t.place };
+}
 
-/** 指针下能放下的项目（工作区）；collapsed 是拖待办时指针下折叠起来的工作区 */
+const sameTarget = (a: DropTarget | null, b: DropTarget | null) =>
+  a?.workspace === b?.workspace && a?.project === b?.project && a?.todoId === b?.todoId && a?.place === b?.place;
+
+/**
+ * 指针下能放下的地方：拖待办时指针在同一项目里的另一条待办上是调整顺序（上半截放在它前面，下半截放在后面），
+ * 否则是指针下的项目（拖项目时是工作区）；collapsed 是拖待办时指针下折叠起来的工作区
+ */
 function hitTest(x: number, y: number, item: DragItem): { target: DropTarget | null; collapsed?: string } {
   const el = document.elementFromPoint(x, y);
+  if (el && item.kind === "todo") {
+    const row = el.closest<HTMLElement>(".todo-row[data-sel], .list-row[data-sel]");
+    const s = row && parseSelKey(row.dataset.sel!);
+    if (row && s?.todoId && s.workspace === item.workspace && s.project === item.project) {
+      if (s.todoId === item.todo.id) return { target: null };
+      const r = row.getBoundingClientRect();
+      const place = y < r.top + r.height / 2 ? "before" : "after";
+      return { target: { workspace: s.workspace, project: s.project, todoId: s.todoId, place } };
+    }
+  }
   const wsEl = el?.closest<HTMLElement>(".sidebar [data-drop-ws]");
   if (!el || !wsEl) return { target: null };
   const workspace = wsEl.dataset.dropWs!;
@@ -80,7 +105,32 @@ function hitTest(x: number, y: number, item: DragItem): { target: DropTarget | n
   };
 }
 
-function judge(item: DragItem, target: DropTarget | null, trees: WorkspaceTree[]): { status: DropStatus; hint: string } {
+/** 调整顺序能不能放在 target 那条旁边：已完成的和未完成的、置顶的和没置顶的各排各的 */
+function judgeReorder(
+  todo: TodoSummary,
+  target: DropTarget,
+  trees: WorkspaceTree[],
+  canReorder: boolean,
+): { status: DropStatus; hint: string } {
+  if (!canReorder) return { status: "none", hint: "搜索时不能调整顺序，先清空搜索" };
+  const other = trees
+    .find((t) => t.name === target.workspace)
+    ?.projects.find((p) => p.name === target.project)
+    ?.todos.find((t) => t.id === target.todoId);
+  if (!other) return { status: "none", hint: "拖到其他待办上调整顺序" };
+  if (other.done !== todo.done) return { status: "none", hint: "已完成的排在未完成的后面，只能在同一类里调整顺序" };
+  if (other.pinned !== todo.pinned)
+    return { status: "none", hint: "置顶的排在最前面，只能和同样置顶（或都没置顶）的调整顺序" };
+  return { status: "ok", hint: `放在「${displayTitle(other).text}」${target.place === "before" ? "前面" : "后面"}` };
+}
+
+function judge(
+  item: DragItem,
+  target: DropTarget | null,
+  trees: WorkspaceTree[],
+  canReorder: boolean,
+): { status: DropStatus; hint: string } {
+  if (item.kind === "todo" && target?.todoId) return judgeReorder(item.todo, target, trees, canReorder);
   if (item.kind === "project") {
     if (!target)
       return { status: "none", hint: trees.length > 1 ? "拖到左侧的其他工作区上" : "要移到其他工作区，先在侧栏顶部选中它" };
@@ -91,9 +141,9 @@ function judge(item: DragItem, target: DropTarget | null, trees: WorkspaceTree[]
       return { status: "refused", hint: `「${target.workspace}」里已有同名项目` };
     return { status: "ok", hint: `移动到工作区「${target.workspace}」` };
   }
-  if (!target?.project) return { status: "none", hint: "拖到左侧的项目上" };
+  if (!target?.project) return { status: "none", hint: "拖到左侧的项目上，或拖到其他待办上调整顺序" };
   if (target.workspace === item.workspace && target.project === item.project)
-    return { status: "none", hint: "已在这个项目里" };
+    return { status: "none", hint: "已在这个项目里；拖到其他待办上可以调整顺序" };
   const where = target.workspace === item.workspace ? target.project : `${target.workspace} / ${target.project}`;
   return { status: "ok", hint: `移动到「${where}」` };
 }
@@ -114,6 +164,8 @@ export function useDragMove(opts: {
   trees: WorkspaceTree[];
   /** 展开折叠起来的工作区 */
   expand(workspace: string): void;
+  /** 能不能调整顺序（搜索时不能） */
+  canReorder: boolean;
   onDrop(item: DragItem, target: DropTarget): void;
 }): DragMove & { ghost: React.ReactNode } {
   const [state, setState] = useState<DragState | null>(null);
@@ -158,7 +210,7 @@ export function useDragMove(opts: {
         expandWs = collapsed;
         if (collapsed) expandTimer = window.setTimeout(() => optsRef.current.expand(collapsed), EXPAND_DELAY);
       }
-      const { status, hint } = judge(item, target, optsRef.current.trees);
+      const { status, hint } = judge(item, target, optsRef.current.trees, optsRef.current.canReorder);
       document.body.classList.toggle("drag-nodrop", status !== "ok");
       if (current && current.status === status && current.hint === hint && sameTarget(current.target, target)) return;
       current = { item, target, status, hint };

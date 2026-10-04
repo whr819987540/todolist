@@ -70,7 +70,7 @@ export interface ListOptions {
   hideDone: boolean;
 }
 
-const isSortKey = (v: unknown): v is SortKey => v === "created" || v === "updated" || v === "title";
+const isSortKey = (v: unknown): v is SortKey => v === "created" || v === "updated" || v === "title" || v === "manual";
 
 /**
  * 这个工作区的排序和隐藏已完成。还没单独设置过的，沿用以前不分工作区时的设置（localStorage 的 sortKey / hideDone），

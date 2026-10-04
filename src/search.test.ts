@@ -13,6 +13,7 @@ const todo = (title: string, preview: string): TodoSummary => ({
   updatedAt: 0,
   doneAt: null,
   pinned: false,
+  order: null,
 });
 
 describe("搜索结果里显示的正文片段", () => {

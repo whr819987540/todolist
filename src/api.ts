@@ -60,6 +60,9 @@ export const api = {
   /** 置顶 / 取消置顶，修改时间不变 */
   setTodoPinned: (workspace: string, project: string, id: string, pinned: boolean) =>
     invoke<TodoSummary>("set_todo_pinned", { workspace, project, id, pinned }),
+  /** 手动排序：ids 是项目里待办从前到后的顺序（修改时间不变） */
+  reorderTodos: (workspace: string, project: string, ids: string[]) =>
+    invoke<void>("reorder_todos", { workspace, project, ids }),
   deleteTodo: (workspace: string, project: string, id: string) =>
     invoke<void>("delete_todo", { workspace, project, id }),
   /** 移到另一个项目，可以在别的工作区里；返回移过去后的摘要（id 可能因为重名而变） */

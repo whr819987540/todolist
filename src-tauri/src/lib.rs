@@ -212,6 +212,12 @@ async fn set_todo_pinned(
     store.set_todo_pinned(&workspace, &project, &id, pinned)
 }
 
+/// 手动排序：ids 是项目里待办从前到后的顺序（修改时间不变）
+#[tauri::command]
+async fn reorder_todos(store: State<'_, Store>, workspace: String, project: String, ids: Vec<String>) -> Cmd<()> {
+    store.reorder_todos(&workspace, &project, &ids)
+}
+
 #[tauri::command]
 async fn delete_todo(store: State<'_, Store>, workspace: String, project: String, id: String) -> Cmd<()> {
     store.delete_todo(&workspace, &project, &id)
@@ -967,6 +973,7 @@ pub fn run() {
             set_todo_title,
             set_todo_done,
             set_todo_pinned,
+            reorder_todos,
             delete_todo,
             move_todo,
             search_todos,

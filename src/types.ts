@@ -9,6 +9,8 @@ export interface TodoSummary {
   doneAt: number | null;
   /** 置顶：在列表里排在最前面（已完成的仍排在未完成的后面） */
   pinned: boolean;
+  /** 手动排序时的位置（从小到大）；没拖动排过的（新建的、移过来的）为 null，手动排序时排在最前面 */
+  order: number | null;
 }
 
 export interface ProjectNode {
@@ -56,7 +58,8 @@ export interface SaveResult {
   mtime: number;
 }
 
-export type SortKey = "created" | "updated" | "title";
+/** 排序：按创建时间（新的在前）、修改时间（新的在前）、标题，或手动排序（拖动调整） */
+export type SortKey = "created" | "updated" | "title" | "manual";
 
 export type ShortcutAction = "toggleWindow" | "quickCapture" | "toggleDone" | "openExternal";
 

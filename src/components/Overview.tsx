@@ -11,7 +11,8 @@ import { Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "a
 import { useState } from "react";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime, sortTodos, useNow } from "../utils";
-import { type DragMove, isDraggingProject, isDraggingTodo } from "./DragMove";
+import { type DragMove, isDraggingProject, isDraggingTodo, reorderMark } from "./DragMove";
+import { selKey } from "./sidebar/tree";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
 
 const percent = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0);
@@ -135,12 +136,15 @@ export function ProjectOverview(p: {
     }
   };
 
+  const mark = reorderMark(p.drag.state, p.workspace, project.name);
   const row = (t: TodoSummary) => {
     const { text, fromContent } = displayTitle(t);
+    const dropMark = mark?.id === t.id ? ` drop-${mark.place}` : "";
     return (
       <Dropdown key={t.id} menu={todoMenu(a, project.name, t, p.moveTargets)} trigger={["contextMenu"]}>
         <div
-          className={`list-row${t.done ? " done" : ""}${isDraggingTodo(p.drag.state, p.workspace, project.name, t.id) ? " drag-source" : ""}`}
+          className={`list-row${t.done ? " done" : ""}${isDraggingTodo(p.drag.state, p.workspace, project.name, t.id) ? " drag-source" : ""}${dropMark}`}
+          data-sel={selKey({ workspace: p.workspace, project: project.name, todoId: t.id })}
           onMouseDown={(e) => p.drag.start(e, { kind: "todo", workspace: p.workspace, project: project.name, todo: t })}
           onClick={() => a.selectTodo(project.name, t.id)}
         >

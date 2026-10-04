@@ -19,6 +19,7 @@ const todo: TodoSummary = {
   updatedAt: 0,
   doneAt: null,
   pinned: false,
+  order: null,
 };
 
 type Item = { key?: string; type?: string; label?: unknown; disabled?: boolean; children?: Item[] };

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { api, errMsg } from "../api";
 import type { How } from "../navHistory";
 import type { TodoSummary, WorkspaceTree } from "../types";
-import { compareName, displayTitle } from "../utils";
+import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
 import {
   forgetProjectState,
   forgetTodoState,
@@ -282,6 +282,20 @@ export function useWorkspaceActions(ctx: ActionContext) {
           reveal(targetWs, target);
           if (isSel) setSel({ workspace: targetWs, project: target, todoId: moved.id }, "replace");
           message.success(`已移动到「${targetWs === ws ? target : `${targetWs} / ${target}`}」`);
+        }),
+      reorderTodo: (project, id, targetId, place) =>
+        run(async () => {
+          const todos = tree?.projects.find((p) => p.name === project)?.todos;
+          if (!todos) return;
+          const { sortKey } = listOptions.get(ws);
+          const ids = reorderedIds(sortTodos(todos, sortKey), id, targetId, place);
+          await api.reorderTodos(ws, project, ids);
+          const order = new Map(ids.map((x, i) => [x, i]));
+          updateTodos(ws, project, (list) => list.map((t) => ({ ...t, order: order.get(t.id) ?? null })));
+          if (sortKey !== "manual") {
+            listOptions.set(ws, (o) => ({ ...o, sortKey: "manual" }));
+            message.info(workspaces.length > 1 ? `「${ws}」已改为手动排序` : "已改为手动排序", 4);
+          }
         }),
       openExternal: (project, t) =>
         run(async () => {

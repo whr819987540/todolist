@@ -12,7 +12,7 @@ import { memo, useCallback, useMemo } from "react";
 import { hitKey, searchSnippet } from "../../search";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../../types";
 import { avatarColor, compactTime, displayTitle, firstChar, matchTodo, relativeTime, sortTodos } from "../../utils";
-import { type DragItem, type DragState, dropClass, isDraggingProject } from "../DragMove";
+import { type DragItem, type DragState, dropClass, isDraggingProject, reorderMark } from "../DragMove";
 import Highlight from "../Highlight";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "../menus";
 import type { OpenMenu } from "./RowPopups";
@@ -130,6 +130,8 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
               dropCls={dropClass(drag, tree.name, project.name)}
               dragSource={isDraggingProject(drag, tree.name, project.name)}
               draggingTodoId={dragTodo?.project === project.name ? dragTodo.todo.id : undefined}
+              reorderAt={reorderMark(drag, tree.name, project.name)?.id}
+              reorderPlace={reorderMark(drag, tree.name, project.name)?.place}
               dragStart={p.dragStart}
               onContextMenu={p.onContextMenu}
             />
@@ -176,6 +178,9 @@ const ProjectBranch = memo(function ProjectBranch(p: {
   dragSource: boolean;
   /** 正在拖的是这个项目里的哪条待办 */
   draggingTodoId?: string;
+  /** 调整顺序时，插入线画在这个项目里哪条待办的前面 / 后面 */
+  reorderAt?: string;
+  reorderPlace?: "before" | "after";
   dragStart: DragStart;
   onContextMenu: OpenMenu;
 }) {
@@ -239,6 +244,7 @@ const ProjectBranch = memo(function ProjectBranch(p: {
               now={p.now}
               today={p.today}
               dragged={p.draggingTodoId === t.id}
+              dropMark={p.reorderAt === t.id ? p.reorderPlace : undefined}
               dragStart={p.dragStart}
               onContextMenu={p.onContextMenu}
             />
@@ -273,6 +279,8 @@ interface TodoRowProps {
   now: number;
   today: string;
   dragged: boolean;
+  /** 调整顺序时插入线画在这一行的前面 / 后面 */
+  dropMark?: "before" | "after";
   dragStart: DragStart;
   onContextMenu: OpenMenu;
 }
@@ -314,7 +322,7 @@ const TodoRow = memo(function TodoRow(p: TodoRowProps) {
       role="treeitem"
       aria-selected={p.selected}
       data-sel={selKey({ workspace: p.workspace, project: p.project, todoId: t.id })}
-      className={`tree-row todo-row${p.selected ? " selected" : ""}${t.done ? " done" : ""}${p.dragged ? " drag-source" : ""}`}
+      className={`tree-row todo-row${p.selected ? " selected" : ""}${t.done ? " done" : ""}${p.dragged ? " drag-source" : ""}${p.dropMark ? ` drop-${p.dropMark}` : ""}`}
       style={{ paddingLeft: 44 }}
       onMouseDown={(e) => p.dragStart(e, { kind: "todo", workspace: p.workspace, project: p.project, todo: t })}
       onClick={() => a.selectTodo(p.project, t.id)}

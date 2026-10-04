@@ -67,6 +67,9 @@ struct TodoMeta {
     /// 置顶：在列表里排在最前面（已完成的仍排在未完成的后面）
     #[serde(default, skip_serializing_if = "is_false")]
     pinned: bool,
+    /// 手动排序时的位置（从小到大）；没拖动排过的（新建的、移过来的）没有，手动排序时排在最前面
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    order: Option<i64>,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -104,6 +107,8 @@ pub struct TodoSummary {
     pub updated_at: i64,
     pub done_at: Option<i64>,
     pub pinned: bool,
+    /// 手动排序时的位置，没排过的为 null
+    pub order: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -407,6 +412,7 @@ impl Store {
             updated_at: now,
             done_at: None,
             pinned: false,
+            order: None,
         };
         meta.todos.push(entry.clone());
         write_meta(&dir, &meta)?;
@@ -524,6 +530,25 @@ impl Store {
         })
     }
 
+    /// 手动排序：ids 是项目里待办从前到后的顺序，依次记下位置；没列出的（排序期间新建的）去掉位置，排在最前面。
+    /// 不算修改，修改时间不变
+    pub fn reorder_todos(&self, ws: &str, project: &str, ids: &[String]) -> Result<()> {
+        let _g = self.guard();
+        let dir = self.project_dir(ws, project)?;
+        let mut meta = read_meta(&dir)?;
+        let index: HashMap<&str, i64> = ids.iter().enumerate().map(|(i, id)| (id.as_str(), i as i64)).collect();
+        let mut changed = false;
+        for m in &mut meta.todos {
+            let order = index.get(m.id.as_str()).copied();
+            changed |= m.order != order;
+            m.order = order;
+        }
+        if changed {
+            write_meta(&dir, &meta)?;
+        }
+        Ok(())
+    }
+
     /// 修改一条元数据；`f` 返回 true 表示确有改动，此时刷新修改时间并落盘
     fn update_meta(
         &self,
@@ -604,6 +629,8 @@ impl Store {
             .map_err(|e| format!("移动失败，文件可能正被其他程序占用：{e}"))?;
 
         entry.id = new_id;
+        // 在目标项目里还没排过位置，手动排序时排在最前面
+        entry.order = None;
         dst_meta.todos.push(entry.clone());
         // 先写目标再写源：中途失败时最多在目标里留一条重复元数据，下次扫描会自愈
         write_meta(&dst_dir, &dst_meta)?;
@@ -801,6 +828,7 @@ fn scan_project(dir: &Path, previews: Option<&mut MemCache>) -> Result<Vec<TodoS
             updated_at: created,
             done_at: None,
             pinned: false,
+            order: None,
         });
         changed = true;
     }
@@ -950,6 +978,7 @@ fn summary_of(m: &TodoMeta, file_mtime: i64, preview: String) -> TodoSummary {
         updated_at: m.updated_at.max(file_mtime),
         done_at: m.done_at,
         pinned: m.pinned,
+        order: m.order,
     }
 }
 
@@ -1381,6 +1410,36 @@ mod tests {
         // 没置顶的不写这一项，以前的 .todos.json 照样读
         let text = fs::read_to_string(s.project_path("w", "q").unwrap().join(META_FILE)).unwrap();
         assert!(!text.contains("pinned"), "{text}");
+    }
+
+    #[test]
+    fn reorder_keeps_updated_time() {
+        let (_tmp, s) = store("reorder");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        s.create_project("w", "q").unwrap();
+        let a = s.create_todo("w", "p", "a", "").unwrap();
+        let b = s.create_todo("w", "p", "b", "").unwrap();
+        let c = s.create_todo("w", "p", "c", "").unwrap();
+        s.reorder_todos("w", "p", &[c.id.clone(), a.id.clone()]).unwrap();
+        let orders = |ws: &str, p: &str| {
+            let tree = s.load_workspace(ws).unwrap();
+            let todos = &tree.projects.iter().find(|x| x.name == p).unwrap().todos;
+            todos.iter().map(|t| (t.title.clone(), t.order, t.updated_at)).collect::<Vec<_>>()
+        };
+        let p = orders("w", "p");
+        let get = |title: &str| p.iter().find(|x| x.0 == title).unwrap().clone();
+        assert_eq!(get("c").1, Some(0));
+        assert_eq!(get("a").1, Some(1));
+        // 没列出的没有位置
+        assert_eq!(get("b").1, None);
+        // 不改修改时间
+        assert_eq!(get("a").2, a.updated_at);
+        assert_eq!(get("b").2, b.updated_at);
+        // 移到别的项目后没有位置
+        let moved = s.move_todo("w", "p", &a.id, "w", "q").unwrap();
+        assert_eq!(moved.order, None);
+        assert!(s.reorder_todos("w", "不存在", &[]).is_err());
     }
 
     #[test]

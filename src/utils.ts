@@ -98,12 +98,29 @@ export function sortTodos(todos: TodoSummary[], key: SortKey): TodoSummary[] {
         return b.updatedAt - a.updatedAt;
       case "title":
         return compareName(displayTitle(a).text, displayTitle(b).text);
+      case "manual":
+        // 没排过位置的（新建的、移过来的）在前，按创建时间新的在前；排过的按位置
+        if (a.order == null || b.order == null)
+          return Number(a.order != null) - Number(b.order != null) || b.createdAt - a.createdAt;
+        return a.order - b.order;
       default:
         return b.createdAt - a.createdAt;
     }
   };
   // 未完成在前，已完成沉底；各自里面置顶的在前
   return [...todos].sort((a, b) => Number(a.done) - Number(b.done) || Number(b.pinned) - Number(a.pinned) || byKey(a, b));
+}
+
+/**
+ * 拖动调整顺序后项目里待办从前到后的顺序：sorted 是现在显示的顺序（sortTodos 的结果，含隐藏的已完成），
+ * 把 id 那条挪到 target 那条的前面 / 后面
+ */
+export function reorderedIds(sorted: readonly TodoSummary[], id: string, target: string, place: "before" | "after"): string[] {
+  const ids = sorted.map((t) => t.id).filter((x) => x !== id);
+  const at = ids.indexOf(target);
+  if (at < 0 || !sorted.some((t) => t.id === id)) return sorted.map((t) => t.id);
+  ids.splice(place === "before" ? at : at + 1, 0, id);
+  return ids;
 }
 
 export function matchTodo(t: TodoSummary, keyword: string): boolean {

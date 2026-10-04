@@ -22,6 +22,7 @@ const SORT_LABELS: Record<SortKey, string> = {
   created: "按创建时间",
   updated: "按修改时间",
   title: "按标题",
+  manual: "手动排序",
 };
 
 /**
@@ -84,7 +85,11 @@ export default function SidebarToolbar(props: {
   // 排序和隐藏已完成作用于右侧正在显示的工作区，选中了多个工作区时在提示里写明是哪个
   const { sortKey, hideDone } = props.listOptions;
   const ofWs = multi ? `「${sel.workspace}」的` : "";
-  const sortItems = (Object.keys(SORT_LABELS) as SortKey[]).map((k) => ({ key: k, label: SORT_LABELS[k] }));
+  const sortItems = (Object.keys(SORT_LABELS) as SortKey[]).map((k) => ({
+    key: k,
+    label: SORT_LABELS[k],
+    extra: k === "manual" ? "拖动待办调整" : undefined,
+  }));
   const sortMenu: MenuProps = {
     selectable: true,
     selectedKeys: [sortKey],
