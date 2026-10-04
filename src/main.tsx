@@ -5,31 +5,12 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SettingsProvider } from "./settings";
-import { CssVars, readThemeCache, ThemeContext, useSystemDark, useWindowTheme, writeThemeCache } from "./theme";
+import { CssVars, FONT, readThemeCache, ThemeContext, useSystemDark, useWindowTheme, writeThemeCache } from "./theme";
+import { blockBrowserDefaults } from "./webview";
 import "./styles.css";
 
-const FONT =
-  '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif';
 
-// 只在输入框和正文编辑器里保留系统右键菜单（复制/粘贴），其他地方用应用自己的菜单
-document.addEventListener("contextmenu", (e) => {
-  if (!(e.target as HTMLElement).closest("input, textarea, [contenteditable='true']")) e.preventDefault();
-});
-
-// 屏蔽网页相关的浏览器快捷键：刷新、打印、查找、缩放重置等
-document.addEventListener("keydown", (e) => {
-  const ctrl = e.ctrlKey || e.metaKey;
-  const key = e.key.toLowerCase();
-  if (
-    e.key === "F5" ||
-    e.key === "F3" ||
-    e.key === "F7" ||
-    (ctrl && ["r", "p", "g", "j", "u", "h", "f", "n", "s", "o"].includes(key)) ||
-    (ctrl && e.shiftKey && key === "r")
-  ) {
-    e.preventDefault();
-  }
-});
+blockBrowserDefaults();
 
 function Root() {
   // 主题存在设置文件里，由 SettingsProvider 读出来交给这里；读出来之前先用本机缓存的

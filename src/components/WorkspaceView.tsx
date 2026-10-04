@@ -1,7 +1,7 @@
 import { App as AntApp, Spin, type InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { api, errMsg } from "../api";
-import { useWindowFocus } from "../hooks";
+import { useAppEvent, useWindowFocus } from "../hooks";
 import { useContentSearch } from "../search";
 import { type How, visit } from "../navHistory";
 import { useSettings } from "../settings";
@@ -33,6 +33,8 @@ import { sortNames, useWorkspaceActions } from "./workspaceActions";
 export interface WorkspaceViewHandle {
   /** 右侧改显示工作区里的一处；它所在的工作区没选中时选中，展开它所在的分支 */
   show(sel: Selection): void;
+  /** 同 show，但先从磁盘重新加载（要打开的是刚在别处（快速记录）新建的待办） */
+  open(sel: Selection): Promise<void>;
 }
 
 interface Props {
@@ -219,6 +221,12 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   useWindowFocus((focused) => {
     if (focused) reload();
   });
+  // 用快速记录记了一条
+  useAppEvent("data-changed", () => reload());
+  const reloadRef = useRef(reload);
+  useEffect(() => {
+    reloadRef.current = reload;
+  });
 
   // 刚取消选中的工作区不等重新加载完就从侧栏去掉
   const trees = loaded?.filter((t) => workspaces.includes(t.name)) ?? null;
@@ -300,14 +308,22 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const initialProject = initialSel.project;
   useEffect(() => reveal(initialWorkspace, initialProject), [initialWorkspace, initialProject, reveal]);
 
-  useImperativeHandle(handleRef, () => ({
-    show(s) {
+  useImperativeHandle(handleRef, () => {
+    const show = (s: Selection) => {
       if (!workspacesRef.current.includes(s.workspace)) setWorkspaces((list) => sortNames([...list, s.workspace]));
       reveal(s.workspace, s.project);
       setFocusTitleId(null);
       setSel(s);
-    },
-  }));
+    };
+    return {
+      show,
+      async open(s) {
+        // 还没选中的工作区选中后会整个加载；已经显示着的先重新加载，否则新的待办还不在列表里，会被当成已删除退回上一级
+        if (workspacesRef.current.includes(s.workspace)) await reloadRef.current();
+        show(s);
+      },
+    };
+  });
 
   /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
   const flushEditor = () => editorRef.current?.flush() ?? Promise.resolve(true);

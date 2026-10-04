@@ -1,3 +1,4 @@
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef } from "react";
 
@@ -21,6 +22,31 @@ export function useWindowFocus(onChange: (focused: boolean) => void) {
       unlisten?.();
     };
   }, []);
+}
+
+/**
+ * 收到 Rust 端发给这个窗口的事件时回调，如快速记录存好后的 data-changed（数据变了，要刷新）、
+ * open-todo（打开刚记下的待办）
+ */
+export function useAppEvent<T>(name: string, onEvent: (payload: T) => void) {
+  const ref = useRef(onEvent);
+  useEffect(() => {
+    ref.current = onEvent;
+  });
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    getCurrentWebviewWindow()
+      .listen<T>(name, (e) => ref.current(e.payload))
+      .then((u) => {
+        if (disposed) u();
+        else unlisten = u;
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [name]);
 }
 
 // ----- 隐藏到托盘、退出前把未保存的内容写盘 -----

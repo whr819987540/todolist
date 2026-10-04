@@ -56,7 +56,19 @@ export interface SaveResult {
 
 export type SortKey = "created" | "updated" | "title";
 
-export type ShortcutAction = "toggleWindow" | "toggleDone" | "openExternal";
+export type ShortcutAction = "toggleWindow" | "quickCapture" | "toggleDone" | "openExternal";
+
+/** 快速记录存到的项目 */
+export interface QuickTarget {
+  workspace: string;
+  project: string;
+}
+
+/** 一个工作区里的项目名（快速记录选择存到哪里时用） */
+export interface WorkspaceProjects {
+  name: string;
+  projects: string[];
+}
 
 /** 可以单独调字号的区域：左侧列表、右侧待办编辑区 */
 export type FontArea = "sidebar" | "editor";
@@ -74,6 +86,10 @@ export type ThemeMode = "system" | "light" | "dark";
 export interface AppSettings {
   /** 全局快捷键：显示主窗口 / 隐藏到托盘 */
   toggleShortcut: string | null;
+  /** 全局快捷键：弹出快速记录小窗 */
+  quickCaptureShortcut: string | null;
+  /** 快速记录存到哪个项目，不在时保存时自动建 */
+  quickCaptureTarget: QuickTarget;
   /** 应用内快捷键：标记选中的待办完成 / 未完成 */
   toggleDoneShortcut: string | null;
   /** 应用内快捷键：用默认程序打开选中的待办 */
@@ -105,6 +121,7 @@ export interface SettingsInfo {
   defaults: AppSettings;
   /** 全局快捷键是否注册成功；设置了却为 false 说明被其他程序占用了 */
   toggleShortcutRegistered: boolean;
+  quickCaptureShortcutRegistered: boolean;
 }
 
 export interface WebDavConfig {

@@ -10,10 +10,10 @@ import {
 } from "../../editShortcuts";
 import { useEditShortcuts, useSettings } from "../../settings";
 import { checkShortcut, sameShortcut, shortcutLabel, type TakenShortcut } from "../../shortcuts";
-import type { ShortcutAction } from "../../types";
+import type { SettingsInfo, ShortcutAction } from "../../types";
 import ShortcutRow, { Keys, type ShortcutRowProps } from "./ShortcutRow";
 
-type ShortcutField = "toggleShortcut" | "toggleDoneShortcut" | "openExternalShortcut";
+type ShortcutField = "toggleShortcut" | "quickCaptureShortcut" | "toggleDoneShortcut" | "openExternalShortcut";
 
 const ITEMS: { action: ShortcutAction; field: ShortcutField; label: string; desc: string }[] = [
   {
@@ -21,6 +21,12 @@ const ITEMS: { action: ShortcutAction; field: ShortcutField; label: string; desc
     field: "toggleShortcut",
     label: "显示 / 隐藏主窗口",
     desc: "全局快捷键，在任何程序里都能用：主窗口在前台时隐藏到系统托盘，否则调到前台。",
+  },
+  {
+    action: "quickCapture",
+    field: "quickCaptureShortcut",
+    label: "快速记录",
+    desc: "全局快捷键：不用打开主窗口，弹出一个小输入框记下一条待办，Enter 保存。",
   },
   {
     action: "toggleDone",
@@ -35,6 +41,15 @@ const ITEMS: { action: ShortcutAction; field: ShortcutField; label: string; desc
     desc: "软件在前台且选中了某条待办时，用系统默认的 Markdown 程序打开它。",
   },
 ];
+
+/** 全局快捷键（要向系统注册，可能被其他程序占用）的个数，排在 ITEMS 最前面 */
+const GLOBAL_COUNT = 2;
+
+/** 全局快捷键注册成功了没有 */
+const REGISTERED: Partial<Record<ShortcutAction, keyof SettingsInfo>> = {
+  toggleWindow: "toggleShortcutRegistered",
+  quickCapture: "quickCaptureShortcutRegistered",
+};
 
 /** 录制中的是哪一个：应用快捷键 app:动作、编辑快捷键 edit:命令 */
 type RecordingSlot = `app:${ShortcutAction}` | `edit:${EditCommandId}`;
@@ -93,7 +108,7 @@ export default function ShortcutSettings() {
         value={value}
         defaultValue={info.defaults[field]}
         warning={
-          action === "toggleWindow" && value && !info.toggleShortcutRegistered
+          value && REGISTERED[action] && !info[REGISTERED[action]]
             ? `快捷键 ${shortcutLabel(value)} 未生效，可能已被其他程序占用，请换一个`
             : undefined
         }
@@ -113,9 +128,9 @@ export default function ShortcutSettings() {
   return (
     <>
       <div className="setting-group">全局快捷键</div>
-      {ITEMS.slice(0, 1).map(row)}
+      {ITEMS.slice(0, GLOBAL_COUNT).map(row)}
       <div className="setting-group">应用内快捷键</div>
-      {ITEMS.slice(1).map(row)}
+      {ITEMS.slice(GLOBAL_COUNT).map(row)}
       <EditShortcutSettings recorder={recorder} />
     </>
   );

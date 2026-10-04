@@ -5,7 +5,7 @@ import { api } from "./api";
 import Home from "./components/Home";
 import type { Selection } from "./components/sidebar/tree";
 import WorkspaceView, { type WorkspaceViewHandle } from "./components/WorkspaceView";
-import { flushAll } from "./hooks";
+import { flushAll, useAppEvent } from "./hooks";
 import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
 import { compareName } from "./utils";
@@ -93,6 +93,13 @@ export default function App() {
       window.removeEventListener("mouseup", onMouse, true);
     };
   }, []);
+
+  // 快速记录里按 Ctrl+Enter（保存并打开）：打开刚记下的待办
+  useAppEvent<{ workspace: string; project: string; todoId: string }>("open-todo", ({ workspace, project, todoId }) => {
+    if (viewRef.current?.name === "workspace" && workspaceRef.current)
+      workspaceRef.current.open({ workspace, project, todoId });
+    else setView({ name: "workspace", workspace, sel: { project, todoId } });
+  });
 
   const goHome = useCallback(() => setView(HOME), []);
   // 从首页点进工作区（没指定项目 / 待办）时，直接打开上次在这个工作区打开的待办

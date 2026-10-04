@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   EditorBackground,
   FontArea,
+  QuickTarget,
   RemoteBackup,
   SaveResult,
   SearchHit,
@@ -14,6 +15,7 @@ import type {
   WebDavConfig,
   WebDavInfo,
   WorkspaceInfo,
+  WorkspaceProjects,
   WorkspaceTree,
 } from "./types";
 
@@ -64,6 +66,17 @@ export const api = {
   /** 在正文全文里查找（不区分大小写），返回正文里有关键字的待办；workspaces 为 null 时查全部工作区 */
   searchTodos: (workspaces: string[] | null, keyword: string) =>
     invoke<SearchHit[]>("search_todos", { workspaces, keyword }),
+
+  /** 全部工作区和其中的项目名（不读待办） */
+  listProjects: () => invoke<WorkspaceProjects[]>("list_projects"),
+  /**
+   * 快速记录：第一行当标题、其余当正文，存到 target（不在时先建，并记成以后默认存到的地方）；
+   * 存好后小窗藏起来、主窗口刷新，open 为 true 时在主窗口里打开它
+   */
+  quickCapture: (text: string, target: QuickTarget, open: boolean) =>
+    invoke<TodoSummary>("quick_capture", { text, target, open }),
+  hideQuickCapture: () => invoke<void>("hide_quick_capture"),
+  setQuickCaptureTarget: (target: QuickTarget) => invoke<SettingsInfo>("set_quick_capture_target", { target }),
 
   /** 数据目录的 .state.json 里的界面状态（JSON 文本），还没有这个文件时是 null */
   readUiState: () => invoke<string | null>("read_ui_state"),

@@ -112,6 +112,14 @@ pub struct WorkspaceTree {
     pub projects: Vec<ProjectNode>,
 }
 
+/// 一个工作区里的项目名（快速记录选择存到哪里时用，不读待办）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceProjects {
+    pub name: String,
+    pub projects: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
@@ -265,6 +273,18 @@ impl Store {
         Ok(out)
     }
 
+    /// 全部工作区和其中的项目名，只列目录
+    pub fn list_projects(&self) -> Result<Vec<WorkspaceProjects>> {
+        let _g = self.guard();
+        list_subdirs(&self.root)?
+            .into_iter()
+            .map(|(name, dir)| {
+                let projects = list_subdirs(&dir)?.into_iter().map(|(p, _)| p).collect();
+                Ok(WorkspaceProjects { name, projects })
+            })
+            .collect()
+    }
+
     pub fn create_workspace(&self, name: &str) -> Result<String> {
         let _g = self.guard();
         let name = normalize_name(name, "工作区")?;
@@ -382,6 +402,24 @@ impl Store {
         meta.todos.push(entry.clone());
         write_meta(&dir, &meta)?;
         Ok(summary_of(&entry, now, make_preview(content)))
+    }
+
+    /// 快速记录：第一行当标题、其余当正文，存成工作区 ws 的项目 project 里的一条新待办；工作区、项目不在时先建
+    pub fn quick_capture(&self, ws: &str, project: &str, text: &str) -> Result<TodoSummary> {
+        let (title, content) = split_quick_note(text);
+        if title.is_empty() && content.is_empty() {
+            return Err("没有要记的内容".into());
+        }
+        {
+            let _g = self.guard();
+            let ws = normalize_name(ws, "工作区")?;
+            let project = normalize_name(project, "项目")?;
+            let dir = self.root.join(ws).join(&project);
+            if !dir.is_dir() {
+                fs::create_dir_all(&dir).map_err(|e| format!("创建项目「{project}」失败：{e}"))?;
+            }
+        }
+        self.create_todo(ws.trim(), project.trim(), &title, &content)
     }
 
     pub fn read_todo(&self, ws: &str, project: &str, id: &str) -> Result<TodoDetail> {
@@ -1052,6 +1090,22 @@ fn strip_line_marker(mut s: &str) -> &str {
     s
 }
 
+/// 快速记录的一段文字拆成标题和正文：第一行（跳过开头的空行）当标题，其余当正文（去掉开头的空行和结尾的空白）；
+/// 第一行比标题的长度上限还长时，整段都当正文、标题留空（左侧显示正文开头）
+pub fn split_quick_note(text: &str) -> (String, String) {
+    let text = text.replace("\r\n", "\n");
+    let mut lines = text.lines().skip_while(|l| l.trim().is_empty());
+    let Some(first) = lines.next() else {
+        return (String::new(), String::new());
+    };
+    let first = first.trim();
+    if first.chars().count() > MAX_TITLE_CHARS {
+        return (String::new(), text.trim().to_string());
+    }
+    let body: Vec<&str> = lines.skip_while(|l| l.trim().is_empty()).collect();
+    (clean_title(first), body.join("\n").trim_end().to_string())
+}
+
 fn clean_title(title: &str) -> String {
     let one_line: String = title
         .chars()
@@ -1719,6 +1773,40 @@ mod tests {
         assert_eq!(fold("KELVIN"), "kelvin");
         let at = t.folded.find("kelvin").unwrap();
         assert_eq!(snippet(&t, at, 6), "ÀBC Kelvin \u{212A}elvin");
+    }
+
+    #[test]
+    fn quick_note_is_split_into_title_and_body() {
+        assert_eq!(split_quick_note("买牛奶"), ("买牛奶".into(), "".into()));
+        assert_eq!(
+            split_quick_note("\n\n  周会  \r\n\r\n- 讨论排期\n  - 细节\n\n"),
+            ("周会".into(), "- 讨论排期\n  - 细节".into())
+        );
+        assert_eq!(split_quick_note("  \n \n"), ("".into(), "".into()));
+        let long = "字".repeat(MAX_TITLE_CHARS + 1);
+        assert_eq!(split_quick_note(&format!("{long}\n第二行")), ("".into(), format!("{long}\n第二行")));
+    }
+
+    #[test]
+    fn quick_capture_creates_missing_project() {
+        let (_tmp, s) = store("quick");
+        s.create_workspace("工作").unwrap();
+        // 工作区、项目都不在：先建
+        let t = s.quick_capture("收件箱", "快速记录", "回电话给张三\n号码在名片上").unwrap();
+        assert_eq!(t.title, "回电话给张三");
+        assert_eq!(s.read_todo("收件箱", "快速记录", &t.id).unwrap().content, "号码在名片上");
+        // 已经在：直接加进去
+        let t2 = s.quick_capture("收件箱", "快速记录", "第二条").unwrap();
+        assert_eq!(s.load_workspace("收件箱").unwrap().projects[0].todos.len(), 2);
+        assert_ne!(t.id, t2.id);
+        // 空的不建
+        assert!(s.quick_capture("收件箱", "快速记录", " \n ").is_err());
+        assert!(s.quick_capture("收件箱", "a/b", "内容").is_err());
+
+        let mut list = s.list_projects().unwrap();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        let names: Vec<(&str, Vec<String>)> = list.iter().map(|w| (w.name.as_str(), w.projects.clone())).collect();
+        assert_eq!(names, [("工作", vec![]), ("收件箱", vec!["快速记录".to_string()])]);
     }
 
     #[test]

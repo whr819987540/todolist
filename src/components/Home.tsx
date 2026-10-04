@@ -22,7 +22,7 @@ import {
 } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
-import { useWindowFocus } from "../hooks";
+import { useAppEvent, useWindowFocus } from "../hooks";
 import { useContentSearch } from "../search";
 import { eventShortcut, isRefreshShortcut } from "../shortcuts";
 import { ThemeButton } from "../theme";
@@ -71,6 +71,8 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
   useWindowFocus((focused) => {
     if (focused) reload();
   });
+  // 用快速记录记了一条
+  useAppEvent("data-changed", () => reload());
 
   // 搜索时才加载各工作区的项目和待办；工作区列表刷新（切回窗口、F5）后跟着重新加载
   useEffect(() => {

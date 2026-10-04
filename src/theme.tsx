@@ -7,6 +7,10 @@ import type { ThemeMode } from "./types";
 
 export type { ThemeMode };
 
+/** 界面字体：中文用微软雅黑 */
+export const FONT =
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif';
+
 /** 正在用的主题：设置读出来之前是本机缓存的 */
 export const ThemeContext = createContext<ThemeMode>("system");
 

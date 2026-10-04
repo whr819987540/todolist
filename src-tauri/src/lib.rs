@@ -7,15 +7,21 @@ mod webdav;
 use backup::RemoteBackup;
 use chrono::Local;
 use serde::Serialize;
-use settings::{EditorBackground, FontArea, Settings, SettingsStore, ShortcutAction, StartupView, Theme};
+use settings::{
+    EditorBackground, FontArea, QuickTarget, Settings, SettingsStore, ShortcutAction, StartupView, Theme,
+};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
-use store::{SaveResult, SearchHit, Store, TodoDetail, TodoSummary, WorkspaceInfo, WorkspaceTree};
+use store::{
+    SaveResult, SearchHit, Store, TodoDetail, TodoSummary, WorkspaceInfo, WorkspaceProjects, WorkspaceTree,
+};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_window_state::StateFlags;
@@ -62,8 +68,15 @@ async fn create_workspace(store: State<'_, Store>, name: String) -> Cmd<String> 
 }
 
 #[tauri::command]
-async fn rename_workspace(store: State<'_, Store>, name: String, new_name: String) -> Cmd<String> {
-    store.rename_workspace(&name, &new_name)
+async fn rename_workspace(
+    store: State<'_, Store>,
+    settings: State<'_, SettingsStore>,
+    name: String,
+    new_name: String,
+) -> Cmd<String> {
+    let new_name = store.rename_workspace(&name, &new_name)?;
+    follow_quick_target(&settings, |t| (t.workspace == name).then(|| QuickTarget { workspace: new_name.clone(), ..t.clone() }));
+    Ok(new_name)
 }
 
 #[tauri::command]
@@ -86,11 +99,16 @@ async fn create_project(store: State<'_, Store>, workspace: String, name: String
 #[tauri::command]
 async fn rename_project(
     store: State<'_, Store>,
+    settings: State<'_, SettingsStore>,
     workspace: String,
     name: String,
     new_name: String,
 ) -> Cmd<String> {
-    store.rename_project(&workspace, &name, &new_name)
+    let new_name = store.rename_project(&workspace, &name, &new_name)?;
+    follow_quick_target(&settings, |t| {
+        (t.workspace == workspace && t.project == name).then(|| QuickTarget { project: new_name.clone(), ..t.clone() })
+    });
+    Ok(new_name)
 }
 
 #[tauri::command]
@@ -101,11 +119,26 @@ async fn delete_project(store: State<'_, Store>, workspace: String, name: String
 #[tauri::command]
 async fn move_project(
     store: State<'_, Store>,
+    settings: State<'_, SettingsStore>,
     workspace: String,
     name: String,
     target_workspace: String,
 ) -> Cmd<()> {
-    store.move_project(&workspace, &name, &target_workspace)
+    store.move_project(&workspace, &name, &target_workspace)?;
+    follow_quick_target(&settings, |t| {
+        (t.workspace == workspace && t.project == name)
+            .then(|| QuickTarget { workspace: target_workspace.clone(), ..t.clone() })
+    });
+    Ok(())
+}
+
+/// 工作区、项目改名或移动后，快速记录存到的地方跟着改；f 返回新的目标，不相干时返回 None
+fn follow_quick_target(settings: &SettingsStore, f: impl FnOnce(&QuickTarget) -> Option<QuickTarget>) {
+    let mut next = settings.get();
+    if let Some(t) = f(&next.quick_capture_target) {
+        next.quick_capture_target = t;
+        let _ = settings.save(next);
+    }
 }
 
 // ----- 待办 -----
@@ -264,6 +297,130 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+// ----- 快速记录 -----
+
+const QUICK: &str = "quick";
+
+/// 快速记录小窗：第一次用时才建，之后隐藏起来留着（启动后过一会儿也会先建好，第一次按快捷键不用等）
+fn quick_window(app: &AppHandle) -> Option<WebviewWindow> {
+    if let Some(w) = app.get_webview_window(QUICK) {
+        return Some(w);
+    }
+    WebviewWindowBuilder::new(app, QUICK, WebviewUrl::App("quick.html".into()))
+        .title("快速记录")
+        .inner_size(600.0, 248.0)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .build()
+        .ok()
+}
+
+/// 放在鼠标所在的屏幕上，水平居中、偏上
+fn place_quick_window(app: &AppHandle, w: &WebviewWindow) {
+    let monitor = app
+        .cursor_position()
+        .ok()
+        .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten());
+    let (Some(m), Ok(size)) = (monitor, w.outer_size()) else {
+        let _ = w.center();
+        return;
+    };
+    let (pos, area) = (m.work_area().position, m.work_area().size);
+    let x = pos.x + (area.width as i32 - size.width as i32) / 2;
+    let y = pos.y + (area.height as i32 - size.height as i32) / 4;
+    let _ = w.set_position(PhysicalPosition::new(x, y));
+}
+
+/// 弹出快速记录小窗并聚焦输入框
+fn show_quick_capture(app: &AppHandle) {
+    let Some(w) = quick_window(app) else { return };
+    if !w.is_visible().unwrap_or(false) {
+        place_quick_window(app, &w);
+    }
+    let _ = w.show();
+    let _ = w.set_focus();
+    // 小窗据此聚焦输入框、重新读设置（主题、存到哪里）和项目列表
+    let _ = app.emit_to(QUICK, "quick-capture-shown", ());
+}
+
+/// 快速记录的全局快捷键：小窗在前台时藏起来，否则弹出来
+fn toggle_quick_capture(app: &AppHandle) {
+    match app.get_webview_window(QUICK) {
+        Some(w) if w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false) => {
+            let _ = w.hide();
+        }
+        _ => show_quick_capture(app),
+    }
+}
+
+/// 快速记录小窗失去焦点、按了 Esc 时藏起来
+#[tauri::command]
+fn hide_quick_capture(app: AppHandle) {
+    if let Some(w) = app.get_webview_window(QUICK) {
+        let _ = w.hide();
+    }
+}
+
+/// 全部工作区和其中的项目名（快速记录选择存到哪里）
+#[tauri::command]
+async fn list_projects(store: State<'_, Store>) -> Cmd<Vec<WorkspaceProjects>> {
+    store.list_projects()
+}
+
+/// 改快速记录存到的项目
+#[tauri::command]
+fn set_quick_capture_target(settings: State<'_, SettingsStore>, target: QuickTarget) -> Cmd<SettingsInfo> {
+    let mut next = settings.get();
+    next.quick_capture_target = target;
+    settings.save(next)?;
+    Ok(settings_info(&settings))
+}
+
+/// 主窗口里打开一条待办
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenTodo {
+    workspace: String,
+    project: String,
+    todo_id: String,
+}
+
+/// 快速记录：第一行当标题、其余当正文，存到 target（不在时先建，并记成以后默认存到的地方）；
+/// 存好后藏起小窗、通知主窗口刷新，open 为 true 时在主窗口里打开它
+#[tauri::command]
+async fn quick_capture(
+    app: AppHandle,
+    store: State<'_, Store>,
+    settings: State<'_, SettingsStore>,
+    text: String,
+    target: QuickTarget,
+    open: bool,
+) -> Cmd<TodoSummary> {
+    let todo = store.quick_capture(&target.workspace, &target.project, &text)?;
+    let target = QuickTarget { workspace: target.workspace.trim().into(), project: target.project.trim().into() };
+    let mut next = settings.get();
+    if next.quick_capture_target != target {
+        next.quick_capture_target = target.clone();
+        let _ = settings.save(next);
+    }
+    hide_quick_capture(app.clone());
+    let _ = app.emit_to("main", "data-changed", ());
+    if open {
+        show_main_window(&app);
+        let _ = app.emit_to(
+            "main",
+            "open-todo",
+            OpenTodo { workspace: target.workspace, project: target.project, todo_id: todo.id.clone() },
+        );
+    }
+    Ok(todo)
+}
+
 // ----- 系统托盘 -----
 
 /// 把主窗口从托盘 / 最小化状态调回前台
@@ -301,14 +458,16 @@ fn request_quit(app: &AppHandle) {
 /// 托盘图标：左键单击显示主窗口，右键菜单「显示主窗口 / 退出」
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let quick = MenuItem::with_id(app, "quick", "快速记录", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &quick, &PredefinedMenuItem::separator(app)?, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("待办清单")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, e| match e.id().as_ref() {
             "show" => show_main_window(app),
+            "quick" => show_quick_capture(app),
             "quit" => request_quit(app),
             _ => {}
         })
@@ -359,19 +518,47 @@ fn set_window_icons(window: &tauri::WebviewWindow) {
 
 // ----- 全局快捷键 -----
 
-/// 最近一次注册全局快捷键是否成功。录制快捷键时的临时暂停不算失败，所以不能直接用 is_registered 判断
-static TOGGLE_REGISTERED: AtomicBool = AtomicBool::new(false);
+/// 设置了的全局快捷键（显示 / 隐藏主窗口、快速记录）和最近一次注册是否成功：按下时按这张表找是哪个操作。
+/// 录制快捷键时的临时暂停不算注册失败，所以不能直接用 is_registered 判断
+static GLOBAL_KEYS: Mutex<Vec<(ShortcutAction, Shortcut, bool)>> = Mutex::new(Vec::new());
 
-/// 重新注册显示/隐藏主窗口的全局快捷键（先清掉旧的）；None 表示不使用
-fn register_toggle_shortcut(app: &AppHandle, shortcut: Option<&str>) -> Cmd<()> {
+fn global_keys() -> MutexGuard<'static, Vec<(ShortcutAction, Shortcut, bool)>> {
+    GLOBAL_KEYS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 按设置重新注册全部全局快捷键（先清掉旧的），返回注册失败（被其他程序占用）的那些
+fn register_global_shortcuts(app: &AppHandle, s: &Settings) -> Vec<ShortcutAction> {
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
-    let result = shortcut.map_or(Ok(()), |text| {
-        gs.register(parse_shortcut(text)?)
-            .map_err(|_| format!("快捷键 {text} 注册失败，可能已被其他程序占用，请换一个"))
-    });
-    TOGGLE_REGISTERED.store(shortcut.is_some() && result.is_ok(), Ordering::Relaxed);
-    result
+    let mut table = Vec::new();
+    let mut failed = Vec::new();
+    for action in ShortcutAction::GLOBAL {
+        let Some(shortcut) = s.shortcut(action).and_then(|t| parse_shortcut(t).ok()) else {
+            continue;
+        };
+        let ok = gs.register(shortcut).is_ok();
+        if !ok {
+            failed.push(action);
+        }
+        table.push((action, shortcut, ok));
+    }
+    *global_keys() = table;
+    failed
+}
+
+/// 全局快捷键被按下
+fn on_global_shortcut(app: &AppHandle, shortcut: &Shortcut) {
+    let action = global_keys().iter().find(|(_, s, _)| s == shortcut).map(|(a, _, _)| *a);
+    match action {
+        Some(ShortcutAction::ToggleWindow) => toggle_main_window(app),
+        Some(ShortcutAction::QuickCapture) => toggle_quick_capture(app),
+        _ => {}
+    }
+}
+
+/// 这个全局快捷键最近一次是否注册成功
+fn registered(action: ShortcutAction) -> bool {
+    global_keys().iter().any(|(a, _, ok)| *a == action && *ok)
 }
 
 fn parse_shortcut(text: &str) -> Cmd<Shortcut> {
@@ -385,13 +572,15 @@ struct SettingsInfo {
     defaults: Settings,
     /// 全局快捷键是否注册成功；设置了却为 false 说明被其他程序占用了
     toggle_shortcut_registered: bool,
+    quick_capture_shortcut_registered: bool,
 }
 
 fn settings_info(store: &SettingsStore) -> SettingsInfo {
     SettingsInfo {
         settings: store.get(),
         defaults: Settings::default(),
-        toggle_shortcut_registered: TOGGLE_REGISTERED.load(Ordering::Relaxed),
+        toggle_shortcut_registered: registered(ShortcutAction::ToggleWindow),
+        quick_capture_shortcut_registered: registered(ShortcutAction::QuickCapture),
     }
 }
 
@@ -418,17 +607,23 @@ fn set_shortcut(
         }
     }
     let mut next = old.clone();
-    next.set_shortcut(action, shortcut);
-    if action != ShortcutAction::ToggleWindow {
+    next.set_shortcut(action, shortcut.clone());
+    if !ShortcutAction::GLOBAL.contains(&action) {
         settings.save(next)?;
+        return Ok(settings_info(&settings));
+    }
+    let saved = if register_global_shortcuts(&app, &next).contains(&action) {
+        Err(format!(
+            "快捷键 {} 注册失败，可能已被其他程序占用，请换一个",
+            shortcut.unwrap_or_default()
+        ))
     } else {
-        let saved = register_toggle_shortcut(&app, next.toggle_shortcut.as_deref())
-            .and_then(|_| settings.save(next));
-        if let Err(e) = saved {
-            // 新的用不了就恢复原来的
-            let _ = register_toggle_shortcut(&app, old.toggle_shortcut.as_deref());
-            return Err(e);
-        }
+        settings.save(next)
+    };
+    if let Err(e) = saved {
+        // 新的用不了就恢复原来的
+        register_global_shortcuts(&app, &old);
+        return Err(e);
     }
     Ok(settings_info(&settings))
 }
@@ -446,14 +641,14 @@ fn set_edit_shortcuts(
     Ok(settings_info(&settings))
 }
 
-/// 设置界面录制快捷键期间暂停，否则按下当前快捷键会直接把窗口藏起来、录不到。
+/// 设置界面录制快捷键期间暂停全部全局快捷键，否则按下当前快捷键会直接把窗口藏起来（弹出快速记录）、录不到。
 /// 返回最新设置：恢复时可能注册失败（暂停期间被其他程序占用了）
 #[tauri::command]
 fn pause_toggle_shortcut(app: AppHandle, settings: State<'_, SettingsStore>, paused: bool) -> SettingsInfo {
     if paused {
         let _ = app.global_shortcut().unregister_all();
     } else {
-        let _ = register_toggle_shortcut(&app, settings.get().toggle_shortcut.as_deref());
+        register_global_shortcuts(&app, &settings.get());
     }
     settings_info(&settings)
 }
@@ -651,11 +846,13 @@ fn restore_from_file(app: AppHandle, settings: State<'_, SettingsStore>, path: S
     restore_settings(&app, &settings, backup::read_file(Path::new(&path))?)
 }
 
-fn restore_settings(app: &AppHandle, settings: &SettingsStore, next: Settings) -> Cmd<SettingsInfo> {
+fn restore_settings(app: &AppHandle, settings: &SettingsStore, mut next: Settings) -> Cmd<SettingsInfo> {
+    // 加快速记录之前的备份里，别的快捷键可能已经设成了快速记录的默认按键
+    next.normalize();
     check_shortcuts(&next)?;
     settings.save(next.clone())?;
     // 全局快捷键被占用不影响恢复，设置界面会提示
-    let _ = register_toggle_shortcut(app, next.toggle_shortcut.as_deref());
+    register_global_shortcuts(app, &next);
     Ok(settings_info(settings))
 }
 
@@ -688,13 +885,15 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                // 快速记录小窗每次都放在鼠标所在的屏幕上，不记位置
+                .with_denylist(&[QUICK])
                 .build(),
         )
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
-                        toggle_main_window(app);
+                        on_global_shortcut(app, shortcut);
                     }
                 })
                 .build(),
@@ -705,12 +904,21 @@ pub fn run() {
             let settings = SettingsStore::load(store.root());
             let settings_hidden = settings.get().autostart_hidden;
             // 注册失败（被其他程序占用）不影响启动，设置界面里会提示
-            let _ = register_toggle_shortcut(app.handle(), settings.get().toggle_shortcut.as_deref());
+            register_global_shortcuts(app.handle(), &settings.get());
             let webdav = WebDavStore::load(store.root(), &app.config().identifier);
             app.manage(store);
             app.manage(settings);
             app.manage(webdav);
             setup_tray(app)?;
+            // 启动后过一会儿（不和主窗口抢启动时间）先把快速记录小窗建好，第一次按快捷键时不用等它加载
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(3));
+                let h = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    quick_window(&h);
+                });
+            });
             // 主窗口一开始是隐藏的（tauri.conf.json 里 visible: false）：开机自启、设置了只在托盘里时不显示
             let hidden = autostart::launched_at_login(std::env::args()) && settings_hidden;
             if let Some(w) = app.get_webview_window("main") {
@@ -768,6 +976,10 @@ pub fn run() {
             get_autostart,
             set_autostart,
             set_autostart_hidden,
+            list_projects,
+            set_quick_capture_target,
+            quick_capture,
+            hide_quick_capture,
             get_webdav,
             save_webdav,
             test_webdav,

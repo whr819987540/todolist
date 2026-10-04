@@ -9,6 +9,8 @@ import type { AppSettings, SettingsInfo } from "./types";
 
 const DEFAULTS: AppSettings = {
   toggleShortcut: "Ctrl+Alt+T",
+  quickCaptureShortcut: "Ctrl+Alt+N",
+  quickCaptureTarget: { workspace: "收件箱", project: "快速记录" },
   toggleDoneShortcut: "Ctrl+Alt+D",
   openExternalShortcut: "Ctrl+Alt+O",
   sidebarFontSize: 14,
@@ -26,6 +28,7 @@ const info = (settings: Partial<AppSettings> = {}): SettingsInfo => ({
   settings: { ...DEFAULTS, ...settings },
   defaults: DEFAULTS,
   toggleShortcutRegistered: true,
+  quickCaptureShortcutRegistered: true,
 });
 
 /** 后端的 set_editor_background：先挂起，由测试决定什么时候完成，模拟存盘还没完成时又改了 */

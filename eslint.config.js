@@ -31,9 +31,9 @@ export default defineConfig([
     },
   },
   {
-    // 这几个文件把 Provider / 组件和配套的 hook、常量放在一起（main.tsx 是入口，没有导出）：
+    // 这几个文件把 Provider / 组件和配套的 hook、常量放在一起（main.tsx、quick.tsx 是入口，没有导出）：
     // 改它们时 Vite 退回整页刷新，开发时多等一下而已，不值得为热更新把它们拆开
-    files: ["src/main.tsx", "src/settings.tsx", "src/theme.tsx"],
+    files: ["src/main.tsx", "src/quick.tsx", "src/settings.tsx", "src/theme.tsx"],
     rules: { "react-refresh/only-export-components": "off" },
   },
 

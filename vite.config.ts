@@ -2,6 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
+// @ts-expect-error type error without @types/node package
+import { fileURLToPath } from "node:url";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
@@ -12,8 +14,17 @@ export default defineConfig(() => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // 桌面应用本地加载，不需要按体积拆包
-  build: { chunkSizeWarningLimit: 2000 },
+  build: {
+    // 桌面应用本地加载，不需要按体积拆包
+    chunkSizeWarningLimit: 2000,
+    // 两个页面：主窗口和快速记录小窗
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("index.html", import.meta.url)),
+        quick: fileURLToPath(new URL("quick.html", import.meta.url)),
+      },
+    },
+  },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
