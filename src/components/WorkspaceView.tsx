@@ -390,9 +390,19 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     return out;
   }, [picked, loaded, workspaces]);
   const batchMode = pickedItems.length > 1;
+  // 实际在多选的键：选中的被删、移走（在外部也算）、所在工作区取消选中后只剩一条或没有了时，不算在多选，
+  // 留下的那条也不高亮，下次 Ctrl+单击从打开着的那条重新开始
+  const pickedKeys = useMemo(
+    () =>
+      pickedItems.length > 1
+        ? pickedItems.map((x) => selKey({ workspace: x.workspace, project: x.project, todoId: x.todo.id }))
+        : [],
+    [pickedItems],
+  );
   // 侧栏的行按工作区拿到选中的键：没有选中的工作区是同一个空集合，不必重新渲染
   const pickedByWs = useMemo(() => {
     const m = new Map<string, Set<string>>();
+    if (pickedItems.length < 2) return m;
     for (const x of pickedItems) {
       const set = m.get(x.workspace) ?? new Set<string>();
       set.add(selKey({ workspace: x.workspace, project: x.project, todoId: x.todo.id }));
@@ -419,9 +429,9 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   });
 
   // 侧栏的行用到的几个不变的函数（行只在自己的内容变了时才重新渲染），调用时用最新的状态
-  const latest = useRef({ picked, pickedItems, sel, batch, trees, dragStart: drag.start });
+  const latest = useRef({ picked: pickedKeys, pickedItems, sel, batch, trees, dragStart: drag.start });
   useEffect(() => {
-    latest.current = { picked, pickedItems, sel, batch, trees, dragStart: drag.start };
+    latest.current = { picked: pickedKeys, pickedItems, sel, batch, trees, dragStart: drag.start };
   });
   /** 单击左侧列表里的待办：Ctrl+单击加选 / 取消，Shift+单击选中一段，否则打开它 */
   const onTodoClick = useCallback(

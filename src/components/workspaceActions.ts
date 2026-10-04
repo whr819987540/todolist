@@ -381,10 +381,11 @@ export function useWorkspaceActions(ctx: ActionContext) {
         if (sel.workspace === workspace && sel.project === project && sel.todoId === t.id)
           selMoved = { workspace: targetWs, project: target, todoId: moved.id };
       });
-      clearPicked();
+      // 重新加载完再取消多选：先取消的话右侧马上回到打开着的那条，它已经移走了，会闪一下「待办不存在」
       await reload();
       reveal(targetWs, target);
       if (selMoved) setSel(selMoved, "replace");
+      clearPicked();
       if (ok) message.success(`已把 ${ok} 条移动到「${targetWs} / ${target}」`);
     },
     remove: (items) =>
