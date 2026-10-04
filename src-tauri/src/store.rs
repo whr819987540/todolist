@@ -762,9 +762,12 @@ impl Store {
             None => list_subdirs(&self.root)?,
         };
         let mut hits = Vec::new();
+        // 读不了的工作区、项目（正在外部被删、被占用）跳过，不让整个搜索失败
         for (workspace, ws_dir) in list {
-            for (project, pdir) in list_subdirs(&ws_dir)? {
-                for (id, text) in g.project_texts(&pdir)? {
+            let Ok(projects) = list_subdirs(&ws_dir) else { continue };
+            for (project, pdir) in projects {
+                let Ok(texts) = g.project_texts(&pdir) else { continue };
+                for (id, text) in texts {
                     if hits.len() >= MAX_SEARCH_HITS {
                         return Ok(hits);
                     }
@@ -2384,6 +2387,20 @@ mod tests {
         s.rename_workspace("w", "w2").unwrap();
         assert!(s.guard().texts.is_empty());
         assert_eq!(s.search(None, "橘子").unwrap()[0].workspace, "w2");
+    }
+
+    #[test]
+    fn search_skips_unreadable_folders() {
+        let (_tmp, s) = store("search-gone");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        s.create_todo("w", "p", "", "能搜到的正文").unwrap();
+        // 列出的工作区里有一个不在了（刚在外部删掉）：跳过，其余照常搜
+        let hits = s.search(Some(&["w".into(), "不在了".into()]), "正文").unwrap();
+        assert_eq!(hits.len(), 1);
+        // 项目目录是个文件（读不了目录）：也跳过
+        fs::write(s.workspace_path("w").unwrap().join("坏的"), "x").unwrap();
+        assert_eq!(s.search(None, "正文").unwrap().len(), 1);
     }
 
     #[test]

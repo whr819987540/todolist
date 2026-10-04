@@ -59,7 +59,8 @@ export function useContentSearch(
           if (stale) return;
           setResult((before) => ({ kw, hits: group(found, before?.kw === kw ? before.hits : null) }));
         },
-        () => {},
+        // 查不了正文时只按标题和正文开头匹配，不能一直显示「正在搜索」
+        () => stale || setResult({ kw, hits: new Map() }),
       );
     }, SEARCH_DELAY);
     return () => {
