@@ -200,6 +200,18 @@ async fn set_todo_done(
     store.set_todo_done(&workspace, &project, &id, done)
 }
 
+/// 置顶 / 取消置顶（修改时间不变）
+#[tauri::command]
+async fn set_todo_pinned(
+    store: State<'_, Store>,
+    workspace: String,
+    project: String,
+    id: String,
+    pinned: bool,
+) -> Cmd<TodoSummary> {
+    store.set_todo_pinned(&workspace, &project, &id, pinned)
+}
+
 #[tauri::command]
 async fn delete_todo(store: State<'_, Store>, workspace: String, project: String, id: String) -> Cmd<()> {
     store.delete_todo(&workspace, &project, &id)
@@ -954,6 +966,7 @@ pub fn run() {
             save_todo_content,
             set_todo_title,
             set_todo_done,
+            set_todo_pinned,
             delete_todo,
             move_todo,
             search_todos,

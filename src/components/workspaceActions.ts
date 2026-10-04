@@ -254,6 +254,10 @@ export function useWorkspaceActions(ctx: ActionContext) {
           patchTodo(ws, project, s);
           if (notify) message.success(s.done ? "已标记为完成" : "已标记为未完成");
         }),
+      togglePinned: (project, t) =>
+        run(async () => {
+          patchTodo(ws, project, await api.setTodoPinned(ws, project, t.id, !t.pinned));
+        }),
       deleteTodo: (project, t) =>
         confirmDelete(`删除待办「${displayTitle(t).text}」？`, "对应的 Markdown 文件将被移到回收站。", async () => {
           const isSel = isSelTodo(project, t.id);

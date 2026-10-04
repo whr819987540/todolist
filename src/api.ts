@@ -57,6 +57,9 @@ export const api = {
     invoke<TodoSummary>("set_todo_title", { workspace, project, id, title }),
   setTodoDone: (workspace: string, project: string, id: string, done: boolean) =>
     invoke<TodoSummary>("set_todo_done", { workspace, project, id, done }),
+  /** 置顶 / 取消置顶，修改时间不变 */
+  setTodoPinned: (workspace: string, project: string, id: string, pinned: boolean) =>
+    invoke<TodoSummary>("set_todo_pinned", { workspace, project, id, pinned }),
   deleteTodo: (workspace: string, project: string, id: string) =>
     invoke<void>("delete_todo", { workspace, project, id }),
   /** 移到另一个项目，可以在别的工作区里；返回移过去后的摘要（id 可能因为重名而变） */

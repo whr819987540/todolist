@@ -7,6 +7,7 @@ import {
   FolderOutlined,
   HomeOutlined,
   PlusOutlined,
+  PushpinOutlined,
   SwapOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
@@ -35,6 +36,8 @@ export interface Actions {
   newTodo(project: string, title?: string, open?: boolean): Promise<boolean>;
   /** notify=true 时弹出提示（用快捷键操作时看不到鼠标点击的反馈） */
   toggleDone(project: string, t: TodoSummary, notify?: boolean): void;
+  /** 置顶 / 取消置顶 */
+  togglePinned(project: string, t: TodoSummary): void;
   deleteTodo(project: string, t: TodoSummary): void;
   /** 移到另一个项目；targetWorkspace 不填时是同一工作区里的 */
   moveTodo(project: string, t: TodoSummary, target: string, targetWorkspace?: string): void;
@@ -137,6 +140,7 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: r
         icon: t.done ? <UndoOutlined /> : <CheckCircleOutlined />,
         label: t.done ? "标记为未完成" : "标记为已完成",
       },
+      { key: "pin", icon: <PushpinOutlined />, label: t.pinned ? "取消置顶" : "置顶" },
       {
         key: "move",
         icon: <SwapOutlined />,
@@ -156,6 +160,7 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: r
         a.moveTodo(project, t, target, workspace === ownWorkspace ? undefined : workspace);
       } else if (key === "open") a.openExternal(project, t);
       else if (key === "done") a.toggleDone(project, t);
+      else if (key === "pin") a.togglePinned(project, t);
       else if (key === "reveal") a.revealTodo(project, t);
       else if (key === "delete") a.deleteTodo(project, t);
     }),

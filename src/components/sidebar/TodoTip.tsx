@@ -6,7 +6,10 @@ export default function TodoTip({ t }: { t: TodoSummary }) {
   return (
     <div className="todo-tip">
       <div className="todo-tip-title">{displayTitle(t).text}</div>
-      <div>状态：{t.done ? "已完成" : "未完成"}</div>
+      <div>
+        状态：{t.done ? "已完成" : "未完成"}
+        {t.pinned && "，已置顶"}
+      </div>
       <div>创建时间：{fullTime(t.createdAt)}</div>
       <div>修改时间：{fullTime(t.updatedAt)}</div>
       {t.done && t.doneAt && <div>完成时间：{fullTime(t.doneAt)}</div>}

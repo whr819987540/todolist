@@ -7,6 +7,8 @@ export interface TodoSummary {
   createdAt: number;
   updatedAt: number;
   doneAt: number | null;
+  /** 置顶：在列表里排在最前面（已完成的仍排在未完成的后面） */
+  pinned: boolean;
 }
 
 export interface ProjectNode {

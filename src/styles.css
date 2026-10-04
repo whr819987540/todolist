@@ -688,6 +688,12 @@ mark {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 置顶的待办：标题前的图钉 */
+.pin-mark {
+  margin-right: 4px;
+  font-size: 0.85em;
+  color: #fa8c16;
+}
 .todo-title.from-content {
   color: var(--c-text-2);
 }

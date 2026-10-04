@@ -5,6 +5,7 @@ import {
   FolderOpenOutlined,
   MoreOutlined,
   PlusOutlined,
+  PushpinFilled,
 } from "@ant-design/icons";
 import { Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "antd";
 import { useState } from "react";
@@ -154,7 +155,10 @@ export function ProjectOverview(p: {
           >
             {t.done && <CheckOutlined />}
           </span>
-          <span className={`list-title${fromContent ? " from-content" : ""}`}>{text}</span>
+          <span className={`list-title${fromContent ? " from-content" : ""}`}>
+            {t.pinned && <PushpinFilled className="pin-mark" />}
+            {text}
+          </span>
           <Tooltip title={`创建时间：${fullTime(t.createdAt)}`}>
             <span className="list-time">创建 {shortTime(t.createdAt, now)}</span>
           </Tooltip>

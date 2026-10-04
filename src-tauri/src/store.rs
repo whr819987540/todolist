@@ -64,6 +64,13 @@ struct TodoMeta {
     updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     done_at: Option<i64>,
+    /// 置顶：在列表里排在最前面（已完成的仍排在未完成的后面）
+    #[serde(default, skip_serializing_if = "is_false")]
+    pinned: bool,
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -96,6 +103,7 @@ pub struct TodoSummary {
     /// 元数据修改时间与 .md 文件修改时间中较新的一个（外部编辑器改过也能体现）
     pub updated_at: i64,
     pub done_at: Option<i64>,
+    pub pinned: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -398,6 +406,7 @@ impl Store {
             created_at: now,
             updated_at: now,
             done_at: None,
+            pinned: false,
         };
         meta.todos.push(entry.clone());
         write_meta(&dir, &meta)?;
@@ -506,6 +515,15 @@ impl Store {
         })
     }
 
+    /// 置顶 / 取消置顶。只是在列表里的位置，不算修改了这条待办，修改时间不变
+    pub fn set_todo_pinned(&self, ws: &str, project: &str, id: &str, pinned: bool) -> Result<TodoSummary> {
+        self.change_meta(ws, project, id, false, |m| {
+            let changed = m.pinned != pinned;
+            m.pinned = pinned;
+            changed
+        })
+    }
+
     /// 修改一条元数据；`f` 返回 true 表示确有改动，此时刷新修改时间并落盘
     fn update_meta(
         &self,
@@ -514,13 +532,27 @@ impl Store {
         id: &str,
         f: impl FnOnce(&mut TodoMeta) -> bool,
     ) -> Result<TodoSummary> {
+        self.change_meta(ws, project, id, true, f)
+    }
+
+    /// 修改一条元数据；`f` 返回 true 表示确有改动，此时落盘，touch 为 true 时同时刷新修改时间
+    fn change_meta(
+        &self,
+        ws: &str,
+        project: &str,
+        id: &str,
+        touch: bool,
+        f: impl FnOnce(&mut TodoMeta) -> bool,
+    ) -> Result<TodoSummary> {
         let _g = self.guard();
         let dir = self.project_dir(ws, project)?;
         let path = Self::todo_file(&dir, id)?;
         let (mut meta, idx) = meta_with_entry(&dir, id)?;
         let entry = &mut meta.todos[idx];
         if f(entry) {
-            entry.updated_at = now_ms();
+            if touch {
+                entry.updated_at = now_ms();
+            }
             write_meta(&dir, &meta)?;
         }
         Ok(summary_of(
@@ -768,6 +800,7 @@ fn scan_project(dir: &Path, previews: Option<&mut MemCache>) -> Result<Vec<TodoS
             created_at: created,
             updated_at: created,
             done_at: None,
+            pinned: false,
         });
         changed = true;
     }
@@ -916,6 +949,7 @@ fn summary_of(m: &TodoMeta, file_mtime: i64, preview: String) -> TodoSummary {
         created_at: m.created_at,
         updated_at: m.updated_at.max(file_mtime),
         done_at: m.done_at,
+        pinned: m.pinned,
     }
 }
 
@@ -1324,6 +1358,29 @@ mod tests {
         let d = s.read_todo("工作 空间", "项目B", &moved.id).unwrap();
         assert_eq!(d.content, "# 标题\n- 第一项\n正文");
         assert!(s.read_todo("工作 空间", "项目A", &t.id).is_err());
+    }
+
+    #[test]
+    fn pin_keeps_updated_time_and_moves_along() {
+        let (_tmp, s) = store("pin");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        s.create_project("w", "q").unwrap();
+        let t = s.create_todo("w", "p", "置顶的", "").unwrap();
+        assert!(!t.pinned);
+        let pinned = s.set_todo_pinned("w", "p", &t.id, true).unwrap();
+        assert!(pinned.pinned);
+        // 置顶不算修改了这条待办
+        assert_eq!(pinned.updated_at, t.updated_at);
+        let text = fs::read_to_string(s.project_path("w", "p").unwrap().join(META_FILE)).unwrap();
+        assert!(text.contains(r#""pinned": true"#), "{text}");
+        // 移到别的项目后还是置顶的
+        let moved = s.move_todo("w", "p", &t.id, "w", "q").unwrap();
+        assert!(moved.pinned);
+        assert!(!s.set_todo_pinned("w", "q", &moved.id, false).unwrap().pinned);
+        // 没置顶的不写这一项，以前的 .todos.json 照样读
+        let text = fs::read_to_string(s.project_path("w", "q").unwrap().join(META_FILE)).unwrap();
+        assert!(!text.contains("pinned"), "{text}");
     }
 
     #[test]

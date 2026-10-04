@@ -4,6 +4,7 @@ import {
   FolderOpenFilled,
   MoreOutlined,
   PlusOutlined,
+  PushpinFilled,
   RightOutlined,
 } from "@ant-design/icons";
 import { Dropdown, Tooltip, type MenuProps } from "antd";
@@ -333,6 +334,7 @@ const TodoRow = memo(function TodoRow(p: TodoRowProps) {
       </span>
       <div className="todo-main">
         <div className={`todo-title${fromContent ? " from-content" : ""}`}>
+          {t.pinned && <PushpinFilled className="pin-mark" />}
           <Highlight text={text} kw={p.keyword} />
         </div>
         {p.snippet ? (

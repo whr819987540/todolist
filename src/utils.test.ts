@@ -20,6 +20,7 @@ const todo = (p: Partial<TodoSummary>): TodoSummary => ({
   createdAt: 0,
   updatedAt: 0,
   doneAt: null,
+  pinned: false,
   ...p,
 });
 
@@ -99,6 +100,13 @@ describe("排序（sortTodos）", () => {
   it("按标题（中文按拼音）", () => {
     // 丙 bǐng、甲 jiǎ、乙 yǐ
     expect(ids(sortTodos([a, b, { ...c, done: false }], "title"))).toEqual(["c", "b", "a"]);
+  });
+
+  it("置顶的排在最前面，已完成的仍沉底（置顶的已完成排在已完成里的最前面）", () => {
+    const d = todo({ id: "d", createdAt: 0, updatedAt: 0, pinned: true });
+    const e = todo({ id: "e", createdAt: 0, updatedAt: 0, pinned: true, done: true });
+    expect(ids(sortTodos([a, b, c, d, e], "created"))).toEqual(["d", "b", "a", "e", "c"]);
+    expect(ids(sortTodos([a, b, c, d, e], "updated"))).toEqual(["d", "a", "b", "e", "c"]);
   });
 
   it("不改原来的数组", () => {

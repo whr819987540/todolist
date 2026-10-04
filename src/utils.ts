@@ -102,8 +102,8 @@ export function sortTodos(todos: TodoSummary[], key: SortKey): TodoSummary[] {
         return b.createdAt - a.createdAt;
     }
   };
-  // 未完成在前，已完成沉底
-  return [...todos].sort((a, b) => Number(a.done) - Number(b.done) || byKey(a, b));
+  // 未完成在前，已完成沉底；各自里面置顶的在前
+  return [...todos].sort((a, b) => Number(a.done) - Number(b.done) || Number(b.pinned) - Number(a.pinned) || byKey(a, b));
 }
 
 export function matchTodo(t: TodoSummary, keyword: string): boolean {

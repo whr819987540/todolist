@@ -10,14 +10,26 @@ const tree = (name: string, ...projects: string[]): WorkspaceTree => ({
   name,
   projects: projects.map((p) => ({ name: p, todos: [] })),
 });
-const todo: TodoSummary = { id: "a", title: "买菜", preview: "", done: false, createdAt: 0, updatedAt: 0, doneAt: null };
+const todo: TodoSummary = {
+  id: "a",
+  title: "买菜",
+  preview: "",
+  done: false,
+  createdAt: 0,
+  updatedAt: 0,
+  doneAt: null,
+  pinned: false,
+};
 
 type Item = { key?: string; type?: string; label?: unknown; disabled?: boolean; children?: Item[] };
 const moveItem = (menu: MenuProps) => (menu.items as Item[]).find((i) => i?.key === "move")!;
 const labels = (items: Item[] | undefined) => (items ?? []).map((i) => i.label);
 
 function actions() {
-  return { moveTodo: vi.fn() } as unknown as Actions & { moveTodo: ReturnType<typeof vi.fn> };
+  return { moveTodo: vi.fn(), togglePinned: vi.fn() } as unknown as Actions & {
+    moveTodo: ReturnType<typeof vi.fn>;
+    togglePinned: ReturnType<typeof vi.fn>;
+  };
 }
 
 function click(menu: MenuProps, key: string) {
@@ -89,5 +101,20 @@ describe("待办右键菜单的「移动到」", () => {
       ["需求", todo, "测试", undefined],
       ["需求", todo, "杂事", "生活"],
     ]);
+  });
+});
+
+describe("待办右键菜单的「置顶」", () => {
+  const item = (t: TodoSummary) => (todoMenu(actions(), "需求", t, []).items as Item[]).find((i) => i?.key === "pin")!;
+
+  it("没置顶时是「置顶」，置顶了是「取消置顶」", () => {
+    expect(item(todo).label).toBe("置顶");
+    expect(item({ ...todo, pinned: true }).label).toBe("取消置顶");
+  });
+
+  it("点了交给 togglePinned", () => {
+    const a = actions();
+    click(todoMenu(a, "需求", todo, []), "pin");
+    expect(a.togglePinned).toHaveBeenCalledWith("需求", todo);
   });
 });

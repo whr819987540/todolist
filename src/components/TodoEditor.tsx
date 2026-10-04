@@ -6,6 +6,7 @@ import {
   EyeOutlined,
   LoadingOutlined,
   MoreOutlined,
+  PushpinFilled,
   UndoOutlined,
   UnorderedListOutlined,
 } from "@ant-design/icons";
@@ -667,6 +668,11 @@ export default function TodoEditor(props: Props) {
             ) : (
               <Tag color="processing" variant="filled">
                 进行中
+              </Tag>
+            )}
+            {summary.pinned && (
+              <Tag color="warning" icon={<PushpinFilled />} variant="filled">
+                已置顶
               </Tag>
             )}
             <span title={fullTime(summary.createdAt)}>创建于 {fullTime(summary.createdAt).slice(0, 16)}</span>
