@@ -137,6 +137,8 @@ TodoList\
 
 需要 Node.js、Rust（MSVC 工具链）和 WebView2（Windows 11 自带）。
 
+在 Linux 上开发（Tauri 在 Linux 上编不了）时怎么验证、怎么交到 Windows 上测，见 [docs/linux-windows-workflow.md](docs/linux-windows-workflow.md)。
+
 ```bash
 npm install
 npm run tauri dev       # 开发调试

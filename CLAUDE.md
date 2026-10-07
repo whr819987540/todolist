@@ -12,3 +12,7 @@
 ## 软件要求
 
 软件要做成什么样（工作区界面、待办内容、窗口与系统集成、搜索、快捷键、设置备份）写在 [docs/requirements.md](docs/requirements.md)。加功能、改功能、写测试用例之前，先读里面相关的那几节；测试用例按里面写的行为写，不照着实现抄期望值。
+
+## 开发流程
+
+在 Linux 上开发（Tauri 在这里编不了、跑不了）、到 Windows 上测试，流程写在 [docs/linux-windows-workflow.md](docs/linux-windows-workflow.md)：Linux 上能验证什么、测试壳（`src-tauri/target/linux-harness/`，不在仓库里）怎么建和用、怎么交到 Windows 上测，以及加功能时的清单。在 Linux 上改代码之前先读它；改了流程或测试壳时同步更新它。
