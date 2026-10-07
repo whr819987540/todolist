@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { indent, outdent } from "./lists";
 import { apply, exec, readOnly } from "./testState";
 
-// CLAUDE.md「编辑快捷键 → 缩进」：光标（选区）在列表项里时，把这一项连同它的子项缩进成上一项的子项 / 提到上一级
+// docs/requirements.md「编辑快捷键 → 缩进」：光标（选区）在列表项里时，把这一项连同它的子项缩进成上一项的子项 / 提到上一级
 // （列表的第一项不能再缩进，最外层不能再提），有序列表跟着重新编号（原本就不是连续编号的，如全写成 1.，不动）；
 // 不在列表里时 Tab 插入两个空格（选中多行时整体缩进）、Ctrl+] 缩进所在的行、Shift+Tab / Ctrl+[ 减少所在行的缩进。
 // 记号：| 光标，«» 选区

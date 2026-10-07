@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Place } from "./navHistory";
 
-// CLAUDE.md「鼠标侧键后退 / 前进」：在这次运行期间看过的地方之间来回，和浏览器一样——首页、工作区概览、项目概览、
+// docs/requirements.md「鼠标侧键后退 / 前进」：在这次运行期间看过的地方之间来回，和浏览器一样——首页、工作区概览、项目概览、
 // 待办各算一处，在中间某处又去了新的地方时前进的记录清掉；用键盘在左侧列表里连着移动、停不到 1 秒就移走的不算看过。
 // 工作区 / 项目改名、待办移动后跟着走，删除的不再回去；最多记 100 处。
 

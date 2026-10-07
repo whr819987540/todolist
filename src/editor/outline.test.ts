@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { activeIndex, outlineDepth, outlineItems } from "./outline";
 import { makeState } from "./testState";
 
-// CLAUDE.md「大纲」：列出正文里的标题，去掉加粗、链接这些标记；代码块里的 # 不算
+// docs/requirements.md「大纲」：列出正文里的标题，去掉加粗、链接这些标记；代码块里的 # 不算
 
 const items = (doc: string) => outlineItems(makeState(doc)).map(({ level, text }) => `${level} ${text}`);
 

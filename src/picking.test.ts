@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { rangePick, togglePick } from "./picking";
 
-// CLAUDE.md「批量操作」：Ctrl+单击加选 / 取消，Shift+单击选中一段
+// docs/requirements.md「批量操作」：Ctrl+单击加选 / 取消，Shift+单击选中一段
 
 describe("Ctrl+单击", () => {
   it("还没多选时，从正打开着的那条开始", () => {

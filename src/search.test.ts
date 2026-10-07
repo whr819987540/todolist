@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { searchSnippet } from "./search";
 import type { TodoSummary } from "./types";
 
-// CLAUDE.md 侧栏 / 首页搜索：匹配标题和正文全文；命中在正文里时显示关键字附近的一段
+// docs/requirements.md 侧栏 / 首页搜索：匹配标题和正文全文；命中在正文里时显示关键字附近的一段
 
 const todo = (title: string, preview: string): TodoSummary => ({
   id: "1",

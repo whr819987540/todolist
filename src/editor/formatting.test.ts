@@ -16,7 +16,7 @@ import {
 } from "./formatting";
 import { apply, exec, readOnly } from "./testState";
 
-// 按 CLAUDE.md「编辑快捷键」和 README 的快捷键表写的用例。
+// 按 docs/requirements.md「编辑快捷键」和 README 的快捷键表写的用例。
 // 记号：| 光标，«» 选区（« 是不动的一端，» 是光标所在的一端）
 
 const bold = (v: Parameters<typeof toggleInline>[0]) => toggleInline(v, "bold");

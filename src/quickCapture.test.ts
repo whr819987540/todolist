@@ -11,7 +11,7 @@ import {
   writeDraft,
 } from "./quickCapture";
 
-// CLAUDE.md「快速记录」：选择存到哪个项目（默认收件箱 / 快速记录，不在时保存时新建），
+// docs/requirements.md「快速记录」：选择存到哪个项目（默认收件箱 / 快速记录，不在时保存时新建），
 // Enter 保存，Shift+Enter 换行，Ctrl+Enter 保存并打开；没存的草稿留着
 
 const list = [

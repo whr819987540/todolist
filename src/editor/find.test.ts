@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { firstMatchFrom, initialQuery, MAX_COUNT, matchInfo, matchLabel, selectedText } from "./find";
 import { makeState } from "./testState";
 
-// CLAUDE.md「正文里查找」：Ctrl+F 在正文里查找，显示第几个 / 共几个；有选中的文字时查它，
+// docs/requirements.md「正文里查找」：Ctrl+F 在正文里查找，显示第几个 / 共几个；有选中的文字时查它，
 // 否则接着用上一次的查找内容；输入时跳到离光标最近的结果
 
 /** 和编辑器里一样带上搜索状态 */

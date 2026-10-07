@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditPosition } from "./editor/position";
 
-// 工作区 / 项目改名、待办移动、删除后，记住的东西跟着走（CLAUDE.md「后退 / 前进」「回到上次编辑位置」
+// 工作区 / 项目改名、待办移动、删除后，记住的东西跟着走（docs/requirements.md「后退 / 前进」「回到上次编辑位置」
 // 「从首页进入工作区」「撤销记录」）。这里经由 workspaceState 真正用的入口测，不直接调 navHistory。
 
 vi.mock("./api", () => ({

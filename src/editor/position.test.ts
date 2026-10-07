@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type EditPosition, locateAnchor, restorePosition, type TextAnchor } from "./position";
 
-// CLAUDE.md「回到上次编辑位置」：正文在外部被改过时，按光标（选区两端）前后的原文找回位置，
+// docs/requirements.md「回到上次编辑位置」：正文在外部被改过时，按光标（选区两端）前后的原文找回位置，
 // 选区另一端找不到时只放光标；被大幅修改、找不到时回到开头。
 
 const CONTEXT = 32;

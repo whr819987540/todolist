@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { type Actions, moveTargets, todoMenu } from "./menus";
 
-// CLAUDE.md「右键工作区 / 项目 / 待办弹出操作菜单」：待办的「移动到」——只显示一个工作区时列出同一工作区的其他项目；
+// docs/requirements.md「右键工作区 / 项目 / 待办弹出操作菜单」：待办的「移动到」——只显示一个工作区时列出同一工作区的其他项目；
 // 同时显示了几个工作区时，也列出其他选中工作区的项目，按工作区分组
 
 const tree = (name: string, ...projects: string[]): WorkspaceTree => ({

@@ -9,10 +9,10 @@ import {
 } from "./editShortcuts";
 import { checkShortcut, normalizeShortcut } from "./shortcuts";
 
-// CLAUDE.md「编辑快捷键」：默认按键与 Typora（Windows）相同；每条都能修改、恢复默认或不使用；
+// docs/requirements.md「编辑快捷键」：默认按键与 Typora（Windows）相同；每条都能修改、恢复默认或不使用；
 // 改过的存在设置文件里（只记改过的，没改过的跟着默认值走）；所有快捷键之间不能重复。
 
-/** CLAUDE.md 里列出的默认按键 */
+/** docs/requirements.md 里列出的默认按键 */
 const TYPORA_DEFAULTS: Record<EditCommandId, string> = {
   bold: "Ctrl+B",
   italic: "Ctrl+I",

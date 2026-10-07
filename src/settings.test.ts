@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, SettingsInfo } from "./types";
 
-// CLAUDE.md：编辑区背景色在设置的「外观」里修改，立即生效；背景色存在设置文件里。
+// docs/requirements.md：编辑区背景色在设置的「外观」里修改，立即生效；背景色存在设置文件里。
 // 改了立即生效、停顿片刻再存盘；存盘期间又改了的，下一次接着存，不能丢。
 
 const DEFAULTS: AppSettings = {

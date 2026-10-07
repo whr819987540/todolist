@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { closeFenceOnEnter, downOutOfCodeBlock, exitCodeBlock } from "./codeFences";
 import { exec } from "./testState";
 
-// CLAUDE.md「代码块（同 Typora）」：输入 ```语言 后回车自动补上结尾的 ```；在代码块里按 Ctrl+Enter，
+// docs/requirements.md「代码块（同 Typora）」：输入 ```语言 后回车自动补上结尾的 ```；在代码块里按 Ctrl+Enter，
 // 或在文末代码块的最后一行按 ↓，跳到代码块下面新的一行，缺结尾的 ``` 时顺便补上。记号：| 光标
 
 describe("输入 ```语言 后回车，自动补上结尾", () => {
