@@ -147,7 +147,8 @@ npm run release         # 打包并安装到本机，见下文
 npm run release:fast    # 同上，但用 release-fast profile 构建，快很多
 npm run lint            # ESLint 检查前端代码（含 React hooks 的规则），要零错误、零警告
 npm test                # 前端单元测试（vitest：编辑快捷键、列表缩进、代码块、查找、编辑位置、后退 / 前进、快捷键检查等）
-cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV）
+cd src-tauri && cargo test   # 单元测试（存储、设置备份、WebDAV、开机自启的注册表读写）
+npm run e2e             # Windows 上的端到端测试：启动测试版程序，模拟按键、鼠标，检查界面、文件、注册表、窗口，见下文
 ```
 
 前端单元测试放在被测模块旁边（`*.test.ts`），配置在 `vitest.config.ts`。默认在 Node 里跑：编辑命令直接构造 CodeMirror 的 `EditorState` 测（`src/editor/testState.ts` 提供用 `|`、`«»` 标出光标和选区的写法，和编辑器用同一份 Markdown 解析），不需要 DOM；要用 DOM、`localStorage` 的（`workspaceState.test.ts`，渲染 `SettingsProvider` 的 `settings.test.ts`）在文件开头指定 happy-dom。用例按 CLAUDE.md 里写的行为写，不照着实现抄期望值。
@@ -161,6 +162,33 @@ ESLint 的配置在 `eslint.config.js`：typescript-eslint 的推荐规则，加
 ```powershell
 cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --profile release-fast --lib bench_scan -- --ignored --nocapture
 ```
+
+### 端到端测试（Windows）
+
+单元测试测不到的（WebView2 里的界面、全局快捷键、窗口的显示 / 隐藏和前台、注册表、Windows 回收站、文件被占用）由 `e2e/` 里的端到端测试检查，只能在 Windows 上跑，没放进 CI：
+
+```powershell
+npm run e2e                       # 全部套件，约 10 分钟
+npm run e2e -- quick recycle      # 只跑这几个套件
+npm run e2e -- --no-build         # 不重新构建测试版（只改了前端时）
+npm run e2e -- --keep             # 跑完留着测试数据（%TEMP%\todolist-e2e\data）
+```
+
+套件（`e2e/suites/`）：`find`（正文查找 / 替换）、`search`（全文搜索）、`outline`（大纲）、`autostart`（开机自启的开关和注册表、任务管理器的禁用）、`startup`（开机自启时主窗口只在托盘里、最大化）、`quick`（快速记录小窗）、`shortcuts`（全局快捷键的设置）、`pin`（置顶）、`reorder`（拖动手动排序）、`batch`（多选和批量操作）、`recycle`（回收站、撤销、Windows 回收站的来回、文件被占用）、`regress`（这批功能改到了附近代码的旧功能）。
+
+怎么跑的：
+
+- 构建测试版（`src-tauri/target/e2e/debug/todo-list.exe`，identifier `com.whr.todolist.e2e`、产品名「待办清单自动测试」）：和安装版、手动测试的构建是不同的应用，可以同时运行，开机启动项、窗口位置、WebView2 缓存都分开。全局快捷键用 Ctrl+Alt+Y（显示 / 隐藏主窗口）、Ctrl+Alt+J（快速记录），避开安装版的 Ctrl+Alt+T、Ctrl+Alt+N；被占着时开头会提示
+- 前端从 Vite 开发服务器（:1420）加载：已经有一个在跑就用它（要是这个工作副本的），否则自己启动、跑完关掉
+- 每个套件开始前退出测试版、重建测试数据（`%TEMP%\todolist-e2e\data`，`e2e/lib/fixtures.mjs`），再启动；不碰真实数据
+- 经 WebView2 的远程调试端口（9223，`e2e/lib/cdp.mjs`）在页面里执行代码、发送真实的键盘 / 鼠标事件；窗口状态、注册表、回收站、任务栏经 PowerShell 调 Win32 API（`e2e/win/win.ps1`，带 UTF-8 BOM）。全局快捷键是直接给测试版的热键窗口发 `WM_HOTKEY`，不模拟真实按键，按键不会跑到别的程序里
+- 跑完删掉测试版的开机启动项；彻底删除、清空回收站、放满 30 天的检查会真的移到 Windows 回收站，跑完从那里还原回测试数据目录再一起删掉，不在你的回收站里留东西
+
+注意：
+
+- 跑的时候会弹出测试版的窗口（主窗口会最大化一下），抢前台；别在跑的时候打字。模拟的快捷键不是真的按键，测试版要拿到前台只能靠 tao 的 `set_focus`（模拟按一下 Alt 再 `SetForegroundWindow`）：锁屏了、前台的程序以管理员身份运行（模拟按键送不进去）、或有人正在别的程序里操作时，Windows 不让换前台。`quick`、`regress` 开头试一下，拿不到时「在前台」一类的检查记为跳过并说明原因，不算失败；解锁、换个普通程序在前台、别动键盘鼠标后重跑那个套件即可。别的程序（如会议软件）过一两秒就抢走前台时，快速记录小窗会按设计藏起来，后面的检查可能失败，同样重跑
+- 新套件放在 `e2e/suites/`，默认导出 `async function (t)`：`t.main` 是主窗口的页面（`ev` 执行页面代码，`press`、`type`、`click`、`drag` 等），`t.quick()` 是快速记录小窗，`t.win` 是窗口、快捷键、注册表、回收站的操作，`t.check(名称, 是否通过, 附加信息)` 记一项检查，`t.restart()` 重新启动；再加到 `e2e/run.mjs` 的 `SUITES`。页面里能用的工具函数（`row`、`view`、`openTodo`、`menuItem`、`button` 等）在 `e2e/lib/page.mjs`
+- 测不到、要手动试的（真的注销 / 重启后的开机自启、安装包的卸载和升级、多显示器、托盘菜单、真实的输入法）列在 `docs/windows-test-checklist.md`
 
 ### 本机测试用的构建
 
@@ -230,6 +258,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
   - 侧栏：`Sidebar.tsx` 管树的焦点和键盘操作（↑↓←→、Enter、Alt+方向键），其余在 `sidebar/` 下——`SidebarToolbar`（顶部：返回首页、选中工作区的 `WorkspacePicker`、主题、设置、搜索、新建、排序、隐藏已完成、全部折叠 / 展开）、`TreeRows`（工作区、项目、待办的行）、`RowPopups`（待办行共用的悬停提示 `TodoTip` 和右键菜单）、`tree.ts`（右侧显示的内容 `Selection`、行上 `data-sel` 的键、折叠状态、计数）
   - 待办多（几千条）时侧栏也要快：`WorkspaceView` 刷新（窗口获得焦点、F5、保存后）时内容没变的工作区、项目、待办沿用原来的对象，什么都没变就不重新渲染；侧栏的工作区、项目、待办行（`sidebar/TreeRows.tsx`）都用 `memo`，只有自己的内容、选中、折叠、拖动状态变了才重新渲染（传给行的操作、拖动函数都是不变的对象，右键「移动到」列出的项目也是右键时才经不变的函数去算，别的待办、项目变了时行不跟着重新渲染；「x 分钟前」只有显示会变的行跟着每 30 秒刷新），待办行的悬停提示和右键菜单不每行各挂一个 antd 组件，整个侧栏共用一个（`sidebar/RowPopups.tsx`）；不在可见区域的项目里的待办不排版、不绘制（`.todo-group` 的 `content-visibility: auto`，加在项目这一级，加在每一行上反而让每一帧都变慢）
 - `scripts/release.mjs`：改版本号、打包并安装到本机（`npm run release`，`release:fast` 传 `--fast`）
+- `e2e/`：Windows 上的端到端测试（`npm run e2e`）。`run.mjs` 逐个套件启动测试版并汇总结果，`lib/app.mjs` 构建、启动、退出测试版和重建测试数据，`lib/cdp.mjs` 经 CDP 操作页面，`lib/page.mjs` 是注入页面的工具函数，`lib/win.mjs` 和 `win/win.ps1` 是窗口、全局快捷键、注册表、回收站、任务栏的 Win32 操作，`suites/` 是各功能的套件，见上文「端到端测试（Windows）」
 
 ### 安装到本机与升级
 

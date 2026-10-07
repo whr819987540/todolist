@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "vitest run",
+    "e2e": "node e2e/run.mjs",
     "tauri": "tauri",
     "build:debug": "tauri build --debug --no-bundle",
     "build:fast": "tauri build --no-bundle -- --profile release-fast",

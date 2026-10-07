@@ -37,10 +37,15 @@ export default defineConfig([
     rules: { "react-refresh/only-export-components": "off" },
   },
 
-  // 构建配置、打包脚本（在 Node 里跑）
+  // 构建配置、打包脚本、端到端测试（在 Node 里跑）
   {
-    files: ["*.{js,ts}", "scripts/**/*.mjs"],
+    files: ["*.{js,ts}", "scripts/**/*.mjs", "e2e/**/*.mjs"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: { globals: globals.node },
+  },
+  {
+    // 注入页面执行的工具函数
+    files: ["e2e/lib/page.mjs"],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 ]);
