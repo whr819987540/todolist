@@ -157,7 +157,7 @@ npm run e2e             # Windows 上的端到端测试：启动测试版程序�
 
 ESLint 的配置在 `eslint.config.js`：typescript-eslint 的推荐规则，加上 eslint-plugin-react-hooks 的全部推荐规则（`rules-of-hooks`、`exhaustive-deps` 和 React Compiler 的 `refs`、`immutability`、`purity`、`set-state-in-effect` 等）。代码里有不少刻意绕开 hook 依赖的写法（用 ref 拿最新的值、只在挂载时执行一次的 effect），这些地方就地加了 `eslint-disable-next-line` 并写明原因；不要为了消掉警告机械地补依赖，那会让只该执行一次的 effect 反复执行。
 
-有 CI（`.github/workflows/ci.yml`）：每次 push、提 PR 时在 GitHub 的 Windows 机器（windows-latest，Node 24、stable Rust，缓存 npm 和 Rust 的依赖）上依次跑 `npm ci`、`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`；提交前在本机按同样的顺序跑一遍即可。`npm run build` 放在 `cargo test` 前面：`tauri::generate_context!` 在不是 dev 的构建（`tauri build`）里要把 `frontendDist`（`../dist`）嵌进程序，现在的 `cargo test` 是 dev 构建、用 `devUrl`，其实不读 `dist`，先构建好是为了以后换了构建方式也不出错。
+有 CI（`.github/workflows/ci.yml`）：每次 push、提 PR 时在 GitHub 的 Windows 机器（windows-latest，Node 24、stable Rust，缓存 npm 和 Rust 的依赖）上依次跑 `npm ci`、`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`；提交前在本机按同样的顺序跑一遍即可。`npm run build` 放在 `cargo test` 前面：`tauri::generate_context!` 在不是 dev 的构建（`tauri build`）里要把 `frontendDist`（`../dist`）嵌进程序，现在的 `cargo test` 是 dev 构建、用 `devUrl`，其实不读 `dist`，先构建好是为了以后换了构建方式也不出错。端到端测试是另一个 workflow（`.github/workflows/e2e.yml`），见下文「端到端测试（Windows）」。
 
 测量扫描数据目录的耗时（`list_workspaces`、`load_workspace`，含预览缓存是空的和已缓存两种情况）：用一份测试数据（不要用真实数据），跑标了 `#[ignore]` 的 `bench_scan`。它只读不写（数据和 `.todos.json` 一致时扫描不会写盘）：
 
@@ -167,7 +167,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
 
 ### 端到端测试（Windows）
 
-单元测试测不到的（WebView2 里的界面、全局快捷键、窗口的显示 / 隐藏和前台、注册表、Windows 回收站、文件被占用）由 `e2e/` 里的端到端测试检查，只能在 Windows 上跑，没放进 CI：
+单元测试测不到的（WebView2 里的界面、全局快捷键、窗口的显示 / 隐藏和前台、注册表、Windows 回收站、文件被占用）由 `e2e/` 里的端到端测试检查，只能在 Windows 上跑。每次 push 后 GitHub Actions 会在 Windows 机器上跑全部套件（见下文「在 GitHub Actions 上跑」）；在本机跑：
 
 ```powershell
 npm run e2e                       # 全部套件，约 10 分钟
@@ -191,6 +191,22 @@ npm run e2e -- --keep             # 跑完留着测试数据（%TEMP%\todolist-e
 - 跑的时候会弹出测试版的窗口（主窗口会最大化一下），抢前台；别在跑的时候打字。模拟的快捷键不是真的按键，测试版要拿到前台只能靠 tao 的 `set_focus`（模拟按一下 Alt 再 `SetForegroundWindow`）：锁屏了、前台的程序以管理员身份运行（模拟按键送不进去）、或有人正在别的程序里操作时，Windows 不让换前台。`quick`、`regress` 开头试一下，拿不到时「在前台」一类的检查记为跳过并说明原因，不算失败；解锁、换个普通程序在前台、别动键盘鼠标后重跑那个套件即可。别的程序（如会议软件）过一两秒就抢走前台时，快速记录小窗会按设计藏起来，后面的检查可能失败，同样重跑。拖动中窗口失去焦点、或真的鼠标在测试版窗口上动了，页面会按设计取消拖动：`drag` 看到了就松开重拖（打出「↻ 拖动被打断」），最多三次
 - 新套件放在 `e2e/suites/`，默认导出 `async function (t)`：`t.main` 是主窗口的页面（`ev` 执行页面代码，`press`、`type`、`click`、`drag` 等），`t.quick()` 是快速记录小窗，`t.win` 是窗口、快捷键、注册表、回收站的操作，`t.check(名称, 是否通过, 附加信息)` 记一项检查，`t.until(条件)` 等到条件成立（每 200 毫秒看一次，最多 5 秒；等页面、文件的变化时用它，别用固定时长的 `sleep`，机器慢时不够），`t.restart()` 重新启动；再加到 `e2e/run.mjs` 的 `SUITES`。页面里能用的工具函数（`row`、`view`、`openTodo`、`menuItem`、`button` 等）在 `e2e/lib/page.mjs`
 - 测不到、要手动试的（真的注销 / 重启后的开机自启、安装包的卸载和升级、多显示器、托盘菜单、真实的输入法）列在 `docs/windows-test-checklist.md`
+
+#### 在 GitHub Actions 上跑
+
+`.github/workflows/e2e.yml`：每次 push 时在 windows-latest 上 `npm ci` 后跑全部套件，加上构建测试版约 9 分钟（Rust 的编译缓存放在 `src-tauri/target/e2e`）。也可以手动跑，只跑其中几个套件：在 Actions 页面点「Run workflow」，或
+
+```bash
+gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"
+gh run list --workflow E2E --limit 3     # 找到这次的编号
+gh run view <编号> --log                 # 看结果；没通过时 gh run download <编号> -n desktop 下载当时整个桌面的截图
+```
+
+那台机器是 Windows Server、1024×768 的交互式桌面，以管理员身份运行、没人操作，「在前台」一类的检查都能做。和本机不同、测试里已经处理了的几处：
+
+- WebView2 不认环境变量 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`（浏览器进程的命令行里只有 wry 自己的参数），所以远程调试端口写在测试版的配置里（见上文「怎么跑的」）
+- `TEMP` 是短文件名（`C:\Users\RUNNER~1\...`），Windows 回收站记的原位置却是长路径：测试数据目录用 `realpathSync.native` 换成长路径
+- 机器比较慢：等页面、文件变化的检查用 `t.until(条件)`，别用固定时长的 `sleep`
 
 ### 本机测试用的构建
 

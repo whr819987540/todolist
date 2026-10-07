@@ -3,8 +3,8 @@
 软件只支持 Windows，但可以在 Linux 上开发：2026-10 那一批功能（正文查找 / 替换、全文搜索、大纲、开机自启、快速记录、置顶、手动排序、批量操作、回收站）就是在 Linux 上写完、再到 Windows 上实测的。开发用的 Linux（Ubuntu 20.04，没有 sudo）没有 webkit2gtk-4.1，Tauri 程序在上面既编译不了也运行不了，所以分三段：
 
 1. **Linux 上开发**：一个功能一个提交；能在 Linux 上验证的都验证掉（见「Linux 上能验证什么」），验证不了的写进端到端测试和手动清单
-2. **推送**：GitHub Actions 在 Windows 上跑一遍和本机相同的检查（`.github/workflows/ci.yml`）
-3. **Windows 上实测**：跑端到端测试（`npm run e2e`）和手动清单（`docs/windows-test-checklist.md`），修掉只在 Windows 上出现的问题，各自单独提交
+2. **推送，看 GitHub Actions 的结果**：GitHub 的 Windows 机器上跑和本机相同的检查（`.github/workflows/ci.yml`）和全部端到端测试（`.github/workflows/e2e.yml`），在 Linux 上用 `gh` 就能看结果、修了再推，不用去 Windows 上
+3. **Windows 上手动试**：端到端测试测不到的（`docs/windows-test-checklist.md` 的「要手动试的」），以及要在本机重现、调试端到端测试时
 
 ## Linux 上的环境
 
@@ -21,6 +21,7 @@
 | Windows 目标的类型检查 | 测试壳里 `./check-windows.sh` | 整个程序（含 `lib.rs`、`cfg(windows)` 的代码和测试代码）在 Windows 上能不能编译 | 运行起来的行为 |
 | 界面 | 模拟后端 + Vite + 无头 Chromium 截图 | 交互、样式、浅色 / 深色、窄窗口 | WebView2 和 Chromium 的差别、几个窗口之间的事件和状态、真实的 Rust 端 |
 | 审查 | 另起一个审查代理（或请人）过一遍全部改动 | 只在 Windows 上出现、要读 tao 和插件源码才看得出的问题 | — |
+| 端到端测试 | 推送后 GitHub Actions 在 Windows 机器上跑（`e2e.yml`），`gh run view <编号> --log` 看结果 | WebView2 里的界面、几个窗口之间、窗口的显示 / 隐藏 / 前台、全局快捷键、注册表、Windows 回收站、文件被占用 | 真实的按键和输入法、托盘菜单、多显示器、真的重启后的开机自启、安装包 |
 
 ## Linux 测试壳
 
@@ -124,13 +125,24 @@ exit 0
 
 加了 Tauri 命令要在 `mock.ts` 里加上模拟。看截图时浅色、深色都看，最小窗口宽度（860）下看会不会挤。
 
-## 交到 Windows 上
+## 推送之后
 
-1. 推送，看 CI 过没过
-2. Windows 上 `git pull`、`npm ci`，按 README.md「开发」跑一遍和 CI 相同的检查；这里的 `cargo test` 会跑 Linux 上跑不了的 `#[cfg(windows)]` 测试
-3. 跑端到端测试 `npm run e2e`（README.md「端到端测试（Windows）」）：只改了前端时加 `-- --no-build`，只跑相关的套件如 `npm run e2e -- quick recycle`
-4. 照 `docs/windows-test-checklist.md` 的「要手动试的」逐项试；要自己开测试版试别的，按 README.md「本机测试用的构建」换 identifier 和产品名、用 `TODOLIST_DATA_DIR` 指向临时目录
-5. 修掉的问题各自单独提交，提交说明写清在 Windows 上怎么实测的；能自动化的实测步骤补进 `e2e/suites/`
+GitHub Actions 的两个 workflow 都跑在 GitHub 的 Windows 机器上，在 Linux 上就能看结果（README.md「在 GitHub Actions 上跑」）：
+
+```sh
+gh run list --branch <分支> --limit 4         # CI 约 3 分钟，E2E 约 9 分钟
+gh run view <编号> --log                      # E2E 里搜 ✗ 看没通过的检查
+gh run download <编号> -n desktop             # E2E 没通过时当时整个桌面的截图
+gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"   # 修了以后只重跑这几个套件
+```
+
+还不想并进 main 的改动推到别的分支上试，两个 workflow 照样跑。
+
+## 还要在 Windows 上做的
+
+1. 照 `docs/windows-test-checklist.md` 的「要手动试的」逐项试；要自己开测试版试别的，按 README.md「本机测试用的构建」换 identifier 和产品名、用 `TODOLIST_DATA_DIR` 指向临时目录
+2. 端到端测试在 GitHub 上没通过、又看不出原因时，在本机跑 `npm run e2e -- <套件>` 重现（README.md「端到端测试（Windows）」），能看着窗口调试
+3. 修掉的问题各自单独提交，提交说明写清在 Windows 上怎么实测的；能自动化的实测步骤补进 `e2e/suites/`
 
 ## Linux 上发现不了的问题
 
@@ -142,6 +154,8 @@ exit 0
 | 在快速记录小窗里换了存到的项目，主窗口设置「常规」里还显示原来的 | 主窗口的设置只在启动时读一次；模拟后端只有一个窗口，看不出几个窗口之间的状态 | `e7f1558` |
 | 快速记录小窗出现在 Alt+Tab 里 | `skip_taskbar` 只去掉任务栏按钮，tao 给没有所有者的窗口总加上 `WS_EX_APPWINDOW` | `86d7131` |
 | 端到端测试里的拖动偶尔没开始 | 跑的时候有人在用别的程序，测试版失去焦点，页面按设计取消了拖动 | `d93d65b` |
+
+端到端测试搬到 GitHub 的 Windows 机器上时，又碰到三处那台机器和本机不同的地方（WebView2 不认环境变量、`TEMP` 是短文件名、机器慢），见 README.md「在 GitHub Actions 上跑」。
 
 另有两处是在 Linux 上靠审查、读 tao 和插件的源码提前发现的：恢复「最大化」会把隐藏着的主窗口显示出来（`47fd93b`）；快速记录小窗在事件处理里同步创建，Windows 上可能卡死（`823b13a`）。
 
@@ -155,13 +169,12 @@ Linux 上：
 - [ ] 新的 Tauri 命令在 `mock.ts` 里加上模拟；新的、不依赖 Tauri 的 Rust 模块加进测试壳的 `lib.rs`
 - [ ] `npm run lint; npm test; npm run build`，测试壳的 `cargo test` 和 `check-windows.sh`
 - [ ] 在模拟后端里把功能点一遍，浅色、深色都截图看
-- [ ] 要在 Windows 上才能确认的，能写的先写进 `e2e/suites/`（Linux 上跑不了，`npm run lint` 会检查脚本），端到端测试也测不到的写进 `docs/windows-test-checklist.md` 的「要手动试的」
-- [ ] 一个功能一个提交，推送后看 CI
+- [ ] 要在 Windows 上才能确认的，写进 `e2e/suites/`（Linux 上跑不了，`npm run lint` 会检查脚本；推送后在 E2E 里跑），端到端测试也测不到的写进 `docs/windows-test-checklist.md` 的「要手动试的」
+- [ ] 一个功能一个提交，推送后看 CI 和 E2E 都通过，没通过的修了再推
 
 Windows 上：
 
-- [ ] `npm ci`，和 CI 相同的检查
-- [ ] `npm run e2e`（或相关的几个套件），手动清单
+- [ ] 手动清单里新加的那几项
 - [ ] 修掉的问题各自提交
 
 ## 两边用到的工具
@@ -173,4 +186,4 @@ Windows 上：
 | 界面 | `@tauri-apps/api/mocks` 模拟后端 + playwright-core + chrome-headless-shell | 测试版程序，经 WebView2 的远程调试端口（CDP）操作页面（`e2e/lib/cdp.mjs`） |
 | 系统 | — | PowerShell 调 Win32 API（`e2e/win/win.ps1`）：窗口、`WM_HOTKEY`、注册表、回收站、任务栏、文件占用 |
 | 打包、安装 | — | NSIS 安装包，`npm run release` |
-| CI | GitHub Actions（`windows-latest`），推送后自动跑 | |
+| CI | GitHub Actions（`windows-latest`）：`ci.yml`（lint、单元测试、构建、`cargo test`）和 `e2e.yml`（端到端测试），推送后自动跑，在 Linux 上用 `gh` 看结果 | |

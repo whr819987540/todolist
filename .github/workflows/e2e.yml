@@ -1,0 +1,76 @@
+# 在 GitHub 的 Windows 机器上跑端到端测试（npm run e2e，见 README.md「端到端测试（Windows）」）
+name: E2E
+
+on:
+  push:
+  # 手动跑：Actions 页面，或 gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: 只跑这几个套件（空格分开，空着跑全部）
+        required: false
+        default: ""
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 测试版构建在 src-tauri/target/e2e（和 CI 的 cargo test 分开）
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target/e2e
+          cache-on-failure: true
+
+      # 记下机器的情况，测试没通过时对照
+      - name: 环境
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          $wv = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue).pv
+          $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          "系统：$((Get-CimInstance Win32_OperatingSystem).Caption)"
+          "WebView2：$wv"
+          "用户：$env:USERNAME，管理员：$admin，交互式：$([Environment]::UserInteractive)，会话：$((Get-Process -Id $PID).SessionId)"
+          "屏幕：$([Windows.Forms.Screen]::PrimaryScreen.Bounds)"
+          "explorer：$(@(Get-Process explorer -ErrorAction SilentlyContinue).Count) 个"
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 等于 npm run e2e [套件…]；直接调 node，套件名一个个作为参数传过去
+      - name: 端到端测试
+        env:
+          SUITES: ${{ inputs.suites }}
+        run: node e2e/run.mjs @("$env:SUITES" -split '\s+' | Where-Object { $_ })
+
+      # 没通过时截一张整个桌面的图，看窗口当时的样子
+      - name: 截屏
+        if: failure()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object Drawing.Bitmap $b.Width, $b.Height
+          [Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$env:RUNNER_TEMP\desktop.png")
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop
+          path: ${{ runner.temp }}/desktop.png
+          if-no-files-found: ignore
