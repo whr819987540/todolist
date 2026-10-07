@@ -183,7 +183,7 @@ npm run e2e -- --keep             # 跑完留着测试数据（%TEMP%\todolist-e
 - 构建测试版（`src-tauri/target/e2e/debug/todo-list.exe`，identifier `com.whr.todolist.e2e`、产品名「待办清单自动测试」）：和安装版、手动测试的构建是不同的应用，可以同时运行，开机启动项、窗口位置、WebView2 缓存都分开。全局快捷键用 Ctrl+Alt+Y（显示 / 隐藏主窗口）、Ctrl+Alt+J（快速记录），避开安装版的 Ctrl+Alt+T、Ctrl+Alt+N；被占着时开头会提示
 - 前端从 Vite 开发服务器（:1420）加载：已经有一个在跑就用它（要是这个工作副本的），否则自己启动、跑完关掉
 - 每个套件开始前退出测试版、重建测试数据（`%TEMP%\todolist-e2e\data`，`e2e/lib/fixtures.mjs`），再启动；不碰真实数据
-- 经 WebView2 的远程调试端口（9223，`e2e/lib/cdp.mjs`）在页面里执行代码、发送真实的键盘 / 鼠标事件；窗口状态、注册表、回收站、任务栏经 PowerShell 调 Win32 API（`e2e/win/win.ps1`，带 UTF-8 BOM）。全局快捷键是直接给测试版的热键窗口发 `WM_HOTKEY`，不模拟真实按键，按键不会跑到别的程序里
+- 测试版的主窗口在配置里打开 WebView2 的远程调试端口 9223（构建时经 `TAURI_CONFIG` 给它加上 `additionalBrowserArgs`；不用环境变量 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`，有的机器上 WebView2 不认它）。设了这一项就不带 wry 默认的参数，要一起写上；快速记录小窗沿用主窗口的参数，同一个 WebView2 数据目录里参数不一致时窗口建不起来。经这个端口（`e2e/lib/cdp.mjs`）在页面里执行代码、发送真实的键盘 / 鼠标事件；窗口状态、注册表、回收站、任务栏经 PowerShell 调 Win32 API（`e2e/win/win.ps1`，带 UTF-8 BOM）。全局快捷键是直接给测试版的热键窗口发 `WM_HOTKEY`，不模拟真实按键，按键不会跑到别的程序里
 - 跑完删掉测试版的开机启动项；彻底删除、清空回收站、放满 30 天的检查会真的移到 Windows 回收站，跑完从那里还原回测试数据目录再一起删掉，不在你的回收站里留东西
 
 注意：
@@ -231,7 +231,7 @@ npm run e2e -- --keep             # 跑完留着测试数据（%TEMP%\todolist-e
 - `src-tauri/src/autostart.rs`：开机自启，读写注册表的 `Run`（启动项名是产品名，Tauri 的卸载程序不是升级时会删掉它）和任务管理器的禁用标记 `StartupApproved\Run`；开机自启时命令行带 `--autostart`，主窗口一开始是隐藏的（`tauri.conf.json` 里 `visible: false`），`lib.rs` 的 `setup` 里按设置决定显不显示。只在托盘里时先不恢复「最大化」（恢复最大化会把窗口显示出来），第一次显示主窗口时再恢复；一直没显示过就退出时，记住窗口状态的插件会按隐藏着的窗口记成没最大化，退出时（`RunEvent::Exit`，插件之后）把主窗口那一项改回启动时的样子
 - `src-tauri/src/backup.rs`：设置备份包的打包、解包、命名和读本地的备份文件
 - `src-tauri/src/webdav.rs`：WebDAV 连接配置、密码存取、客户端（含代理处理）
-- `src-tauri/src/lib.rs`：Tauri 命令、打开外部程序和链接、系统托盘、全局快捷键（显示 / 隐藏主窗口和快速记录两个，按下时按 `GLOBAL_KEYS` 找是哪个）、快速记录小窗（label `quick`，第一次用时建，启动 3 秒后也先建好；之后藏起来留着；`skip_taskbar` 只去掉任务栏按钮，每次显示后再标成工具窗口（`WS_EX_TOOLWINDOW`），Alt+Tab 里也没有；存好后给主窗口发 `data-changed`、`open-todo` 事件）、窗口图标、本地备份、恢复设置时的文件对话框（tauri-plugin-dialog，只在 Rust 端调用，前端没有对话框的权限；都从数据目录打开）
+- `src-tauri/src/lib.rs`：Tauri 命令、打开外部程序和链接、系统托盘、全局快捷键（显示 / 隐藏主窗口和快速记录两个，按下时按 `GLOBAL_KEYS` 找是哪个）、快速记录小窗（label `quick`，第一次用时建，启动 3 秒后也先建好；之后藏起来留着；`skip_taskbar` 只去掉任务栏按钮，每次显示后再标成工具窗口（`WS_EX_TOOLWINDOW`），Alt+Tab 里也没有；WebView2 的参数（`additionalBrowserArgs`）沿用主窗口配置里的；存好后给主窗口发 `data-changed`、`open-todo` 事件）、窗口图标、本地备份、恢复设置时的文件对话框（tauri-plugin-dialog，只在 Rust 端调用，前端没有对话框的权限；都从数据目录打开）
 - `src/components/RecycleBin.tsx`：回收站对话框和打开它的按钮（首页头部、侧栏底部）；`src/components/undo.tsx` 是删除后带「撤销」的提示（`useUndoDelete`），恢复后 Rust 端给主窗口发 `data-changed` 刷新
 - `quick.html`、`src/quick.tsx`、`src/components/QuickCapture.tsx`：快速记录小窗，是 Vite 的第二个页面（`vite.config.ts` 的 `rollupOptions.input`），和主窗口共用 `styles.css`、主题和 `webview.ts`（屏蔽网页的右键菜单、刷新等快捷键）；`src/quickCapture.ts` 是它的选项、按键和草稿；主窗口收到 `data-changed` 时刷新（`hooks.ts` 的 `useAppEvent`），收到 `open-todo` 时打开那条待办（`WorkspaceView` 的 `open` 先重新加载再选中）
 - `src/settings.tsx`：前端的设置状态；主题、字号、编辑区背景色、保存方式改动立即生效，停顿片刻再存盘。主题交给 `main.tsx` 的 `Root` 应用（它在 antd 的主题配置外面）；字号写进 CSS 变量 `--fs-sidebar` / `--fs-editor`；背景色标在根元素的 `data-editor-bg` 上、自定义颜色写进 `--c-editor-custom`，`styles.css` 在浅色模式下据此给编辑区上色

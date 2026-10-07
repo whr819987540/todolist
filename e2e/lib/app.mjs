@@ -5,7 +5,7 @@
 // 程序是 debug 构建，前端从 Vite 开发服务器（:1420）加载，测试里可以 import 页面用的模块（如替换 api 的方法）
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,12 +24,28 @@ export const VITE_URL = "http://localhost:1420";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 测试版的配置，盖在 tauri.conf.json 上：换 identifier、产品名，主窗口的 WebView2 打开远程调试端口（CDP）。
+ * 端口写在配置里，不用环境变量 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS：GitHub 的 Windows 机器上 WebView2 不认它。
+ * 设了 additionalBrowserArgs 就不再带 wry 默认的参数，要一起写上；快速记录小窗在 lib.rs 里沿用主窗口的
+ */
+function testConfig() {
+  const conf = JSON.parse(readFileSync(join(ROOT, "src-tauri", "tauri.conf.json"), "utf8"));
+  // TAURI_CONFIG 按 JSON Merge Patch 合并，数组整个替换，所以要给出完整的 windows
+  const windows = conf.app.windows.map((w) =>
+    w.label === "main"
+      ? { ...w, additionalBrowserArgs: `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=${CDP_PORT}` }
+      : w,
+  );
+  return { identifier: IDENTIFIER, productName: PRODUCT, app: { windows } };
+}
+
 /** 构建测试版（增量构建，没改 Rust 代码时几秒） */
 export function build() {
   console.log("构建测试版程序…");
   execFileSync("cargo", ["build", "--manifest-path", join(ROOT, "src-tauri", "Cargo.toml"), "--target-dir", TARGET_DIR], {
     stdio: "inherit",
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ identifier: IDENTIFIER, productName: PRODUCT }) },
+    env: { ...process.env, TAURI_CONFIG: JSON.stringify(testConfig()) },
   });
 }
 
@@ -98,7 +114,6 @@ export async function launch(args = [], onSpawn) {
     env: {
       ...process.env,
       TODOLIST_DATA_DIR: DATA,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
     },
   });
   child.unref();

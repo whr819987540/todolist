@@ -358,7 +358,7 @@ fn quick_window(app: &AppHandle) -> Option<WebviewWindow> {
     if let Some(w) = app.get_webview_window(QUICK) {
         return Some(w);
     }
-    let built = WebviewWindowBuilder::new(app, QUICK, WebviewUrl::App("quick.html".into()))
+    let mut builder = WebviewWindowBuilder::new(app, QUICK, WebviewUrl::App("quick.html".into()))
         .title("快速记录")
         .inner_size(600.0, 248.0)
         .resizable(false)
@@ -367,8 +367,14 @@ fn quick_window(app: &AppHandle) -> Option<WebviewWindow> {
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
-        .visible(false)
-        .build();
+        .visible(false);
+    // 和主窗口用同样的 WebView2 参数：同一个数据目录里参数不同的 WebView 建不起来
+    // （端到端测试版经 TAURI_CONFIG 给主窗口加了远程调试端口）
+    let main_args = app.config().app.windows.iter().find(|w| w.label == "main");
+    if let Some(args) = main_args.and_then(|w| w.additional_browser_args.as_deref()) {
+        builder = builder.additional_browser_args(args);
+    }
+    let built = builder.build();
     // 两处同时在建（启动时预先建的和按了快捷键的）：后建的会因为 label 重复失败，用先建好的
     built.ok().or_else(|| app.get_webview_window(QUICK))
 }
