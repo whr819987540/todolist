@@ -27,7 +27,9 @@ export default function GeneralSettings() {
   useEffect(() => {
     api.getAutostart().then(setAutostart, () => setAutostart(false));
     api.listProjects().then(setProjects, () => {});
-  }, []);
+    // 快速记录存到哪里会在主窗口之外改掉：在小窗里换了项目、项目改名或移到别的工作区后跟着改了（Rust 端），重新读一次
+    api.getSettings().then(setInfo, () => {});
+  }, [setInfo]);
   if (!info) return <div className="setting-item" />;
 
   const run = async (fn: () => Promise<void>) => {
