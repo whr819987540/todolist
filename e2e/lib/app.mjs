@@ -5,7 +5,7 @@
 // 程序是 debug 构建，前端从 Vite 开发服务器（:1420）加载，测试里可以 import 页面用的模块（如替换 api 的方法）
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,8 @@ export const IDENTIFIER = "com.whr.todolist.e2e";
 export const PRODUCT = "待办清单自动测试";
 export const TARGET_DIR = join(ROOT, "src-tauri", "target", "e2e");
 export const EXE = join(TARGET_DIR, "debug", "todo-list.exe");
-export const WORK = join(tmpdir(), "todolist-e2e");
+// 用长路径：GitHub 的 Windows 机器上 TEMP 是短文件名（C:\Users\RUNNER~1\...），Windows 回收站记的原位置是长路径，对不上
+export const WORK = join(realpathSync.native(tmpdir()), "todolist-e2e");
 export const DATA = join(WORK, "data");
 export const CDP_PORT = 9223;
 export const VITE_URL = "http://localhost:1420";
