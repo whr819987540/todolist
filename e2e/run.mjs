@@ -72,6 +72,12 @@ function makeContext() {
       results.push({ suite: current, name, ok });
       console.log(`  ${ok ? "✓" : "✗"} ${name}${ok || extra === undefined ? "" : "\n      " + JSON.stringify(extra)}`);
     },
+    /** 等到 fn() 为真（每 200 毫秒看一次），最多 ms 毫秒；返回最后一次的结果 */
+    async until(fn, ms = 5000) {
+      let r;
+      for (let waited = 0; !(r = await fn()) && waited < ms; waited += 200) await sleep(200);
+      return r;
+    },
     /** 这次没法检查的（如 Windows 不让测试版拿到前台），列出来但不算失败 */
     skip(name, reason) {
       results.push({ suite: current, name, ok: true, skipped: true });

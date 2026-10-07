@@ -28,10 +28,15 @@ export default async function (t) {
   check("Shift+单击选中一段：按列表里显示的顺序，可以跨项目、跨工作区", (await picked()).join() === "工作/需求/B,工作/需求/C,生活/购物/GBK笔记,生活/杂事/E", await picked());
 
   await m.clearToasts();
+  // 一条条改完才提示，机器慢时 800 毫秒不一定改完：等到改完再看
+  const doneOf = async () => ({ B: todo("工作", "需求", "B").done, E: todo("生活", "杂事", "E").done, toast: await m.toast() });
   await batchButton("标记为已完成");
-  check("批量标记为已完成", todo("工作", "需求", "B").done && todo("生活", "杂事", "E").done && (await m.toast()).includes("已把 4 条标记为已完成"));
+  const done = await t.until(async () => { const d = await doneOf(); return d.B && d.E && d.toast.includes("已把 4 条标记为已完成"); });
+  check("批量标记为已完成", done, done || (await doneOf()));
+  await m.clearToasts();
   await batchButton("标记为未完成");
-  check("批量标记为未完成", !todo("工作", "需求", "B").done && !todo("生活", "杂事", "E").done);
+  const undone = await t.until(async () => { const d = await doneOf(); return !d.B && !d.E && d.toast.includes("已把 4 条标记为未完成"); });
+  check("批量标记为未完成", undone, undone || (await doneOf()));
   await batchButton("置顶");
   check("批量置顶", todo("工作", "需求", "C").pinned && todo("生活", "杂事", "E").pinned);
   await batchButton("取消置顶");
