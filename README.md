@@ -198,7 +198,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
 
 - `src-tauri/src/store.rs`：文件存储、元数据对齐、名称校验，软件的回收站（删除时连同说明移进 `.recycle`，恢复、彻底删除、清空、放满 30 天的移到系统回收站；单元测试里「系统回收站」是 `.trash`，不碰用户真正的回收站），界面状态文件 `.state.json` 的读写（内容由前端决定）；左侧显示的正文开头（预览）缓存在内存里，按 .md 的修改时间和大小判断是否失效，文件没变就不重新读（窗口每次获得焦点都要重新加载选中的工作区，待办多时读几千个文件开头很慢），缓存是空的时（刚启动）分给几个线程一起读；全文搜索（`search`）用的正文全文同样缓存在内存里，按同样的办法判断是否失效，软件里保存时直接丢掉那一条（连着很快保存两次、长度又一样时修改时间和大小可能都没变）；缓存不写进任何文件，免得数据目录用网盘同步时多出冲突
 - `src-tauri/src/settings.rs`：应用设置（快捷键、改过的编辑快捷键、主题、字号、编辑区背景色、保存方式、开屏方式、开机自启时是否显示主窗口、快速记录存到哪个项目）的读写和字号、保存间隔的范围
-- `src-tauri/src/autostart.rs`：开机自启，读写注册表的 `Run`（启动项名是产品名，Tauri 的卸载程序不是升级时会删掉它）和任务管理器的禁用标记 `StartupApproved\Run`；开机自启时命令行带 `--autostart`，主窗口一开始是隐藏的（`tauri.conf.json` 里 `visible: false`），`lib.rs` 的 `setup` 里按设置决定显不显示
+- `src-tauri/src/autostart.rs`：开机自启，读写注册表的 `Run`（启动项名是产品名，Tauri 的卸载程序不是升级时会删掉它）和任务管理器的禁用标记 `StartupApproved\Run`；开机自启时命令行带 `--autostart`，主窗口一开始是隐藏的（`tauri.conf.json` 里 `visible: false`），`lib.rs` 的 `setup` 里按设置决定显不显示。只在托盘里时先不恢复「最大化」（恢复最大化会把窗口显示出来），第一次显示主窗口时再恢复；一直没显示过就退出时，记住窗口状态的插件会按隐藏着的窗口记成没最大化，退出时（`RunEvent::Exit`，插件之后）把主窗口那一项改回启动时的样子
 - `src-tauri/src/backup.rs`：设置备份包的打包、解包、命名和读本地的备份文件
 - `src-tauri/src/webdav.rs`：WebDAV 连接配置、密码存取、客户端（含代理处理）
 - `src-tauri/src/lib.rs`：Tauri 命令、打开外部程序和链接、系统托盘、全局快捷键（显示 / 隐藏主窗口和快速记录两个，按下时按 `GLOBAL_KEYS` 找是哪个）、快速记录小窗（label `quick`，第一次用时建，启动 3 秒后也先建好；之后藏起来留着；存好后给主窗口发 `data-changed`、`open-todo` 事件）、窗口图标、本地备份、恢复设置时的文件对话框（tauri-plugin-dialog，只在 Rust 端调用，前端没有对话框的权限；都从数据目录打开）

@@ -12,7 +12,6 @@ use settings::{
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use store::{
@@ -26,7 +25,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-use tauri_plugin_window_state::{StateFlags, WindowExt};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 use webdav::{WebDav, WebDavConfig, WebDavInfo, WebDavStore};
 
 type Cmd<T> = Result<T, String>;
@@ -494,13 +493,55 @@ fn window_state_flags() -> StateFlags {
     StateFlags::all() & !StateFlags::VISIBLE
 }
 
-/// 开机自启、只在托盘里时还没恢复「最大化」：恢复最大化会把隐藏的窗口显示出来，等第一次显示主窗口时再恢复
-static MAXIMIZE_ON_SHOW: AtomicBool = AtomicBool::new(false);
+/// 开机自启、只在托盘里时主窗口还没显示过：这时还没恢复「最大化」（恢复最大化会把隐藏的窗口显示出来），
+/// 等第一次显示主窗口时再恢复。Some 里是启动时窗口状态文件里主窗口的那一项（没有时为 Null），
+/// 一直没显示过就退出时原样写回（见 keep_unshown_window_state）
+static HIDDEN_AT_START: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+
+fn hidden_at_start() -> MutexGuard<'static, Option<serde_json::Value>> {
+    HIDDEN_AT_START.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 记住窗口大小和位置的文件（tauri-plugin-window-state 的）
+fn window_state_path(app: &AppHandle) -> Option<PathBuf> {
+    Some(app.path().app_config_dir().ok()?.join(app.filename()))
+}
+
+/// 窗口状态文件里主窗口的那一项，没有时为 Null
+fn saved_main_window_state(app: &AppHandle) -> serde_json::Value {
+    window_state_path(app)
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|mut v| v.get_mut("main").map(serde_json::Value::take))
+        .unwrap_or_default()
+}
+
+/// 开机自启只在托盘里、一直没显示过主窗口就退出了：记住窗口状态的插件退出时按隐藏着的窗口记下了「没最大化」，
+/// 下次正常打开时就不是最大化的了，所以把主窗口那一项改回启动时的样子。插件先于这里处理退出事件
+fn keep_unshown_window_state(app: &AppHandle) {
+    let Some(saved) = hidden_at_start().take() else { return };
+    let Some(path) = window_state_path(app) else { return };
+    let current = std::fs::read_to_string(&path).ok();
+    if let Some(text) = with_window_state(current.as_deref(), "main", saved) {
+        let _ = std::fs::write(&path, text);
+    }
+}
+
+/// 窗口状态文件的内容 text 里 label 那一项换成 state；state 为 Null（启动时还没有记过）时不改，返回 None
+fn with_window_state(text: Option<&str>, label: &str, state: serde_json::Value) -> Option<String> {
+    if state.is_null() {
+        return None;
+    }
+    let mut all: serde_json::Map<String, serde_json::Value> =
+        text.and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default();
+    all.insert(label.into(), state);
+    serde_json::to_string_pretty(&all).ok()
+}
 
 /// 把主窗口从托盘 / 最小化状态调回前台
 fn show_main_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        if MAXIMIZE_ON_SHOW.swap(false, Ordering::Relaxed) {
+        if hidden_at_start().take().is_some() {
             let _ = w.restore_state(StateFlags::MAXIMIZED);
         }
         let _ = w.unminimize();
@@ -1003,8 +1044,8 @@ pub fn run() {
                 #[cfg(windows)]
                 set_window_icons(&w);
                 if hidden {
+                    *hidden_at_start() = Some(saved_main_window_state(app.handle()));
                     let _ = w.restore_state(window_state_flags() & !StateFlags::MAXIMIZED);
-                    MAXIMIZE_ON_SHOW.store(true, Ordering::Relaxed);
                 } else {
                     let _ = w.restore_state(window_state_flags());
                     let _ = w.show();
@@ -1078,13 +1119,19 @@ pub fn run() {
             restore_from_webdav,
             restore_from_file,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                keep_unshown_window_state(app);
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_web_link;
+    use super::{is_web_link, with_window_state};
+    use serde_json::json;
 
     #[test]
     fn only_web_links_can_be_opened() {
@@ -1094,5 +1141,22 @@ mod tests {
         for bad in ["https://", "file:///C:/Windows/notepad.exe", "C:\\a.exe", "./a.md", "javascript:alert(1)", ""] {
             assert!(!is_web_link(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn unshown_window_keeps_its_saved_state() {
+        let saved = json!({ "width": 1200, "height": 780, "x": -8, "y": -8, "prev_x": 300, "prev_y": 200, "maximized": true });
+        // 退出时插件按隐藏着的窗口记成了没最大化；别的窗口的那一项不动
+        let written = r#"{ "main": { "width": 1200, "height": 780, "x": 300, "y": 200, "maximized": false }, "other": { "width": 1 } }"#;
+        let fixed: serde_json::Value = serde_json::from_str(&with_window_state(Some(written), "main", saved.clone()).unwrap()).unwrap();
+        assert_eq!(fixed["main"], saved);
+        assert_eq!(fixed["other"], json!({ "width": 1 }));
+        // 文件不在、坏了：只写这一项
+        for text in [None, Some("不是 JSON")] {
+            let fixed: serde_json::Value = serde_json::from_str(&with_window_state(text, "main", saved.clone()).unwrap()).unwrap();
+            assert_eq!(fixed, json!({ "main": saved }));
+        }
+        // 启动时还没有记过：不改
+        assert_eq!(with_window_state(Some(written), "main", serde_json::Value::Null), None);
     }
 }
