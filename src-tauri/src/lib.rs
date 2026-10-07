@@ -408,9 +408,29 @@ fn present_quick_window(app: &AppHandle, w: &WebviewWindow) {
         place_quick_window(app, w);
     }
     let _ = w.show();
+    #[cfg(windows)]
+    hide_from_alt_tab(w);
     let _ = w.set_focus();
     // 小窗据此聚焦输入框、重新读设置（主题、存到哪里）和项目列表
     let _ = app.emit_to(QUICK, "quick-capture-shown", ());
+}
+
+/// 快速记录小窗不出现在 Alt+Tab 里：标成工具窗口（加 WS_EX_TOOLWINDOW、去掉 WS_EX_APPWINDOW）。
+/// skip_taskbar 只是从任务栏上去掉按钮，Alt+Tab 里还有；tao 每次显示、隐藏窗口时都按自己记的样式重设一遍扩展样式
+/// （没有所有者的窗口总带着 WS_EX_APPWINDOW），所以每次显示之后再标一次，排在主线程里 show 的后面
+#[cfg(windows)]
+fn hide_from_alt_tab(w: &WebviewWindow) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    };
+    let Ok(hwnd) = w.hwnd() else { return };
+    // HWND 是裸指针，不能直接带进别的线程
+    let hwnd = hwnd.0 as isize;
+    let _ = w.run_on_main_thread(move || unsafe {
+        let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize));
+    });
 }
 
 /// 快速记录的全局快捷键：小窗在前台时藏起来，否则弹出来
