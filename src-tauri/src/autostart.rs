@@ -36,18 +36,27 @@ mod imp {
     const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
     const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
     /// StartupApproved 里「启用」的值
-    const ENABLED: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    pub(super) const ENABLED: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
     pub fn is_enabled(name: &str) -> bool {
-        let listed = CURRENT_USER.open(RUN).and_then(|k| k.get_value(name)).is_ok();
-        let state = CURRENT_USER.open(APPROVED).and_then(|k| k.get_value(name)).ok();
-        listed && approved(state.as_deref())
+        is_enabled_at(RUN, APPROVED, name)
     }
 
     pub fn set(name: &str, exe: &Path, enabled: bool) -> Result<(), String> {
-        let run = CURRENT_USER.create(RUN).map_err(|e| format!("无法修改开机启动项：{e}"))?;
+        set_at(RUN, APPROVED, name, exe, enabled)
+    }
+
+    /// run_at、approved_at 是 HKCU 下 Run 和 StartupApproved\Run 的位置（单元测试换成别的位置，不碰真正的启动项）
+    pub(super) fn is_enabled_at(run_at: &str, approved_at: &str, name: &str) -> bool {
+        let listed = CURRENT_USER.open(run_at).and_then(|k| k.get_value(name)).is_ok();
+        let state = CURRENT_USER.open(approved_at).and_then(|k| k.get_value(name)).ok();
+        listed && approved(state.as_deref())
+    }
+
+    pub(super) fn set_at(run_at: &str, approved_at: &str, name: &str, exe: &Path, enabled: bool) -> Result<(), String> {
+        let run = CURRENT_USER.create(run_at).map_err(|e| format!("无法修改开机启动项：{e}"))?;
         // StartupApproved 不一定有（从没在任务管理器里改过），没有就不建
-        let state = CURRENT_USER.options().read().write().open(APPROVED).ok();
+        let state = CURRENT_USER.options().read().write().open(approved_at).ok();
         if enabled {
             run.set_string(name, command(exe)).map_err(|e| format!("无法设置开机启动：{e}"))?;
             // 以前在任务管理器里禁用过的改回启用
@@ -63,7 +72,7 @@ mod imp {
                 let _ = k.remove_value(name);
             }
         }
-        if is_enabled(name) != enabled {
+        if is_enabled_at(run_at, approved_at, name) != enabled {
             return Err(if enabled { "开机启动没有设置成功" } else { "开机启动没有关掉" }.into());
         }
         Ok(())
@@ -121,5 +130,46 @@ mod tests {
         // 在任务管理器里禁用了
         assert!(!approved(Some(&[3, 0, 0, 0, 0x8a, 0x1f, 0, 0, 0, 0, 0, 0])));
         assert!(!approved(Some(&[7])));
+    }
+
+    /// 在 HKCU\Software 下一个临时的位置实际读写注册表（不碰真正的启动项），测完删掉
+    #[cfg(windows)]
+    #[test]
+    fn registry_follows_task_manager_state() {
+        use windows_registry::{Type, CURRENT_USER};
+        struct Scratch(String);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = CURRENT_USER.remove_tree(&self.0);
+            }
+        }
+        let base = Scratch(format!(r"Software\TodoListAutostartTest-{}", std::process::id()));
+        let run = format!(r"{}\Run", base.0);
+        let approved_at = format!(r"{}\StartupApproved\Run", base.0);
+        let (name, exe) = ("待办清单", Path::new(r"C:\Users\Zhang San\AppData\Local\待办清单\todo-list.exe"));
+        let state = || CURRENT_USER.open(&approved_at).and_then(|k| k.get_value(name)).ok().map(|v| v.to_vec());
+
+        assert!(!imp::is_enabled_at(&run, &approved_at, name));
+        imp::set_at(&run, &approved_at, name, exe, true).unwrap();
+        assert!(imp::is_enabled_at(&run, &approved_at, name));
+        assert_eq!(CURRENT_USER.open(&run).unwrap().get_string(name).unwrap(), command(exe));
+        // 从没在任务管理器里改过：不建 StartupApproved
+        assert!(CURRENT_USER.open(&approved_at).is_err());
+
+        // 在任务管理器里禁用了：算关闭
+        let disabled = [3, 0, 0, 0, 0x8a, 0x1f, 0x3c, 0x52, 0x10, 0x2b, 0xdc, 0x01];
+        CURRENT_USER.create(&approved_at).unwrap().set_bytes(name, Type::Bytes, &disabled).unwrap();
+        assert!(!imp::is_enabled_at(&run, &approved_at, name));
+        // 在软件里重新打开：改回启用
+        imp::set_at(&run, &approved_at, name, exe, true).unwrap();
+        assert_eq!(state(), Some(imp::ENABLED.to_vec()));
+        assert!(imp::is_enabled_at(&run, &approved_at, name));
+
+        // 关闭：两处都删掉；本来就关着时再关不算失败
+        imp::set_at(&run, &approved_at, name, exe, false).unwrap();
+        assert!(CURRENT_USER.open(&run).unwrap().get_value(name).is_err());
+        assert_eq!(state(), None);
+        imp::set_at(&run, &approved_at, name, exe, false).unwrap();
+        assert!(!imp::is_enabled_at(&run, &approved_at, name));
     }
 }
