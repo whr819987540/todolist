@@ -27,6 +27,18 @@ const KEYS = {
 };
 
 /**
+ * 拖动时在页面里留意会让页面取消拖动的事：窗口失去焦点，或没按着键的鼠标移动（测试发的移动都带着 buttons: 1，
+ * 没按着的只能是真的鼠标）。WATCH_STOP 返回看到了什么，没有时是空字符串
+ */
+const WATCH_START = `const w = window.__e2e; w.stopWatch?.(); const seen = new Set();
+  const blur = () => seen.add("窗口失去了焦点");
+  const move = (e) => { if (!(e.buttons & 1)) seen.add("真的鼠标在窗口上动了"); };
+  addEventListener("blur", blur); addEventListener("mousemove", move, true);
+  w.stopWatch = () => { removeEventListener("blur", blur); removeEventListener("mousemove", move, true); w.stopWatch = null; return [...seen].join("、"); };
+  return 1`;
+const WATCH_STOP = `return window.__e2e.stopWatch?.() ?? ""`;
+
+/**
  * 连到页面：kind 为 "main"（主窗口）或 "quick"（快速记录小窗）。返回的对象：
  * - ev(code)：在页面里执行一段 async 函数体（可以用 page.mjs 里的工具函数），返回 return 的值
  * - press("Ctrl+Shift+F")、type(text)：真实的按键、输入
@@ -100,16 +112,31 @@ export async function connect(kind = "main") {
     await mouse("mouseReleased", p, { button, buttons: 0, clickCount: 1, modifiers });
     await sleep(250);
   };
-  /** 拖动：按下、分几步移到 to（带 buttons: 1，否则页面以为鼠标已经松开）；release 为 false 时停在那里不松开 */
+  /**
+   * 拖动：按下、分几步移到 to（带 buttons: 1，否则页面以为鼠标已经松开）；release 为 false 时停在那里不松开。
+   * 拖动中窗口失去焦点、或真的鼠标在窗口上动了（有人在用电脑），页面会取消拖动：这时松开重来，最多拖三次。
+   * 在松开之前看，拖成了的不会再拖一次
+   */
   const drag = async (from, to, { steps = 12, release = true } = {}) => {
-    await mouse("mouseMoved", from);
-    await mouse("mousePressed", from, { button: "left", buttons: 1, clickCount: 1 });
-    for (let i = 1; i <= steps; i++) {
-      const p = { x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps };
-      await mouse("mouseMoved", p, { button: "left", buttons: 1 });
-      await sleep(16);
+    for (let attempt = 1; ; attempt++) {
+      await mouse("mouseMoved", from);
+      await ev(WATCH_START);
+      await mouse("mousePressed", from, { button: "left", buttons: 1, clickCount: 1 });
+      for (let i = 1; i <= steps; i++) {
+        const p = { x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps };
+        await mouse("mouseMoved", p, { button: "left", buttons: 1 });
+        await sleep(16);
+      }
+      const disturbed = await ev(WATCH_STOP);
+      if (!disturbed || attempt === 3) {
+        if (disturbed) console.log(`  ! 拖动三次都被打断（${disturbed}），下面的检查多半不通过；别动键盘鼠标后重跑这个套件`);
+        if (release) await drop(to);
+        return;
+      }
+      console.log(`  ↻ 拖动被打断（${disturbed}），重拖一次`);
+      await mouse("mouseReleased", to, { button: "left", buttons: 0, clickCount: 1 });
+      await sleep(500);
     }
-    if (release) await drop(to);
   };
   const drop = async (p) => {
     await mouse("mouseReleased", p, { button: "left", buttons: 0, clickCount: 1 });
