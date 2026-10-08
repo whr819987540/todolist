@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeAfterClose, closeTabs, mapTabs, type OpenTodo, openTab, stepTab, type TodoRef } from "./tabs";
+import { activeAfterClose, closeTabs, mapTabs, moveTab, type OpenTodo, openTab, stepTab, type TodoRef } from "./tabs";
 
 // docs/requirements.md「右侧标签页」：单击打开在预览标签里，再打开别的待办时预览标签被替换（在原处）；修改、双击、新建的是固定标签；
 // 已经有标签的切过去、不挪位置；新开的放在正显示着的右边。关掉正显示着的切到右边的（没有时左边的），都关掉了回到项目。
@@ -70,6 +70,33 @@ describe("关掉标签后显示哪一个", () => {
   it("关掉后列表里去掉这些，别的顺序不变", () => {
     expect(show(closeTabs(shown, [todo("b"), todo("d")]))).toBe("a c");
     expect(closeTabs(shown, [todo("x")])).toBe(shown);
+  });
+});
+
+describe("拖动标签调整顺序", () => {
+  const list = [fixed("a"), fixed("b"), fixed("c"), fixed("d")];
+
+  it("拖到另一个标签的前面 / 后面", () => {
+    expect(show(moveTab(list, todo("d"), todo("b"), "before"))).toBe("a d b c");
+    expect(show(moveTab(list, todo("a"), todo("c"), "after"))).toBe("b c a d");
+    expect(show(moveTab(list, todo("a"), todo("d"), "after"))).toBe("b c d a");
+    expect(show(moveTab(list, todo("d"), todo("a"), "before"))).toBe("d a b c");
+  });
+
+  it("放回原处（自己上、前一个的后面、后一个的前面）：不变", () => {
+    expect(moveTab(list, todo("b"), todo("b"), "before")).toBe(list);
+    expect(moveTab(list, todo("b"), todo("a"), "after")).toBe(list);
+    expect(moveTab(list, todo("b"), todo("c"), "before")).toBe(list);
+  });
+
+  it("藏起来的标签（没选中的工作区里的）相对顺序不变", () => {
+    const mixed = [fixed("a"), fixed("x", "杂事", "生活"), fixed("b"), fixed("c")];
+    expect(show(moveTab(mixed, todo("c"), todo("b"), "before"))).toBe("a x c b");
+    expect(show(moveTab(mixed, todo("a"), todo("b"), "after"))).toBe("x b a c");
+  });
+
+  it("预览标签拖动后仍是预览的", () => {
+    expect(moveTab([fixed("a"), preview("b")], todo("b"), todo("a"), "before")[0].preview).toBe(true);
   });
 });
 

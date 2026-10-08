@@ -11,7 +11,7 @@ import type { EditPosition, TextAnchor } from "./editor/position";
 import type { EditorMode } from "./editor/setup";
 import { registerFlusher } from "./hooks";
 import { mapPlaces } from "./navHistory";
-import { closeTabs, mapTabs, type OpenTodo, openTab, type TodoRef } from "./tabs";
+import { closeTabs, mapTabs, moveTab, type OpenTodo, openTab, type TodoRef } from "./tabs";
 import type { SortKey } from "./types";
 
 /** .state.json 里各项的名字 */
@@ -257,6 +257,10 @@ export function keepTodoTab(todo: TodoRef) {
 }
 
 export const closeTodoTabs = (closing: readonly TodoRef[]) => writeOpenTodos(closeTabs(readOpenTodos(), closing));
+
+/** 拖动标签：moving 挪到 target 的前面 / 后面 */
+export const moveTodoTab = (moving: TodoRef, target: TodoRef, place: "before" | "after") =>
+  writeOpenTodos(moveTab(readOpenTodos(), moving, target, place));
 
 /**
  * 读数据之前记下 stateGeneration()，读完时变了的话，读到的可能还是改名、移动之前的样子，或者不含刚新建、开了标签的待办，

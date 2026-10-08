@@ -16,6 +16,7 @@ import {
   keepTodoTab,
   type ListOptions,
   listOptionsKey,
+  moveTodoTab,
   pruneTodoTabs,
   readJson,
   readListOptions,
@@ -776,6 +777,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
             onActivate={activateTab}
             onClose={closeTabs}
             onKeep={keepTodoTab}
+            onMove={moveTodoTab}
           />
         )}
         {main}

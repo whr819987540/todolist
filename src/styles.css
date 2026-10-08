@@ -1088,6 +1088,7 @@ body.drag-moving .tree-row:hover .row-count {
   display: none;
 }
 .editor-tab {
+  position: relative;
   flex: none;
   display: flex;
   align-items: center;
@@ -1153,6 +1154,29 @@ body.drag-moving .tree-row:hover .row-count {
 .editor-tab-close:hover {
   color: var(--c-text);
   background: var(--c-hover);
+}
+/* 拖动标签：拖着的那个变淡，放下的位置画一条竖线 */
+.editor-tab.drag-source {
+  opacity: 0.45;
+}
+.editor-tab.drop-before::after,
+.editor-tab.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--c-primary);
+}
+.editor-tab.drop-before::after {
+  left: -1px;
+}
+.editor-tab.drop-after::after {
+  right: -1px;
+}
+body.drag-moving .editor-tab-close {
+  visibility: hidden;
 }
 
 /* ---------------- 编辑器 ---------------- */

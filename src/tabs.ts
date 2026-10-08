@@ -45,6 +45,26 @@ export function closeTabs(list: readonly OpenTodo[], closing: readonly TodoRef[]
 }
 
 /**
+ * 拖动标签：把 moving 挪到 target 的前面 / 后面。list 里还有藏起来的标签（没选中的工作区里的），按 target 定位，
+ * 它们的相对顺序不变。没有变化时返回原来的列表
+ */
+export function moveTab(
+  list: readonly OpenTodo[],
+  moving: TodoRef,
+  target: TodoRef,
+  place: "before" | "after",
+): readonly OpenTodo[] {
+  const from = list.findIndex((t) => sameTodo(t, moving));
+  if (from < 0 || sameTodo(moving, target)) return list;
+  const rest = list.filter((_, i) => i !== from);
+  const at = rest.findIndex((t) => sameTodo(t, target));
+  if (at < 0) return list;
+  const to = place === "before" ? at : at + 1;
+  if (to === from) return list;
+  return [...rest.slice(0, to), list[from], ...rest.slice(to)];
+}
+
+/**
  * 在 shown（现在显示出来的标签，按顺序）里关掉 closing 之后，右侧改显示哪一个：
  * 正显示着的 active 没被关掉时返回 undefined（不用换）；被关掉了取它右边第一个还在的，右边没有时取左边最近的，
  * 都关掉了返回 null

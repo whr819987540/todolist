@@ -18,6 +18,10 @@ export default async function (t) {
     }).join(" ")`);
   /** 标签上标题的地方（不是 ×） */
   const tabAt = (id) => m.at(`.editor-tab[data-tab='${JSON.stringify(["工作", "需求", id])}'] .editor-tab-label`);
+  /** 标签靠左 / 靠右一点的地方（拖动时放在它前面 / 后面） */
+  const tabEdge = (id, side) =>
+    m.ev(`const r = document.querySelector(${JSON.stringify(`.editor-tab[data-tab='${JSON.stringify(["工作", "需求", id])}']`)}).getBoundingClientRect();
+      return { x: Math.round(${side === "left" ? "r.left + 8" : "r.right - 8"}), y: Math.round(r.top + r.height / 2) }`);
   /** 正文加载好、标题是 id（测试数据里标题就是文件名） */
   const loaded = (id) =>
     t.until(() => m.ev(`return !!view() && view().state.doc.length > 0 && document.querySelector(".editor-title")?.value === ${JSON.stringify(id)}`));
@@ -87,6 +91,21 @@ export default async function (t) {
   await m.ev(`return await openTodo("工作", "需求", "长文档")`);
   await dblclick(await tabAt("长文档"));
   check("双击预览标签：固定下来", (await tabs()) === "B C 长文档*", await tabs());
+
+  // 拖动标签调整顺序：放在指针下那个标签的前面（左半边）/ 后面（右半边）；Esc 取消；不切换标签
+  await m.drag(await tabAt("长文档"), await tabEdge("B", "left"));
+  check("拖动标签放到另一个标签前面", (await tabs()) === "长文档* B C", await tabs());
+  await m.drag(await tabAt("B"), await tabEdge("C", "right"));
+  check("拖动没显示着的标签放到最后：调整了顺序，不切换过去", (await tabs()) === "长文档* C B", await tabs());
+  await m.drag(await tabAt("长文档"), await tabEdge("B", "left"), { release: false });
+  const dropLine = await m.ev(`return !!document.querySelector(".editor-tab.drop-before, .editor-tab.drop-after")`);
+  await m.press("Escape");
+  await m.drop(await tabEdge("B", "left"));
+  check("拖动时画出放下的位置，Esc 取消", dropLine && (await tabs()) === "长文档* C B", await tabs());
+  await m.drag(await tabAt("长文档"), await tabEdge("B", "right"));
+  check("拖回最后", (await tabs()) === "C B 长文档*", await tabs());
+  await m.drag(await tabAt("B"), await tabEdge("C", "left"));
+  await t.until(async () => (await tabs()) === "B C 长文档*");
   await m.press("Ctrl+W");
   await loaded("C");
   check("Ctrl+W 关掉最右边正显示着的标签，切到左边的", (await tabs()) === "B C*", await tabs());

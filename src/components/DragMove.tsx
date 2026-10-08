@@ -163,7 +163,7 @@ function judge(
 }
 
 /** 拖完松开鼠标后浏览器还会发一个 click，别让它被当成单击（选中、打开）处理 */
-function swallowClick() {
+export function swallowClick() {
   const swallow = (e: MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
