@@ -16,3 +16,11 @@
 ## 开发流程
 
 在 Linux 上开发（Tauri 在这里编不了、跑不了）、到 Windows 上测试，流程写在 [docs/linux-windows-workflow.md](docs/linux-windows-workflow.md)：Linux 上能验证什么、测试壳（`src-tauri/target/linux-harness/`，不在仓库里）怎么建和用、怎么交到 Windows 上测，以及加功能时的清单。在 Linux 上改代码之前先读它；改了流程或测试壳时同步更新它。
+
+## 测试在 GitHub 上跑，不在本机跑
+
+写好功能后，端到端测试在 GitHub Actions 上跑，在 Windows 上开发时也一样。本机的 `npm run e2e` 会弹出测试版的窗口、抢前台、模拟键盘鼠标，打断用户在这台电脑上正在做的事；用户用着电脑时结果也不可靠（窗口被最小化、拿不到前台）。
+
+- 本机只跑不弹窗的检查：`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`
+- 提交后推到功能分支（不是 main），CI 和 E2E 推送后自动跑（E2E 全部套件约 10 分钟）：`gh run list --branch <分支>` 看进度，`gh run view <编号> --log` 看结果，没通过的修了再推；只重跑几个套件用 `gh workflow run e2e.yml --ref <分支> -f suites="tabs hidedone"`。都通过后由用户决定要不要合进 main
+- 在本机跑 `npm run e2e`、启动测试版程序截图或调试之前，先问用户（比如 GitHub 上重现不了、要看着窗口查的时候）

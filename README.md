@@ -174,7 +174,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
 
 ### 端到端测试（Windows）
 
-单元测试测不到的（WebView2 里的界面、全局快捷键、窗口的显示 / 隐藏和前台、注册表、Windows 回收站、文件被占用）由 `e2e/` 里的端到端测试检查，只能在 Windows 上跑。每次 push 后 GitHub Actions 会在 Windows 机器上跑全部套件（见下文「在 GitHub Actions 上跑」）；在本机跑：
+单元测试测不到的（WebView2 里的界面、全局快捷键、窗口的显示 / 隐藏和前台、注册表、Windows 回收站、文件被占用）由 `e2e/` 里的端到端测试检查，只能在 Windows 上跑。平时在 GitHub Actions 上跑：推到功能分支后会在 GitHub 的 Windows 机器上跑全部套件（见下文「在 GitHub Actions 上跑」），不占用本机。在本机跑会弹出测试版的窗口、抢前台、模拟键盘鼠标，跑的时候没法用这台电脑，有人在用时结果也不可靠，只在 GitHub 上重现不了、要看着窗口调试时才跑：
 
 ```powershell
 npm run e2e                       # 全部套件，约 10 分钟

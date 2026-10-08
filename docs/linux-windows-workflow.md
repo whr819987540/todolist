@@ -6,6 +6,8 @@
 2. **推送，看 GitHub Actions 的结果**：GitHub 的 Windows 机器上跑和本机相同的检查（`.github/workflows/ci.yml`）和全部端到端测试（`.github/workflows/e2e.yml`），在 Linux 上用 `gh` 就能看结果、修了再推，不用去 Windows 上
 3. **Windows 上手动试**：端到端测试测不到的（`docs/windows-test-checklist.md` 的「要手动试的」），以及要在本机重现、调试端到端测试时
 
+在 Windows 上开发时也一样：写好功能推到功能分支，端到端测试在 GitHub 上跑，不在本机跑 `npm run e2e`。本机跑会弹出测试版的窗口、抢前台、模拟键盘鼠标，打断这台电脑上正在做的事（见 CLAUDE.md「测试在 GitHub 上跑，不在本机跑」）。
+
 ## Linux 上的环境
 
 - Node.js（vitest 5 要 22.12 以上）；Rust 装在用户目录（`~/.cargo/bin`，用之前加进 `PATH`），再加上 Windows 目标：`rustup target add x86_64-pc-windows-msvc`
@@ -136,12 +138,12 @@ gh run download <编号> -n desktop             # E2E 没通过时当时整个�
 gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"   # 修了以后只重跑这几个套件
 ```
 
-还不想并进 main 的改动推到别的分支上试，两个 workflow 照样跑。
+写好的功能先推到功能分支（不是 main）上试，两个 workflow 照样跑；都通过后再决定要不要合进 main。
 
 ## 还要在 Windows 上做的
 
 1. 照 `docs/windows-test-checklist.md` 的「要手动试的」逐项试；要自己开测试版试别的，按 README.md「本机测试用的构建」换 identifier 和产品名、用 `TODOLIST_DATA_DIR` 指向临时目录
-2. 端到端测试在 GitHub 上没通过、又看不出原因时，在本机跑 `npm run e2e -- <套件>` 重现（README.md「端到端测试（Windows）」），能看着窗口调试
+2. 端到端测试在 GitHub 上没通过、又看不出原因时，在本机跑 `npm run e2e -- <套件>` 重现（README.md「端到端测试（Windows）」），能看着窗口调试。会弹出窗口、抢前台，跑之前和用这台电脑的人说好
 3. 修掉的问题各自单独提交，提交说明写清在 Windows 上怎么实测的；能自动化的实测步骤补进 `e2e/suites/`
 
 ## Linux 上发现不了的问题
@@ -170,10 +172,11 @@ Linux 上：
 - [ ] `npm run lint; npm test; npm run build`，测试壳的 `cargo test` 和 `check-windows.sh`
 - [ ] 在模拟后端里把功能点一遍，浅色、深色都截图看
 - [ ] 要在 Windows 上才能确认的，写进 `e2e/suites/`（Linux 上跑不了，`npm run lint` 会检查脚本；推送后在 E2E 里跑），端到端测试也测不到的写进 `docs/windows-test-checklist.md` 的「要手动试的」
-- [ ] 一个功能一个提交，推送后看 CI 和 E2E 都通过，没通过的修了再推
+- [ ] 一个功能一个提交，推到功能分支后看 CI 和 E2E 都通过，没通过的修了再推
 
 Windows 上：
 
+- [ ] 同 Linux 上：本机只跑 `npm run lint; npm test; npm run build` 和 `cargo test`，端到端测试推到功能分支后在 GitHub 上跑
 - [ ] 手动清单里新加的那几项
 - [ ] 修掉的问题各自提交
 
