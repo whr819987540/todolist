@@ -45,8 +45,9 @@ interface Props {
   setKeyword: (v: string) => void;
   /** 全文搜索的结果（正文里有关键字的待办）；还没查完时是 null */
   hits: ContentHits | null;
-  /** 各工作区的排序和隐藏已完成；侧栏顶部的按钮改的是右侧正在显示的工作区的 */
+  /** 各工作区的排序和隐藏已完成（待办、全部完成的项目）；侧栏顶部的按钮改的是右侧正在显示的工作区的 */
   listOptionsOf: (workspace: string) => ListOptions;
+  /** 不变的函数 */
   setListOptions: (workspace: string, patch: Partial<ListOptions>) => void;
   /** 拖动待办到别的项目、项目到别的工作区 */
   drag: DragMove;
@@ -79,6 +80,12 @@ export default function Sidebar(props: Props) {
     treesRef.current = trees;
   });
   const moveTargetsOf = useCallback((ws: string) => moveTargets(treesRef.current, ws), []);
+  // 「已隐藏 N 个全部完成的项目」后面的「显示」：这个工作区不再隐藏它们
+  const { setListOptions } = props;
+  const showDoneProjects = useCallback(
+    (ws: string) => setListOptions(ws, { hideDoneProjects: false }),
+    [setListOptions],
+  );
 
   const total = trees.reduce((n, t) => n + countAll(t), 0);
   const done = trees.reduce((n, t) => n + countDone(t), 0);
@@ -211,6 +218,7 @@ export default function Sidebar(props: Props) {
             pickedMenu={props.pickedMenu}
             onContextMenu={popups.openMenu}
             moveTargets={moveTargetsOf}
+            onShowDoneProjects={showDoneProjects}
           />
         ))}
       </div>

@@ -16,7 +16,7 @@ import { avatarColor, compactTime, displayTitle, firstChar, matchTodo, relativeT
 import { type DragItem, type DragState, dropClass, isDraggingProject, reorderMark } from "../DragMove";
 import Highlight from "../Highlight";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "../menus";
-import { type Collapsed, countAll, countDone, type Selection, selKey, WS_KEY } from "./tree";
+import { type Collapsed, countAll, countDone, hiddenDoneProjects, type Selection, selKey, WS_KEY } from "./tree";
 
 /** 拖动：没在拖时 state 是 null；start 是不变的函数 */
 type DragStart = (e: React.MouseEvent, item: DragItem) => void;
@@ -39,6 +39,10 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   /** 全文搜索在这个工作区里的结果（正文里有关键字的待办，见 search.ts）；还没查完时是 null */
   hits: ReadonlyMap<string, string> | null;
   hideDone: boolean;
+  /** 隐藏全部完成的项目（右侧正在显示的那个除外，搜索时不隐藏） */
+  hideDoneProjects: boolean;
+  /** 点「显示」：这个工作区不再隐藏全部完成的项目；是不变的函数 */
+  onShowDoneProjects: (workspace: string) => void;
   sortKey: SortKey;
   now: number;
   today: string;
@@ -52,12 +56,20 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   onTodoClick: TodoClick;
   pickedMenu: () => MenuProps | null;
 }) {
-  const { tree, sel, actions: a, collapsed, keyword: kw, hits, hideDone, sortKey, setCollapsed } = p;
+  const { tree, sel, actions: a, collapsed, keyword: kw, hits, hideDone, hideDoneProjects, sortKey, setCollapsed } = p;
+
+  // 隐藏全部完成的项目时藏起来的项目
+  const selProject = sel?.project;
+  const hidden = useMemo(
+    () => hiddenDoneProjects(tree.projects, { hide: hideDoneProjects, keyword: kw, selProject }),
+    [tree.projects, hideDoneProjects, kw, selProject],
+  );
 
   // 搜索时：标题、正文开头（前端匹配）或正文全文（hits）里有关键字的待办，和名字里有关键字的项目
   const visible = useMemo(() => {
     const k = kw.toLowerCase();
     return tree.projects
+      .filter((project) => !hidden.has(project.name))
       .map((project) => {
         let todos = sortTodos(project.todos, sortKey);
         if (hideDone) todos = todos.filter((t) => !t.done);
@@ -65,7 +77,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
         return { project, todos, nameMatch: !!k && project.name.toLowerCase().includes(k) };
       })
       .filter((x) => !kw || x.todos.length > 0 || x.nameMatch);
-  }, [tree, kw, hits, hideDone, sortKey]);
+  }, [tree, kw, hits, hideDone, sortKey, hidden]);
 
   const total = countAll(tree);
   const done = countDone(tree);
@@ -150,6 +162,12 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
             <div className="tree-empty" style={{ paddingLeft: 30 }}>
               还没有项目，
               <a onClick={a.newProject}>新建一个</a>
+            </div>
+          )}
+          {hidden.size > 0 && (
+            <div className="tree-empty hidden-projects" style={{ paddingLeft: 30 }}>
+              已隐藏 {hidden.size} 个全部完成的项目，
+              <a onClick={() => p.onShowDoneProjects(tree.name)}>显示</a>
             </div>
           )}
           {kw && visible.length === 0 && tree.projects.length > 0 && (

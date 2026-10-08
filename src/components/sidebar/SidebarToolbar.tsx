@@ -1,4 +1,5 @@
 import {
+  CheckOutlined,
   ColumnHeightOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
@@ -26,7 +27,7 @@ const SORT_LABELS: Record<SortKey, string> = {
 };
 
 /**
- * 侧栏顶部：返回首页、选中要显示的工作区、主题、设置；搜索和「新建」；排序、隐藏已完成、全部折叠 / 展开。
+ * 侧栏顶部：返回首页、选中要显示的工作区、主题、设置；搜索和「新建」；排序、隐藏已完成（待办、全部完成的项目）、全部折叠 / 展开。
  * 「新建」、排序和隐藏已完成作用于右侧正在显示的工作区
  */
 export default function SidebarToolbar(props: {
@@ -83,7 +84,7 @@ export default function SidebarToolbar(props: {
   };
 
   // 排序和隐藏已完成作用于右侧正在显示的工作区，选中了多个工作区时在提示里写明是哪个
-  const { sortKey, hideDone } = props.listOptions;
+  const { sortKey, hideDone, hideDoneProjects } = props.listOptions;
   const ofWs = multi ? `「${sel.workspace}」的` : "";
   const sortItems = (Object.keys(SORT_LABELS) as SortKey[]).map((k) => ({
     key: k,
@@ -96,6 +97,23 @@ export default function SidebarToolbar(props: {
     items: multi ? [{ type: "group", label: `${ofWs}排序`, children: sortItems }] : sortItems,
     onClick: ({ key }) => props.setListOptions(sel.workspace, { sortKey: key as SortKey }),
   };
+
+  // 隐藏已完成：已完成的待办、全部完成的项目（待办全都完成了的）各自开关
+  const check = (on: boolean) => <CheckOutlined style={{ visibility: on ? "visible" : "hidden" }} />;
+  const hideItems = [
+    { key: "todos", icon: check(hideDone), label: "隐藏已完成的待办" },
+    { key: "projects", icon: check(hideDoneProjects), label: "隐藏全部完成的项目", extra: "待办全都完成了的" },
+  ];
+  const hideMenu: MenuProps = {
+    items: multi ? [{ type: "group", label: `${ofWs}已完成`, children: hideItems }] : hideItems,
+    onClick: ({ key }) =>
+      props.setListOptions(
+        sel.workspace,
+        key === "todos" ? { hideDone: !hideDone } : { hideDoneProjects: !hideDoneProjects },
+      ),
+  };
+  const hiding = [hideDone && "已完成的待办", hideDoneProjects && "全部完成的项目"].filter(Boolean);
+  const hideTip = hiding.length ? `${ofWs}已隐藏：${hiding.join("、")}` : `隐藏${ofWs}已完成的待办 / 全部完成的项目`;
 
   return (
     <>
@@ -137,15 +155,16 @@ export default function SidebarToolbar(props: {
             <Button type="text" size="small" icon={<SortAscendingOutlined />} />
           </Tooltip>
         </Dropdown>
-        <Tooltip title={`${hideDone ? "显示" : "隐藏"}${ofWs}已完成${multi ? "待办" : ""}`}>
-          <Button
-            type="text"
-            size="small"
-            className={hideDone ? "is-active" : undefined}
-            icon={hideDone ? <EyeInvisibleOutlined /> : <EyeOutlined />}
-            onClick={() => props.setListOptions(sel.workspace, { hideDone: !hideDone })}
-          />
-        </Tooltip>
+        <Dropdown menu={hideMenu} trigger={["click"]}>
+          <Tooltip title={hideTip}>
+            <Button
+              type="text"
+              size="small"
+              className={`hide-done-btn${hiding.length ? " is-active" : ""}`}
+              icon={hiding.length ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+            />
+          </Tooltip>
+        </Dropdown>
         <Tooltip title={anyProjectOpen ? "全部折叠" : "全部展开"}>
           <Button
             type="text"

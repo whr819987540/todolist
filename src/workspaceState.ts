@@ -66,23 +66,28 @@ function remove(key: string) {
   }
 }
 
-/** 一个工作区在左侧列表（和项目概览）里的排序、是否隐藏已完成 */
+/** 一个工作区在左侧列表（和项目概览）里的排序、是否隐藏已完成的待办、是否隐藏全部完成的项目 */
 export interface ListOptions {
   sortKey: SortKey;
   hideDone: boolean;
+  hideDoneProjects: boolean;
 }
 
 const isSortKey = (v: unknown): v is SortKey => v === "created" || v === "updated" || v === "title" || v === "manual";
 
 /**
  * 这个工作区的排序和隐藏已完成。还没单独设置过的，沿用以前不分工作区时的设置（localStorage 的 sortKey / hideDone），
- * 那也没有就按创建时间排序、显示已完成
+ * 那也没有就按创建时间排序、显示已完成；隐藏全部完成的项目是后来加的，默认不隐藏
  */
 export function readListOptions(ws: string): ListOptions {
   const own = readJson<Partial<Record<keyof ListOptions, unknown>> | null>(listOptionsKey(ws), null);
   const sortKey = own?.sortKey ?? readJson<unknown>("sortKey", null);
   const hideDone = own?.hideDone ?? readJson<unknown>("hideDone", null);
-  return { sortKey: isSortKey(sortKey) ? sortKey : "created", hideDone: hideDone === true };
+  return {
+    sortKey: isSortKey(sortKey) ? sortKey : "created",
+    hideDone: hideDone === true,
+    hideDoneProjects: own?.hideDoneProjects === true,
+  };
 }
 
 // ----- 数据目录 .state.json 里的：换电脑、重装系统后还在，数据目录用网盘同步时一起同步 -----

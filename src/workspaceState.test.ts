@@ -224,3 +224,23 @@ describe("右侧标签页里打开着的待办", () => {
     expect(ids()).toEqual(["工作/需求/a", "生活/杂事/gone"]);
   });
 });
+
+describe("各工作区的隐藏已完成", () => {
+  it("隐藏全部完成的项目默认不隐藏，以前设过「隐藏已完成」的工作区也是", () => {
+    localStorage.setItem("listOptions:工作", JSON.stringify({ sortKey: "title", hideDone: true }));
+    expect(state.readListOptions("工作")).toEqual({ sortKey: "title", hideDone: true, hideDoneProjects: false });
+    expect(state.readListOptions("生活").hideDoneProjects).toBe(false);
+  });
+
+  it("每个工作区各自记住", () => {
+    localStorage.setItem("listOptions:工作", JSON.stringify({ sortKey: "created", hideDone: false, hideDoneProjects: true }));
+    expect(state.readListOptions("工作").hideDoneProjects).toBe(true);
+    expect(state.readListOptions("生活").hideDoneProjects).toBe(false);
+  });
+
+  it("工作区改名后跟过去", () => {
+    localStorage.setItem("listOptions:工作", JSON.stringify({ sortKey: "created", hideDone: false, hideDoneProjects: true }));
+    state.renameWorkspaceState("工作", "公司");
+    expect(state.readListOptions("公司").hideDoneProjects).toBe(true);
+  });
+});

@@ -25,6 +25,7 @@ const SUITES = [
   "reorder",
   "batch",
   "recycle",
+  "hidedone",
   "tabs",
   "regress",
 ];

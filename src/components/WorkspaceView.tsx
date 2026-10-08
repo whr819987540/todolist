@@ -175,7 +175,12 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const collapsed = usePerWorkspace(collapsedKey, readCollapsed);
   const setCollapsed = collapsed.set;
   const listOptions = usePerWorkspace(listOptionsKey, readListOptions);
-  const setListOptions = (ws: string, patch: Partial<ListOptions>) => listOptions.set(ws, (o) => ({ ...o, ...patch }));
+  // 不变的函数：侧栏的行（「已隐藏 N 个全部完成的项目，显示」）也用
+  const setListOptionsOf = listOptions.set;
+  const setListOptions = useCallback(
+    (ws: string, patch: Partial<ListOptions>) => setListOptionsOf(ws, (o) => ({ ...o, ...patch })),
+    [setListOptionsOf],
+  );
   const [storedWidth, setWidth] = useLocalState("sidebarWidth", 300);
   const width = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, storedWidth));
   const [dialog, openDialog] = useNameDialog();
