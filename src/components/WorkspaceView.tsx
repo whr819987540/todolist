@@ -566,6 +566,17 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     focusMainRef.current = focusMain;
     tabsRef.current = { shownTabs, activeTodo, activateTab, closeTabs };
   });
+  // 焦点最后在哪一侧：切标签时编辑器重建的一瞬间焦点不在任何地方，Alt+方向键仍按右侧算
+  const region = useRef<"sidebar" | "main" | null>(null);
+  useEffect(() => {
+    const onFocus = (e: FocusEvent) => {
+      const el = e.target as Element | null;
+      if (el?.closest?.(".sidebar")) region.current = "sidebar";
+      else if (el?.closest?.(".main")) region.current = "main";
+    };
+    document.addEventListener("focusin", onFocus);
+    return () => document.removeEventListener("focusin", onFocus);
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
@@ -607,10 +618,25 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
           return;
         }
       }
-      // Alt+←/→ 在左侧列表和右侧之间切换焦点，Alt+↑/↓ 在左侧列表里上下移动；对话框里不响应
+      // Alt+←/→ 在左侧列表和右侧之间切换焦点，Alt+↑/↓ 在左侧列表里上下移动；对话框里不响应。
+      // 焦点在右侧、正显示着一条待办时：Alt+←/→ 切到左边 / 右边的标签，Alt+↑ 关掉它；
+      // 最左边 / 最右边的标签上仍同原来：Alt+← 回到左侧列表，Alt+→ 焦点放进正文（在标题上时用得着）
       if (e.altKey && !ctrl && !e.shiftKey && e.key.startsWith("Arrow")) {
         if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
         e.preventDefault();
+        const { shownTabs, activeTodo, activateTab, closeTabs } = tabsRef.current;
+        const at = activeTodo ? shownTabs.findIndex((t) => sameTodo(t, activeTodo)) : -1;
+        if (region.current === "main" && at >= 0 && pickedItems.length < 2 && e.key !== "ArrowDown") {
+          if (e.key === "ArrowUp") {
+            if (!e.repeat) closeTabs([shownTabs[at]]);
+            return;
+          }
+          const next = shownTabs[at + (e.key === "ArrowRight" ? 1 : -1)];
+          if (next) {
+            activateTab(next);
+            return;
+          }
+        }
         if (e.key === "ArrowLeft") sidebarRef.current?.focus();
         else if (e.key === "ArrowRight") focusMainRef.current();
         else sidebarRef.current?.move(e.key === "ArrowDown" ? 1 : -1);

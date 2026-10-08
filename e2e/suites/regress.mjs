@@ -54,11 +54,20 @@ export default async function (t) {
   const source = await m.ev(`return document.querySelector(".statusbar").textContent.includes("源码模式")`);
   await m.press("Ctrl+/");
   check("Ctrl+/ 切换实时渲染 / 源码模式", live && source);
+  // 右侧有标签 A、新建的这条：焦点在正文里时 Alt+← 先切到左边的标签 A，在最左边的标签上再按才到左侧列表
+  await m.press("Alt+ArrowLeft");
+  await t.sleep(600);
   await m.press("Alt+ArrowLeft");
   const left = await m.ev(`return !!document.activeElement?.closest(".sidebar")`);
+  const selected = () => m.ev(`return document.querySelector(".tree-row.selected")?.dataset.sel`);
+  const atA = await selected();
   await m.press("Alt+ArrowUp");
   await t.sleep(300);
-  check("Alt+← 焦点到左侧列表，Alt+↑ 选中上一项", left && (await m.ev(`return document.querySelector(".tree-row.selected")?.dataset.sel`)) !== sel);
+  check(
+    "Alt+← 焦点到左侧列表（在最左边的标签上），Alt+↑ 选中上一项",
+    left && atA === JSON.stringify(["工作", "需求", "A"]) && (await selected()) !== atA,
+    { left, atA },
+  );
   await m.clearToasts();
   await m.press("F5");
   await t.sleep(800);

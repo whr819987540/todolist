@@ -94,6 +94,39 @@ export default async function (t) {
   check("Ctrl+Tab / Ctrl+Shift+Tab 切到下一个 / 上一个标签，到头了从另一头接着", next === "B* C" && (await tabs()) === "B C*", next);
   check("Ctrl+Tab 切过去后焦点在正文里", await bodyFocused());
 
+  // 焦点在右侧的待办里：Alt+← / Alt+→ 切到左边 / 右边的标签，最左边的标签上 Alt+← 回到左侧列表
+  await m.press("Alt+ArrowLeft");
+  await loaded("B");
+  const altLeft = await tabs();
+  // 连着按：编辑器重建的一瞬间焦点不在任何地方，仍按右侧算
+  await m.press("Alt+ArrowRight");
+  await m.press("Alt+ArrowLeft");
+  await m.press("Alt+ArrowRight");
+  await loaded("C");
+  await t.sleep(300);
+  check("焦点在正文里时 Alt+← / Alt+→ 切到左边 / 右边的标签（连着按也行）", altLeft === "B* C" && (await tabs()) === "B C*" && (await bodyFocused()), altLeft);
+  await m.press("Alt+ArrowRight");
+  await t.sleep(300);
+  check("最右边的标签上 Alt+→ 不切换（焦点留在正文里）", (await tabs()) === "B C*" && (await bodyFocused()), await tabs());
+  await m.ev(`document.querySelector(".editor-title").focus(); return 1`);
+  await m.press("Alt+ArrowRight");
+  await t.sleep(200);
+  check("最右边的标签上，焦点在标题时 Alt+→ 同原来一样把焦点放进正文", await bodyFocused());
+  await m.press("Alt+ArrowLeft");
+  await loaded("B");
+  await m.press("Alt+ArrowLeft");
+  await t.sleep(300);
+  check(
+    "最左边的标签上 Alt+← 回到左侧列表",
+    (await tabs()) === "B* C" && (await m.ev(`return !!document.activeElement?.closest(".sidebar")`)),
+    await tabs(),
+  );
+  await m.press("Alt+ArrowRight");
+  await t.sleep(300);
+  check("左侧列表里 Alt+→ 焦点回到正文", await bodyFocused());
+  await m.press("Alt+ArrowRight");
+  await loaded("C");
+
   // 关闭：Ctrl+W 关掉正显示着的，切到右边的（没有时左边的）；鼠标中键；右键「关闭其他标签」
   await m.ev(`return await openTodo("工作", "需求", "长文档")`);
   await dblclick(await tabAt("长文档"));
@@ -118,9 +151,9 @@ export default async function (t) {
   check("Ctrl+W 关掉最右边正显示着的标签，切到左边的", (await tabs()) === "B C*", await tabs());
   await m.click(await tabAt("B"));
   await loaded("B");
-  await m.press("Ctrl+W");
+  await m.press("Alt+ArrowUp");
   await loaded("C");
-  check("Ctrl+W 关掉正显示着的标签，切到右边的", (await tabs()) === "C*", await tabs());
+  check("焦点在正文里时 Alt+↑ 关掉正显示着的标签，切到右边的", (await tabs()) === "C*" && (await bodyFocused()), await tabs());
   await m.ev(`return await openTodo("工作", "需求", "A")`);
   await middleClick(await tabAt("C"));
   check("鼠标中键关掉标签", (await tabs()) === "(A)*", await tabs());
