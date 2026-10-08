@@ -39,6 +39,8 @@ export default async function (t) {
     await m.mouse("mouseReleased", p, { button: "middle", buttons: 0, clickCount: 1 });
     await t.sleep(400);
   };
+  /** 显示着「未保存」圆点的标签 */
+  const dirtyTabs = () => m.ev(`return [...document.querySelectorAll(".editor-tab.dirty")].map((e) => JSON.parse(e.dataset.tab)[2]).join(" ")`);
   const bodyFocused = () => m.ev(`return !!document.activeElement?.closest(".cm-content")`);
 
   // 单击打开在预览标签里，再单击别的替换它
@@ -54,6 +56,7 @@ export default async function (t) {
   await m.type("改");
   await t.sleep(300);
   check("修改了正文：预览标签固定下来", (await tabs()) === "B C*", await tabs());
+  check("有没保存的修改：标签上显示圆点", (await dirtyTabs()) === "C", await dirtyTabs());
 
   // 切走再切回来：光标、选区、滚动都在原来的地方，焦点在正文里
   const before = await m.ev(`const v = view(); v.scrollDOM.scrollTop = 500; await sleep(300);
@@ -66,6 +69,7 @@ export default async function (t) {
   await loaded("B");
   check("点标签切到别的待办", (await tabs()) === "B* C" && (await bodyFocused()), await tabs());
   check("切走时保存了修改", await t.until(() => t.read("工作/需求/C.md").includes("改")));
+  check("切走后标签上没有圆点了", (await dirtyTabs()) === "", await dirtyTabs());
   await m.click(await tabAt("C"));
   await loaded("C");
   await t.sleep(400);
@@ -77,6 +81,9 @@ export default async function (t) {
   await m.press("Ctrl+Z");
   await t.sleep(200);
   check("切回来后还能撤销之前的修改", !(await m.ev(`return view().state.doc.toString().includes("改")`)));
+  const dirtyBeforeSave = await dirtyTabs();
+  await m.press("Ctrl+S");
+  check("Ctrl+S 保存后圆点没了", dirtyBeforeSave === "C" && !!(await t.until(async () => (await dirtyTabs()) === "")), dirtyBeforeSave);
 
   // Ctrl+Tab / Ctrl+Shift+Tab，到头了从另一头接着
   await m.press("Ctrl+Tab");

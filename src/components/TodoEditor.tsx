@@ -87,6 +87,8 @@ interface Props {
   onSavedAsNew: (s: TodoSummary) => void;
   /** 打开后第一次修改了标题或正文（预览标签据此固定下来） */
   onEdit: () => void;
+  /** 有没有没存好的修改（标签上的圆点）；卸载时（切走、关掉，那时会存盘）报一次 false */
+  onDirty: (dirty: boolean) => void;
 }
 
 type Status = "saved" | "dirty" | "saving" | "error";
@@ -399,6 +401,7 @@ export default function TodoEditor(props: Props) {
       window.clearTimeout(s.statsTimer);
       unregister();
       flush();
+      propsRef.current.onDirty(false);
     };
     // 只在挂载时执行一次、卸载时 flush 一次：组件以 工作区/项目/id 为 key 挂载，workspace、project、id、handleRef
     // 不会变；flush、stopTimer 每次渲染都是新函数，但只经由 s 和各个 ref 读写，挂载时那一份一直可用。
@@ -412,6 +415,11 @@ export default function TodoEditor(props: Props) {
     // 只在加载完成时执行一次；之后打字、外部修改重新加载时另外更新
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
+
+  // 保存状态变了时告诉外层：没存好（未保存、正在保存、保存失败）时标签上显示圆点
+  useEffect(() => {
+    propsRef.current.onDirty(status !== "saved");
+  }, [status]);
 
   // 标题在别处被改（例如刷新）且这里没有编辑中时，同步过来
   useEffect(() => {

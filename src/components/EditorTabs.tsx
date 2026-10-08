@@ -17,6 +17,8 @@ interface Props {
   tabs: readonly ShownTab[];
   /** 右侧正显示着的待办；显示概览等时是 null */
   active: TodoRef | null;
+  /** 正显示着的待办有没存好的修改：标签上 × 的位置显示圆点 */
+  activeDirty: boolean;
   onActivate: (t: ShownTab) => void;
   onClose: (closing: readonly ShownTab[]) => void;
   /** 预览标签固定下来 */
@@ -32,6 +34,7 @@ interface TabDrag {
   place: "before" | "after";
 }
 
+const DIRTY_HINT = "有没保存的修改，关掉、切走时会先保存";
 const PREVIEW_HINT = "预览：打开别的待办时会被替换；修改内容或双击后一直保留";
 
 /** 按下后横着移动超过这么多像素才算拖动 */
@@ -44,7 +47,7 @@ const SCROLL_STEP = 8;
  * 右侧编辑区上方的标签：每个是一条打开着的待办，点击切过去（光标、滚动回到上次的地方），× / 鼠标中键 / Ctrl+W 关掉，
  * 右键关掉其他的、右侧的、全部，按住拖动调整顺序。预览标签的标题是斜体
  */
-export default function EditorTabs({ tabs, active, onActivate, onClose, onKeep, onMove }: Props) {
+export default function EditorTabs({ tabs, active, activeDirty, onActivate, onClose, onKeep, onMove }: Props) {
   const barRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<TabDrag | null>(null);
   const stopDrag = useRef<(() => void) | null>(null);
@@ -192,11 +195,13 @@ export default function EditorTabs({ tabs, active, onActivate, onClose, onKeep, 
         const key = selKey(t);
         const { text, fromContent } = displayTitle(t.todo);
         const isActive = !!active && sameTodo(t, active);
+        const dirty = isActive && activeDirty;
         const cls = [
           "editor-tab",
           isActive && "active",
           t.preview && "preview",
           t.todo.done && "done",
+          dirty && "dirty",
           drag?.key === key && "drag-source",
           drag?.target === key && `drop-${drag.place}`,
         ];
@@ -207,7 +212,7 @@ export default function EditorTabs({ tabs, active, onActivate, onClose, onKeep, 
               aria-selected={isActive}
               data-tab={key}
               className={cls.filter(Boolean).join(" ")}
-              title={`${t.workspace} / ${t.project} / ${text}${t.preview ? `\n${PREVIEW_HINT}` : ""}`}
+              title={`${t.workspace} / ${t.project} / ${text}${dirty ? `\n${DIRTY_HINT}` : ""}${t.preview ? `\n${PREVIEW_HINT}` : ""}`}
               onClick={() => onActivate(t)}
               onDoubleClick={() => t.preview && onKeep(t)}
               // 左键按住拖动；中键按下时不让 WebView 进入自动滚动，松开时关掉
@@ -226,7 +231,7 @@ export default function EditorTabs({ tabs, active, onActivate, onClose, onKeep, 
                 className="editor-tab-close"
                 role="button"
                 aria-label="关闭"
-                title="关闭（Ctrl+W）"
+                title={dirty ? `${DIRTY_HINT}（Ctrl+W 关闭）` : "关闭（Ctrl+W）"}
                 onClick={(e) => {
                   e.stopPropagation();
                   onClose([t]);

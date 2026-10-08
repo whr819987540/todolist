@@ -167,6 +167,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const [focusBodyKey, setFocusBodyKey] = useState<string | null>(null);
   // 右侧标签页里打开着的待办（全部工作区的，按顺序）
   const openTodos = useSyncExternalStore(subscribeOpenTodos, readOpenTodos);
+  // 正显示着的待办有没存好的修改（切走时总会存盘，别的标签不会有）
+  const [activeDirty, setActiveDirty] = useState(false);
   // 用键盘在左侧列表里移到的选中项：这时焦点留在列表，右侧不自动聚焦输入框
   const [kbSel, setKbSel] = useState<Selection | null>(null);
   const [keyword, setKeyword] = useState("");
@@ -718,6 +720,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
           setSel(s);
         }}
         onEdit={() => keepTodoTab({ workspace: selTree.name, project: selProject.name, todoId: selTodo.id })}
+        onDirty={setActiveDirty}
       />
     );
   } else if (selProject) {
@@ -774,6 +777,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
           <EditorTabs
             tabs={shownTabs}
             active={activeTodo}
+            activeDirty={activeDirty}
             onActivate={activateTab}
             onClose={closeTabs}
             onKeep={keepTodoTab}

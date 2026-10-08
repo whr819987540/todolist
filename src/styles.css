@@ -1155,6 +1155,20 @@ body.drag-moving .tree-row:hover .row-count {
   color: var(--c-text);
   background: var(--c-hover);
 }
+/* 有没保存的修改：× 的位置显示圆点（颜色同状态栏的「未保存」），鼠标移到上面时变回 × */
+.editor-tab.dirty .editor-tab-close {
+  visibility: visible;
+}
+.editor-tab.dirty .editor-tab-close:not(:hover) .anticon {
+  display: none;
+}
+.editor-tab.dirty .editor-tab-close:not(:hover)::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #faad14;
+}
 /* 拖动标签：拖着的那个变淡，放下的位置画一条竖线 */
 .editor-tab.drag-source {
   opacity: 0.45;
