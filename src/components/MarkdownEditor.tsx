@@ -30,6 +30,8 @@ interface Props {
   initialPosition: EditPosition | null;
   /** 上次留下的撤销记录（UndoSnapshot.history），只在创建时读取；null 表示从头记 */
   initialHistory: unknown;
+  /** 建好后焦点放进来（光标在 initialPosition 处，不滚动），只在创建时读取 */
+  autoFocus: boolean;
   mode: EditorMode;
   readOnly: boolean;
   placeholder: string;
@@ -93,6 +95,8 @@ export default function MarkdownEditor(props: Props) {
       state: createState(initialDoc, restored?.anchor ?? 0, restored?.head ?? 0, initialHistory),
     });
     if (restored?.scroll) view.dispatch({ effects: restored.scroll });
+    // 在这里而不是外层聚焦：开发时 StrictMode 会把编辑器建好、销毁、再建一次，外层拿到的可能是销毁了的那个
+    if (p().autoFocus) view.focus();
     viewRef.current = view;
     const snapshot = (): UndoSnapshot | null => {
       const { state } = view;

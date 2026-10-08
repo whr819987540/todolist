@@ -54,6 +54,8 @@ interface Props {
   pickedOf: (workspace: string) => ReadonlySet<string> | undefined;
   /** 单击待办（Ctrl / Shift+单击是多选）；不变的函数 */
   onTodoClick: (e: React.MouseEvent, s: Selection) => void;
+  /** 双击待办（单击已经打开了它）：标签固定下来 */
+  onTodoDoubleClick: (s: Selection) => void;
   /** 在多选了的待办上右键时的菜单；不变的函数 */
   pickedMenu: () => MenuProps | null;
 }
@@ -177,6 +179,13 @@ export default function Sidebar(props: Props) {
         tabIndex={0}
         onKeyDown={onTreeKey}
         onMouseDown={() => setKbFocus(false)}
+        // 待办行上的双击（勾选框上的、Ctrl / Shift 多选的不算）；工作区、项目行上的双击是折叠 / 展开，由行自己处理
+        onDoubleClick={(e) => {
+          if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+          const target = e.target as Element;
+          const row = target.closest<HTMLElement>(".todo-row[data-sel]");
+          if (row && !target.closest(".check")) props.onTodoDoubleClick(parseSelKey(row.dataset.sel!));
+        }}
         onBlur={() => setKbFocus(false)}
         onMouseOver={popups.onMouseOver}
         onMouseLeave={popups.hideTip}

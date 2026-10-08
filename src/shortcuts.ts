@@ -68,6 +68,7 @@ const RESERVED: Record<string, string> = {
   "Alt+ArrowLeft": "切换到左侧列表", "Alt+ArrowRight": "切换到右侧编辑区",
   "Alt+ArrowUp": "选中上一项", "Alt+ArrowDown": "选中下一项",
   "Ctrl+Slash": "切换实时渲染 / 源码模式", "Ctrl+Shift+1": "显示 / 隐藏大纲",
+  "Ctrl+W": "关闭标签", "Ctrl+Tab": "下一个标签", "Ctrl+Shift+Tab": "上一个标签",
   "Ctrl+ArrowLeft": "光标移到上一个词", "Ctrl+ArrowRight": "光标移到下一个词",
   "Ctrl+Home": "光标移到开头", "Ctrl+End": "光标移到末尾",
   "Ctrl+Backspace": "删除前一个词", "Ctrl+Delete": "删除后一个词",

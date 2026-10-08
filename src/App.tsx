@@ -9,7 +9,14 @@ import { flushAll, useAppEvent } from "./hooks";
 import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
 import { compareName } from "./utils";
-import { loadUiState, readLastTodo, readLastView, readOpenWorkspaces, writeLastView } from "./workspaceState";
+import {
+  keepTodoTab,
+  loadUiState,
+  readLastTodo,
+  readLastView,
+  readOpenWorkspaces,
+  writeLastView,
+} from "./workspaceState";
 
 /** 从首页进入某个工作区（可直接打开其中的项目 / 待办）；进去后可以在侧栏再选中其他工作区 */
 type Entry = Omit<Selection, "workspace">;
@@ -94,8 +101,9 @@ export default function App() {
     };
   }, []);
 
-  // 快速记录里按 Ctrl+Enter（保存并打开）：打开刚记下的待办
+  // 快速记录里按 Ctrl+Enter（保存并打开）：打开刚记下的待办，开在固定的标签里
   useAppEvent<{ workspace: string; project: string; todoId: string }>("open-todo", ({ workspace, project, todoId }) => {
+    keepTodoTab({ workspace, project, todoId });
     if (viewRef.current?.name === "workspace" && workspaceRef.current)
       workspaceRef.current.open({ workspace, project, todoId });
     else setView({ name: "workspace", workspace, sel: { project, todoId } });

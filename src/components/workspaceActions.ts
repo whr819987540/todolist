@@ -9,6 +9,7 @@ import {
   forgetProjectState,
   forgetTodoState,
   forgetWorkspaceState,
+  keepTodoTab,
   type ListOptions,
   moveProjectState,
   moveTodoState,
@@ -273,6 +274,8 @@ export function useWorkspaceActions(ctx: ActionContext) {
           expand(ws, WS_KEY);
           expand(ws, project);
           if (open) {
+            // 新建的待办开在固定的标签里
+            keepTodoTab({ workspace: ws, project, todoId: s.id });
             setSel({ workspace: ws, project, todoId: s.id });
             setFocusTitleId(title ? null : s.id);
           }

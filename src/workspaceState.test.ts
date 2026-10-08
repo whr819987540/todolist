@@ -139,3 +139,88 @@ describe("各工作区上次打开的待办", () => {
     expect(state.readLastTodo("工作")).toBeNull();
   });
 });
+
+describe("右侧标签页里打开着的待办", () => {
+  const tab = (workspace: string, project: string, todoId: string) => ({ workspace, project, todoId });
+  const ids = () => state.readOpenTodos().map((t) => `${t.workspace}/${t.project}/${t.todoId}${t.preview ? "（预览）" : ""}`);
+
+  it("显示一条待办时放进预览标签，固定下来后再显示别的待办另开一个预览标签", () => {
+    state.showTodoTab(tab("工作", "需求", "a"));
+    state.keepTodoTab(tab("工作", "需求", "a"));
+    state.showTodoTab(tab("工作", "需求", "b"));
+    state.showTodoTab(tab("工作", "需求", "c"));
+    expect(ids()).toEqual(["工作/需求/a", "工作/需求/c（预览）"]);
+  });
+
+  it("变了时通知订阅者；没变时读到的是同一个数组", () => {
+    let calls = 0;
+    const off = state.subscribeOpenTodos(() => calls++);
+    state.keepTodoTab(tab("工作", "需求", "a"));
+    const before = state.readOpenTodos();
+    state.keepTodoTab(tab("工作", "需求", "a"));
+    expect(calls).toBe(1);
+    expect(state.readOpenTodos()).toBe(before);
+    off();
+  });
+
+  it("项目改名、待办移到别的工作区后跟着走，删除后关掉", () => {
+    state.keepTodoTab(tab("工作", "需求", "a"));
+    state.keepTodoTab(tab("工作", "需求", "b"));
+    state.keepTodoTab(tab("工作", "日常", "c"));
+    state.renameProjectState("工作", "需求", "需求池");
+    state.moveTodoState("工作", "需求池", "b", ["生活", "杂事", "b"]);
+    state.forgetProjectState("工作", "日常");
+    expect(ids()).toEqual(["工作/需求池/a", "生活/杂事/b"]);
+    state.forgetWorkspaceState("生活");
+    expect(ids()).toEqual(["工作/需求池/a"]);
+  });
+
+  it("记在 .state.json，下次打开软件还在（预览标签也还是预览）", async () => {
+    const { api } = await import("./api");
+    state.keepTodoTab(tab("工作", "需求", "a"));
+    state.showTodoTab(tab("工作", "需求", "b"));
+    // 隐藏到托盘、退出前立即写盘
+    await (await import("./hooks")).flushAll();
+    const calls = vi.mocked(api.writeUiState).mock.calls;
+    const written = calls[calls.length - 1]?.[0];
+    expect(JSON.parse(written!).openTodos).toEqual([
+      { workspace: "工作", project: "需求", todoId: "a" },
+      { workspace: "工作", project: "需求", todoId: "b", preview: true },
+    ]);
+
+    vi.resetModules();
+    vi.mocked(api.readUiState).mockResolvedValueOnce(written!);
+    const again: State = await import("./workspaceState");
+    await again.loadUiState();
+    expect(again.readOpenTodos().map((t) => [t.todoId, t.preview])).toEqual([
+      ["a", false],
+      ["b", true],
+    ]);
+  });
+
+  it("文件里手改坏的、重复的项去掉", async () => {
+    const { api } = await import("./api");
+    vi.resetModules();
+    vi.mocked(api.readUiState).mockResolvedValueOnce(
+      JSON.stringify({
+        openTodos: [
+          { workspace: "工作", project: "需求", todoId: "a" },
+          { workspace: "工作", project: "需求" },
+          "乱写的",
+          { workspace: "工作", project: "需求", todoId: "a", preview: true },
+        ],
+      }),
+    );
+    const again: State = await import("./workspaceState");
+    await again.loadUiState();
+    expect(again.readOpenTodos()).toEqual([{ workspace: "工作", project: "需求", todoId: "a", preview: false }]);
+  });
+
+  it("刷新后关掉已经不在了的待办的标签，别的工作区的不动", () => {
+    state.keepTodoTab(tab("工作", "需求", "a"));
+    state.keepTodoTab(tab("工作", "需求", "gone"));
+    state.keepTodoTab(tab("生活", "杂事", "gone"));
+    state.pruneTodoTabs("工作", (_project, id) => id !== "gone");
+    expect(ids()).toEqual(["工作/需求/a", "生活/杂事/gone"]);
+  });
+});

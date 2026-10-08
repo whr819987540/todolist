@@ -1,5 +1,5 @@
 import { App as AntApp, Spin, type InputRef } from "antd";
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, errMsg } from "../api";
 import { useAppEvent, useWindowFocus } from "../hooks";
 import { rangePick, togglePick } from "../picking";
@@ -7,15 +7,23 @@ import { useContentSearch } from "../search";
 import { type How, visit } from "../navHistory";
 import { useSettings } from "../settings";
 import { eventShortcut, isRefreshShortcut, sameShortcut } from "../shortcuts";
+import { activeAfterClose, sameTodo, stepTab, type TodoRef } from "../tabs";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { compareName, useLocalState } from "../utils";
 import {
+  closeTodoTabs,
   collapsedKey,
+  keepTodoTab,
   type ListOptions,
   listOptionsKey,
+  pruneTodoTabs,
   readJson,
   readListOptions,
+  readOpenTodos,
   readOpenWorkspaces,
+  showTodoTab,
+  stateGeneration,
+  subscribeOpenTodos,
   writeJson,
   writeLastTodo,
   writeLastView,
@@ -23,6 +31,7 @@ import {
 } from "../workspaceState";
 import BatchPanel from "./BatchPanel";
 import { type DragItem, type TodoAt, useDragMove } from "./DragMove";
+import EditorTabs, { type ShownTab } from "./EditorTabs";
 import { useNameDialog } from "./NameDialog";
 import { ProjectOverview, WorkspaceOverview } from "./Overview";
 import Sidebar, { type SidebarHandle } from "./Sidebar";
@@ -153,6 +162,10 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     [clearPicked],
   );
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null);
+  // 点标签切到的待办（selKey）：正文加载出来后焦点放进正文，接着上次的光标编辑
+  const [focusBodyKey, setFocusBodyKey] = useState<string | null>(null);
+  // 右侧标签页里打开着的待办（全部工作区的，按顺序）
+  const openTodos = useSyncExternalStore(subscribeOpenTodos, readOpenTodos);
   // 用键盘在左侧列表里移到的选中项：这时焦点留在列表，右侧不自动聚焦输入框
   const [kbSel, setKbSel] = useState<Selection | null>(null);
   const [keyword, setKeyword] = useState("");
@@ -204,6 +217,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         return;
       }
     }
+    const generation = stateGeneration();
     const results = await Promise.all(
       workspaces.map((ws) =>
         api.loadWorkspace(ws).then(sortTree, (e) => {
@@ -216,6 +230,10 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     // 加载期间选中的工作区又变了：以按新列表的加载为准
     if (workspacesRef.current !== workspaces) return;
     const trees = results.filter((t) => t !== null);
+    // 已经不在了（在外部被删除等）的待办关掉标签；加载期间改过名、移动过、开过标签的，读到的可能是之前的样子，等下次
+    if (stateGeneration() === generation)
+      for (const t of trees)
+        pruneTodoTabs(t.name, (project, id) => !!t.projects.find((p) => p.name === project)?.todos.some((x) => x.id === id));
     if (trees.length === 0) {
       onHomeRef.current();
       return;
@@ -267,11 +285,30 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const selProject = selTree?.projects.find((p) => p.name === sel.project);
   const selTodo = selProject?.todos.find((t) => t.id === sel.todoId);
 
-  // 记下各工作区上次打开的待办：从首页进入工作区时直接打开它
+  // 记下各工作区上次打开的待办（从首页进入工作区时直接打开它）；还没有标签的放进预览标签
   const selTodoId = selTodo?.id;
   useEffect(() => {
-    if (sel.project && selTodoId) writeLastTodo(sel.workspace, sel.project, selTodoId);
+    if (!sel.project || !selTodoId) return;
+    writeLastTodo(sel.workspace, sel.project, selTodoId);
+    showTodoTab({ workspace: sel.workspace, project: sel.project, todoId: selTodoId });
   }, [sel.workspace, sel.project, selTodoId]);
+
+  // 右侧正显示着的待办；显示概览等时是 null
+  const activeTodo: TodoRef | null =
+    sel.project && selTodoId ? { workspace: sel.workspace, project: sel.project, todoId: selTodoId } : null;
+  // 显示出来的标签：侧栏里选中显示的工作区里、还在的待办
+  const shownTabs = useMemo(
+    () =>
+      openTodos.flatMap((t): ShownTab[] => {
+        if (!workspaces.includes(t.workspace)) return [];
+        const todo = loaded
+          ?.find((x) => x.name === t.workspace)
+          ?.projects.find((p) => p.name === t.project)
+          ?.todos.find((x) => x.id === t.todoId);
+        return todo ? [{ ...t, todo }] : [];
+      }),
+    [openTodos, loaded, workspaces],
+  );
 
   /** 改某个项目的待办列表；fn 原样返回时什么都不改，其他工作区、项目沿用原来的对象 */
   const updateTodos = useCallback(
@@ -324,6 +361,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       if (!workspacesRef.current.includes(s.workspace)) setWorkspaces((list) => sortNames([...list, s.workspace]));
       reveal(s.workspace, s.project);
       setFocusTitleId(null);
+      setFocusBodyKey(null);
       setSel(s);
     };
     return {
@@ -411,6 +449,32 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     return m;
   }, [pickedItems]);
 
+  /** 切到这个标签：展开它在左侧的分支，正文加载出来后焦点放进正文（光标、滚动在上次的地方） */
+  const activateTab = (t: TodoRef) => {
+    const s: Selection = { workspace: t.workspace, project: t.project, todoId: t.todoId };
+    reveal(t.workspace, t.project);
+    setFocusTitleId(null);
+    if (activeTodo && sameTodo(activeTodo, t) && !batchMode) {
+      editorRef.current?.focusBody();
+      return;
+    }
+    setFocusBodyKey(selKey(s));
+    setSel(s);
+  };
+
+  /**
+   * 关掉这些标签（关掉时和切到别的待办一样先存盘）。正显示着的被关掉时切到右边的标签（右边没有时左边的），
+   * 都关掉了显示它所在的项目
+   */
+  const closeTabs = (closing: readonly TodoRef[]) => {
+    if (!closing.length) return;
+    const next = activeAfterClose(shownTabs, closing, activeTodo);
+    closeTodoTabs(closing);
+    if (next === undefined || !activeTodo) return;
+    if (next) activateTab(next);
+    else setSel({ workspace: activeTodo.workspace, project: activeTodo.project });
+  };
+
   // 把待办拖到左侧的另一个项目上、项目拖到另一个工作区上；多选了的待办一起拖
   const drag = useDragMove({
     trees: trees ?? [],
@@ -456,10 +520,15 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       pickAnchor.current = key;
       const only = next?.length === 1 ? parseSelKey(next[0]) : s;
       setFocusTitleId(null);
+      setFocusBodyKey(null);
       setSel(only);
     },
     [setSel],
   );
+  /** 双击左侧列表里的待办：标签固定下来（单击时已经打开在预览标签里） */
+  const onTodoDoubleClick = useCallback((s: Selection) => {
+    if (s.project && s.todoId) keepTodoTab({ workspace: s.workspace, project: s.project, todoId: s.todoId });
+  }, []);
   /** 在多选的待办上右键：批量操作的菜单 */
   const pickedMenu = useCallback(() => {
     const { pickedItems, batch, trees } = latest.current;
@@ -488,9 +557,11 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   // 键盘快捷键
   const kbRef = useRef({ actionsFor, sel, selTree, selTodo, keys: settingsInfo?.settings });
   const focusMainRef = useRef(focusMain);
+  const tabsRef = useRef({ shownTabs, activeTodo, activateTab, closeTabs });
   useEffect(() => {
     kbRef.current = { actionsFor, sel, selTree, selTodo, keys: settingsInfo?.settings };
     focusMainRef.current = focusMain;
+    tabsRef.current = { shownTabs, activeTodo, activateTab, closeTabs };
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -558,6 +629,15 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
         if (editorRef.current?.find(combo === "Ctrl+H")) return;
         if (combo === "Ctrl+F") searchRef.current?.focus({ cursor: "all" });
+      } else if (combo === "Ctrl+W" || combo === "Ctrl+Tab" || combo === "Ctrl+Shift+Tab") {
+        // 关掉正显示着的标签 / 切到下一个、上一个标签。对话框里不响应
+        e.preventDefault();
+        if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
+        const { shownTabs, activeTodo, activateTab, closeTabs } = tabsRef.current;
+        if (combo !== "Ctrl+W") {
+          const next = stepTab(shownTabs, activeTodo, combo === "Ctrl+Tab" ? 1 : -1);
+          if (next) activateTab(next);
+        } else if (activeTodo && !e.repeat) closeTabs([activeTodo]);
       } else if (ctrl && key === "n") {
         e.preventDefault();
         const projects = selTree?.projects ?? [];
@@ -621,6 +701,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         project={selProject.name}
         summary={selTodo}
         autoFocusTitle={focusTitleId === selTodo.id}
+        autoFocusBody={focusBodyKey === selKey(sel)}
         handleRef={editorRef}
         menu={todoMenu(a, selProject.name, selTodo, moveTargets(trees, selTree.name))}
         onSummary={(s) => patchTodo(selTree.name, selProject.name, s)}
@@ -630,8 +711,12 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         onSelectProject={() => a.selectProject(selProject.name)}
         onSavedAsNew={(created) => {
           updateTodos(selTree.name, selProject.name, (todos) => [...todos, created]);
-          setSel({ workspace: selTree.name, project: selProject.name, todoId: created.id });
+          const s = { workspace: selTree.name, project: selProject.name, todoId: created.id };
+          keepTodoTab(s);
+          setFocusBodyKey(selKey(s));
+          setSel(s);
         }}
+        onEdit={() => keepTodoTab({ workspace: selTree.name, project: selProject.name, todoId: selTodo.id })}
       />
     );
   } else if (selProject) {
@@ -659,6 +744,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         sel={sel}
         onSelect={(s) => {
           setFocusTitleId(null);
+          setFocusBodyKey(null);
           setKbSel(s);
           setSel(s, "keyboard");
         }}
@@ -678,10 +764,20 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         drag={{ state: drag.state, start: dragStart }}
         pickedOf={(ws) => pickedByWs.get(ws)}
         onTodoClick={onTodoClick}
+        onTodoDoubleClick={onTodoDoubleClick}
         pickedMenu={pickedMenu}
       />
       <div className="resizer" onMouseDown={startResize} onDoubleClick={() => setWidth(300)} title="拖动调整宽度，双击恢复默认" />
       <main className="main" ref={mainRef} tabIndex={-1}>
+        {shownTabs.length > 0 && (
+          <EditorTabs
+            tabs={shownTabs}
+            active={activeTodo}
+            onActivate={activateTab}
+            onClose={closeTabs}
+            onKeep={keepTodoTab}
+          />
+        )}
         {main}
       </main>
       {dialog}

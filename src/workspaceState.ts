@@ -1,6 +1,6 @@
 // 界面状态：
 // - 记在数据目录 .state.json 里、跟着数据走的：侧栏选中显示的工作区、上次停在哪里、每个工作区上次打开的待办、
-//   各待办的编辑位置和编辑模式；
+//   右侧标签页里打开着的待办、各待办的编辑位置和编辑模式；
 // - 只记在本机 localStorage 里的：每个工作区的折叠状态、排序和隐藏已完成；
 // - 只在这次运行期间记在内存里的：各待办的撤销记录。
 // 工作区在首页改名 / 删除时也要跟着更新（后退、前进的记录也在这时一起更新），所以放在这里供首页和工作区视图共用。
@@ -11,12 +11,14 @@ import type { EditPosition, TextAnchor } from "./editor/position";
 import type { EditorMode } from "./editor/setup";
 import { registerFlusher } from "./hooks";
 import { mapPlaces } from "./navHistory";
+import { closeTabs, mapTabs, type OpenTodo, openTab, type TodoRef } from "./tabs";
 import type { SortKey } from "./types";
 
 /** .state.json 里各项的名字 */
 const OPEN_KEY = "openWorkspaces";
 const LAST_VIEW_KEY = "lastView";
 const LAST_TODOS_KEY = "lastTodos";
+const TABS_KEY = "openTodos";
 const POSITIONS_KEY = "editPositions";
 const MODES_KEY = "editorModes";
 /** 以前记在 localStorage 里的几项（用的也是这些名字），第一次启动时搬进 .state.json */
@@ -198,6 +200,76 @@ export function writeLastTodo(workspace: string, project: string, id: string) {
   writeSaved(LAST_TODOS_KEY, { ...all, [workspace]: [project, id] });
 }
 
+// ----- 右侧标签页里打开着的待办（tabs.ts），按标签的顺序；下次打开软件还在 -----
+
+/** 上次读出的标签：.state.json 里这一项没变时返回同一个数组（useSyncExternalStore 要求） */
+let tabsRead: { raw: unknown; list: readonly OpenTodo[] } = { raw: undefined, list: [] };
+const tabListeners = new Set<() => void>();
+/** 正显示着的那个标签（新开的标签放在它后面）；只在这次运行期间记 */
+let activeTab: TodoRef | null = null;
+/** 改名、移动、删除（mapTodoState），标签变了，每次加一 */
+let generation = 0;
+
+const nonEmpty = (x: unknown): x is string => typeof x === "string" && !!x;
+
+/** 打开着的待办；认不出、重复的项去掉 */
+export function readOpenTodos(): readonly OpenTodo[] {
+  const raw = saved[TABS_KEY];
+  if (raw === tabsRead.raw) return tabsRead.list;
+  const list: OpenTodo[] = [];
+  for (const v of Array.isArray(raw) ? raw : []) {
+    if (!isObject(v) || !nonEmpty(v.workspace) || !nonEmpty(v.project) || !nonEmpty(v.todoId)) continue;
+    const t = { workspace: v.workspace, project: v.project, todoId: v.todoId, preview: v.preview === true };
+    if (!list.some((x) => x.workspace === t.workspace && x.project === t.project && x.todoId === t.todoId)) list.push(t);
+  }
+  tabsRead = { raw, list };
+  return list;
+}
+
+/** 标签变了时回调，返回取消订阅的函数 */
+export function subscribeOpenTodos(fn: () => void): () => void {
+  tabListeners.add(fn);
+  return () => {
+    tabListeners.delete(fn);
+  };
+}
+
+function writeOpenTodos(list: readonly OpenTodo[]) {
+  if (list === readOpenTodos()) return;
+  generation++;
+  // 预览标签才写 preview，固定的省掉
+  writeSaved(
+    TABS_KEY,
+    list.map(({ workspace, project, todoId, preview }) => ({ workspace, project, todoId, ...(preview && { preview }) })),
+  );
+  for (const fn of [...tabListeners]) fn();
+}
+
+/** 右侧显示了这条待办：还没有标签的放进预览标签，已经有的不动；记下它是正显示着的标签 */
+export function showTodoTab(todo: TodoRef) {
+  writeOpenTodos(openTab(readOpenTodos(), todo, false, activeTab));
+  activeTab = todo;
+}
+
+/** 这条待办的标签固定下来（新建的、修改过的、双击打开的）；还没有标签的新开一个 */
+export function keepTodoTab(todo: TodoRef) {
+  writeOpenTodos(openTab(readOpenTodos(), todo, true, activeTab));
+}
+
+export const closeTodoTabs = (closing: readonly TodoRef[]) => writeOpenTodos(closeTabs(readOpenTodos(), closing));
+
+/**
+ * 读数据之前记下 stateGeneration()，读完时变了的话，读到的可能还是改名、移动之前的样子，或者不含刚新建、开了标签的待办，
+ * 不能据此关掉标签
+ */
+export const stateGeneration = () => generation;
+
+/** 工作区刷新后，关掉其中已经不在了的待办（在外部被删除等）的标签 */
+export function pruneTodoTabs(workspace: string, exists: (project: string, id: string) => boolean) {
+  const list = readOpenTodos();
+  writeOpenTodos(closeTabs(list, list.filter((t) => t.workspace === workspace && !exists(t.project, t.todoId))));
+}
+
 // ----- 各待办的编辑位置、编辑模式：按 [工作区, 项目, 待办 id] 记，最近记的排在最后 -----
 
 /** 按待办记的东西用的键；后退、前进的记录里只到工作区 / 项目一级的，后面是空串 */
@@ -293,10 +365,11 @@ export function takeUndo(workspace: string, project: string, id: string, doc: st
 }
 
 /**
- * 改名、移动、删除之后，记住的编辑位置、编辑模式、各工作区上次打开的待办、撤销记录和后退、前进的记录跟过去；
+ * 改名、移动、删除之后，记住的编辑位置、编辑模式、各工作区上次打开的待办、标签、撤销记录和后退、前进的记录跟过去；
  * fn 返回 null 的删掉
  */
 function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
+  generation++;
   const move = (k: string) => {
     try {
       const to = fn(JSON.parse(k) as TodoKey);
@@ -324,6 +397,11 @@ function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
     if (self && to && to[0] === self[0]) last[to[0]] = [to[1], to[2]];
   }
   writeSaved(LAST_TODOS_KEY, last);
+  writeOpenTodos(mapTabs(readOpenTodos(), fn));
+  if (activeTab) {
+    const to = fn([activeTab.workspace, activeTab.project, activeTab.todoId]);
+    activeTab = to && { workspace: to[0], project: to[1], todoId: to[2] };
+  }
   for (const [k, snap] of [...undos]) {
     const nk = move(k);
     if (nk === k) continue;

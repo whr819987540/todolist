@@ -65,6 +65,8 @@ export interface EditorHandle {
   detach(): void;
   /** 在正文里查找（Ctrl+F）；replace 为 true 时同时展开替换（Ctrl+H）。正文还没加载出来时返回 false */
   find(replace: boolean): boolean;
+  /** 焦点放进正文，光标还在原处、不滚动 */
+  focusBody(): void;
 }
 
 interface Props {
@@ -72,6 +74,8 @@ interface Props {
   project: string;
   summary: TodoSummary;
   autoFocusTitle: boolean;
+  /** 正文加载出来后焦点放进正文（光标在上次编辑的地方），点标签切过来时用 */
+  autoFocusBody: boolean;
   handleRef: React.RefObject<EditorHandle | null>;
   menu: MenuProps;
   onSummary: (s: TodoSummary) => void;
@@ -81,6 +85,8 @@ interface Props {
   onSelectProject: () => void;
   /** 外部修改冲突时选了「另存为新待办」：新建的那条（同一项目里），由外层加进列表并打开 */
   onSavedAsNew: (s: TodoSummary) => void;
+  /** 打开后第一次修改了标题或正文（预览标签据此固定下来） */
+  onEdit: () => void;
 }
 
 type Status = "saved" | "dirty" | "saving" | "error";
@@ -194,9 +200,17 @@ export default function TodoEditor(props: Props) {
     outline: [] as OutlineItem[],
     readingPos: 0,
     activeHeading: -1,
+    /** 打开后修改过标题或正文 */
+    edited: false,
   }).current;
 
   const isDirty = () => s.content !== s.savedContent || s.title !== s.savedTitle;
+
+  const noteEdit = () => {
+    if (s.edited) return;
+    s.edited = true;
+    propsRef.current.onEdit();
+  };
 
   const stopTimer = () => {
     window.clearTimeout(s.timer);
@@ -378,6 +392,7 @@ export default function TodoEditor(props: Props) {
         stopTimer();
       },
       find: (replace) => mdRef.current?.openFind(replace) ?? false,
+      focusBody: () => mdRef.current?.focus(),
     };
     return () => {
       cancelled = true;
@@ -483,6 +498,7 @@ export default function TodoEditor(props: Props) {
 
   const onContentChange = (text: string) => {
     s.content = text;
+    noteEdit();
     refreshStatus();
     window.clearTimeout(s.statsTimer);
     s.statsTimer = window.setTimeout(() => {
@@ -496,6 +512,7 @@ export default function TodoEditor(props: Props) {
     setTitle(text);
     if (composing) return;
     s.title = text;
+    noteEdit();
     refreshStatus();
   };
 
@@ -709,6 +726,7 @@ export default function TodoEditor(props: Props) {
                 initialDoc={initialDoc}
                 initialPosition={initialPosition}
                 initialHistory={initialHistory}
+                autoFocus={props.autoFocusBody && !props.autoFocusTitle}
                 mode={mode}
                 readOnly={readOnly}
                 placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}

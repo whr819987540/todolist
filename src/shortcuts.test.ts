@@ -111,6 +111,13 @@ describe("录制快捷键时的检查", () => {
     expect(reservedShortcut("Ctrl+Alt+R")).toBeNull();
   });
 
+  it("Ctrl+W、Ctrl+Tab、Ctrl+Shift+Tab（关闭 / 切换标签）算已占用", () => {
+    expect(checkShortcut("Ctrl+W")).toBe("Ctrl + W 是常用的「关闭标签」快捷键，请换一个");
+    expect(reservedShortcut("ctrl+Tab")).toBe("下一个标签");
+    expect(reservedShortcut("Shift+Ctrl+Tab")).toBe("上一个标签");
+    expect(reservedShortcut("Ctrl+Alt+W")).toBeNull();
+  });
+
   it("和其他已经用着的快捷键重复时说明是哪个", () => {
     const taken = [{ key: "Ctrl+Alt+D", label: "「标记完成 / 未完成」" }];
     expect(checkShortcut("Ctrl+Alt+D", taken)).toBe("Ctrl + Alt + D 已用于「标记完成 / 未完成」，请换一个");
