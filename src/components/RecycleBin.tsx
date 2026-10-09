@@ -2,9 +2,11 @@ import { DeleteOutlined, FileTextOutlined, FolderFilled, RestOutlined, SearchOut
 import { App as AntApp, Button, Empty, Input, Modal, Popconfirm, Spin, Tooltip } from "antd";
 import { useCallback, useEffect, useState } from "react";
 import { api, errMsg } from "../api";
+import { useAppEvent } from "../hooks";
 import type { RecycleEntry, RecycleKind } from "../types";
 import { parentOf, projectLabel } from "../projects";
 import { avatarColor, firstChar, fullTime, relativeTime, useNow } from "../utils";
+import { type DataChange, recycleTouched } from "../watch";
 import { restoredPlace } from "./undo";
 
 const KIND_LABELS: Record<RecycleKind, string> = { todo: "待办", project: "项目", workspace: "工作区" };
@@ -56,6 +58,11 @@ function RecycleBinDialog({ open, onClose }: { open: boolean; onClose: () => voi
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (open) load();
   }, [open, load]);
+
+  // 开着时回收站在外部变了（从 Windows 回收站还原回来的、网盘同步来的）、恢复了东西：列表跟着刷新
+  useAppEvent<DataChange>("data-changed", (c) => {
+    if (open && recycleTouched(c)) load();
+  });
 
   const restore = async (e: RecycleEntry) => {
     setBusy(e.id);

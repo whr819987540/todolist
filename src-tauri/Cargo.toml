@@ -35,6 +35,8 @@ zip = { version = "8", default-features = false, features = ["deflate-flate2-zli
 keyring = { version = "3", features = ["windows-native"] }
 roxmltree = "0.21"
 percent-encoding = "2"
+# 监听数据目录，文件在外部变化时通知主窗口刷新（见 watch.rs）
+notify = "8"
 
 # 给窗口补设大图标（见 lib.rs set_window_icons）
 [target.'cfg(windows)'.dependencies]

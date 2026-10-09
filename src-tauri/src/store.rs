@@ -26,16 +26,19 @@
 //! 左侧列表显示的正文开头（预览）要读每个 .md 的开头，待办多了很慢（窗口每次获得焦点都要重新加载），
 //! 所以缓存在内存里，按文件的修改时间和大小判断是否失效；全文搜索用的正文全文同样缓存在内存里。
 //! 都不写进任何文件（数据目录可能用网盘同步，多写一个文件就多一次同步冲突的机会）。
+//!
+//! 运行期间监听数据目录（watch.rs），文件在外部变化时通知前端刷新；这里每次写完都记下写过的文件、文件夹现在的样子
+//! （OwnWrites），监听到的变化和记下的一样就是软件自己写的，不引起刷新。
 
 use chrono::Local;
 use encoding_rs::{DecoderResult, Encoding, GB18030, UTF_8};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const META_FILE: &str = ".todos.json";
 pub const UI_STATE_FILE: &str = ".state.json";
@@ -53,6 +56,8 @@ const MAX_SEARCH_HITS: usize = 2000;
 /// 全文搜索的结果里，命中处前后各带多少个字
 const SNIPPET_BEFORE: usize = 16;
 const SNIPPET_AFTER: usize = 60;
+/// 软件自己写过的文件、文件夹，这么久之内监听到的变化才认成是自己写的（监听时一阵变化合起来最多攒 2 秒）
+const OWN_WRITE_TTL: Duration = Duration::from_secs(10);
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -351,6 +356,20 @@ impl Store {
         Ok(path)
     }
 
+    /// 建好文件夹 dir（连同不在的上级文件夹），记下新建的这些是软件自己建的
+    fn create_dirs(&self, dir: &Path) -> io::Result<()> {
+        let missing: Vec<PathBuf> = dir
+            .ancestors()
+            .take_while(|d| *d != self.root && !d.is_dir())
+            .map(Path::to_path_buf)
+            .collect();
+        fs::create_dir_all(dir)?;
+        for d in &missing {
+            note_own(d);
+        }
+        Ok(())
+    }
+
     // ----- 路径（给“打开 / 在资源管理器中显示”用） -----
 
     pub fn workspace_path(&self, ws: &str) -> Result<PathBuf> {
@@ -532,6 +551,8 @@ impl Store {
             });
         }
         fs::rename(&pdir, &dst).map_err(|e| format!("移动失败，可能有文件正被其他程序占用：{e}"))?;
+        note_own(&pdir);
+        note_own(&dst);
         Ok(join_project(parent, name))
     }
 
@@ -556,6 +577,7 @@ impl Store {
             return Err(format!("写入待办正文失败：{e}"));
         }
         drop(file);
+        note_own(&path);
         let now = now_ms();
         let entry = TodoMeta {
             id,
@@ -596,10 +618,8 @@ impl Store {
         {
             let _g = self.guard();
             let dir = project.split(PROJECT_SEP).fold(self.root.join(&ws), |d, p| d.join(p));
-            if !dir.is_dir() {
-                fs::create_dir_all(&dir)
-                    .map_err(|e| format!("创建项目「{}」失败：{e}", project_label(&project)))?;
-            }
+            self.create_dirs(&dir)
+                .map_err(|e| format!("创建项目「{}」失败：{e}", project_label(&project)))?;
         }
         self.create_todo(&ws, &project, title, content)
     }
@@ -797,6 +817,8 @@ impl Store {
         let dst_path = dst_dir.join(format!("{new_id}.md"));
         fs::rename(&src_path, &dst_path)
             .map_err(|e| format!("移动失败，文件可能正被其他程序占用：{e}"))?;
+        note_own(&src_path);
+        note_own(&dst_path);
 
         entry.id = new_id;
         // 在目标项目里还没排过位置，手动排序时排在最前面
@@ -894,6 +916,7 @@ impl Store {
             let _ = fs::remove_dir_all(&dir);
             return Err(format!("删除失败，可能有文件正被其他程序占用：{e}"));
         }
+        note_own(path);
         Ok(id)
     }
 
@@ -963,7 +986,7 @@ impl Store {
             RecycleKind::Todo => {
                 let project = f.project.clone().ok_or_else(gone)?;
                 let pdir = project_parts(&project)?.iter().fold(self.root.join(&f.workspace), |d, p| d.join(p));
-                fs::create_dir_all(&pdir).map_err(|e| format!("恢复失败：{e}"))?;
+                self.create_dirs(&pdir).map_err(|e| format!("恢复失败：{e}"))?;
                 let mut meta = read_meta(&pdir)?;
                 let stem = f.name.strip_suffix(".md").unwrap_or(&f.name).to_string();
                 let mut todo = f.todo.clone().unwrap_or_else(|| {
@@ -983,7 +1006,9 @@ impl Store {
                 if pdir.join(format!("{new_id}.md")).exists() || meta.find(&new_id).is_some() {
                     new_id = unique_id(&pdir, &meta);
                 }
-                fs::rename(&payload, pdir.join(format!("{new_id}.md"))).map_err(|e| format!("恢复失败：{e}"))?;
+                let path = pdir.join(format!("{new_id}.md"));
+                fs::rename(&payload, &path).map_err(|e| format!("恢复失败：{e}"))?;
+                note_own(&path);
                 todo.id = new_id.clone();
                 // 原来排的位置在别的待办调整过顺序后不一定还对，当成新来的排在最前面
                 todo.order = None;
@@ -1009,9 +1034,10 @@ impl Store {
                     check_component(p, "项目")?;
                     dir = dir.join(p);
                 }
-                fs::create_dir_all(&dir).map_err(|e| format!("恢复失败：{e}"))?;
+                self.create_dirs(&dir).map_err(|e| format!("恢复失败：{e}"))?;
                 let (name, renamed) = free_name(&dir, &f.name);
                 fs::rename(&payload, dir.join(&name)).map_err(|e| format!("恢复失败：{e}"))?;
+                note_own(&dir.join(&name));
                 g.forget_under(&dir.join(&name));
                 let project = Some(join_project(parent, &name));
                 Restored { kind: f.kind, workspace: f.workspace.clone(), project, todo_id: None, renamed }
@@ -1019,6 +1045,7 @@ impl Store {
             RecycleKind::Workspace => {
                 let (name, renamed) = free_name(&self.root, &f.name);
                 fs::rename(&payload, self.root.join(&name)).map_err(|e| format!("恢复失败：{e}"))?;
+                note_own(&self.root.join(&name));
                 g.forget_under(&self.root.join(&name));
                 Restored { kind: f.kind, workspace: name, project: None, todo_id: None, renamed }
             }
@@ -1389,7 +1416,9 @@ fn read_meta(dir: &Path) -> Result<MetaFile> {
         Err(_) => {
             // 损坏的元数据留档后重建（正文都在 .md 里，丢的只是标题/完成状态）
             let backup = dir.join(format!("{META_FILE}.broken-{}", Local::now().format("%Y%m%d%H%M%S")));
-            let _ = fs::rename(&path, backup);
+            if fs::rename(&path, backup).is_ok() {
+                note_own(&path);
+            }
             Ok(MetaFile::default())
         }
     }
@@ -1755,7 +1784,9 @@ fn create_child_dir(parent: &Path, name: &str, what: &str) -> Result<()> {
     if dir.exists() {
         return Err(format!("已存在同名{what}「{name}」"));
     }
-    fs::create_dir(&dir).map_err(|e| format!("创建{what}失败：{e}"))
+    fs::create_dir(&dir).map_err(|e| format!("创建{what}失败：{e}"))?;
+    note_own(&dir);
+    Ok(())
 }
 
 fn rename_dir(dir: &Path, parent: &Path, old: &str, new: &str, what: &str) -> Result<()> {
@@ -1768,22 +1799,24 @@ fn rename_dir(dir: &Path, parent: &Path, old: &str, new: &str, what: &str) -> Re
         return Err(format!("已存在同名{what}「{new}」"));
     }
     fs::rename(dir, &target)
-        .map_err(|e| format!("重命名失败，可能有文件正被其他程序占用：{e}"))
+        .map_err(|e| format!("重命名失败，可能有文件正被其他程序占用：{e}"))?;
+    note_own(dir);
+    note_own(&target);
+    Ok(())
 }
 
 /// 先写临时文件再替换，避免写到一半崩溃留下残缺文件；
-/// 目标被其他程序以不允许替换的方式打开时退回直接覆盖写。
+/// 目标被其他程序以不允许替换的方式打开时退回直接覆盖写。写好后记下是软件自己写的（临时文件监听时本来就不算）
 pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let tmp = path.with_file_name(format!(".{name}.tmp"));
     fs::write(&tmp, data)?;
-    match fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            let _ = fs::remove_file(&tmp);
-            fs::write(path, data)
-        }
+    if fs::rename(&tmp, path).is_err() {
+        let _ = fs::remove_file(&tmp);
+        fs::write(path, data)?;
     }
+    note_own(path);
+    Ok(())
 }
 
 fn now_ms() -> i64 {
@@ -1799,6 +1832,94 @@ fn to_ms(t: io::Result<SystemTime>) -> Option<i64> {
 
 fn mtime_ms(path: &Path) -> Option<i64> {
     to_ms(fs::metadata(path).and_then(|m| m.modified()))
+}
+
+// ---------------------------------------------------------------------------
+// 软件自己的写入：监听数据目录时据此认出自己写的，不引起刷新（见 watch.rs）
+// ---------------------------------------------------------------------------
+
+/// 一个路径现在的样子：文件看修改时间和大小，文件夹只看在不在（里面增删东西时它的修改时间也变）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PathState {
+    File { modified: Option<SystemTime>, len: u64 },
+    Dir,
+    Absent,
+}
+
+impl PathState {
+    pub(crate) fn of(path: &Path) -> Self {
+        match fs::metadata(path) {
+            Ok(md) if md.is_dir() => PathState::Dir,
+            Ok(md) => PathState::File { modified: md.modified().ok(), len: md.len() },
+            Err(_) => PathState::Absent,
+        }
+    }
+}
+
+/// 软件自己刚写过（新建、改写、改名、移走、删除）的文件和文件夹，写完时是什么样子。监听到某个路径变了、
+/// 它现在的样子和这里记下的一样，就是自己写的；不一样（之后外部又改了）时忘掉，之后这个路径的变化都算外部的。
+/// 只认 OWN_WRITE_TTL 之内写的
+#[derive(Debug, Default)]
+pub(crate) struct OwnWrites {
+    /// 路径（统一了大小写和分隔符）→ 写过的路径、写完时的样子、什么时候写的
+    seen: BTreeMap<String, (PathBuf, PathState, Instant)>,
+}
+
+/// 记得太多时清掉过期的
+const OWN_WRITES_PRUNE: usize = 256;
+
+impl OwnWrites {
+    pub(crate) const fn new() -> Self {
+        Self { seen: BTreeMap::new() }
+    }
+
+    /// 记下 path 在 at 时（刚写完）的样子。新建、改名、移走、删掉的是文件夹时，之前记下的它里面的文件、文件夹也跟着
+    /// 变了样子，按现在的样子重新记：比如刚移进来的待办随即连同项目改了名、删掉又恢复了，那时移进来的变化还没报，
+    /// 报的时候它已经不在原处、或者又回来了
+    pub(crate) fn note(&mut self, path: &Path, state: PathState, at: Instant) {
+        if self.seen.len() >= OWN_WRITES_PRUNE {
+            self.seen.retain(|_, (_, _, t)| at.saturating_duration_since(*t) < OWN_WRITE_TTL);
+        }
+        let key = own_key(path);
+        let inside = format!("{key}\\");
+        for (k, (p, s, t)) in self.seen.range_mut(inside.clone()..) {
+            if !k.starts_with(&inside) {
+                break;
+            }
+            *s = PathState::of(p);
+            *t = at;
+        }
+        self.seen.insert(key, (path.to_path_buf(), state, at));
+    }
+
+    /// path 在 at 时的样子 now 是不是软件自己写成的
+    pub(crate) fn is_own(&mut self, path: &Path, now: PathState, at: Instant) -> bool {
+        let key = own_key(path);
+        let Some((_, state, t)) = self.seen.get(&key) else { return false };
+        if *state == now && at.saturating_duration_since(*t) < OWN_WRITE_TTL {
+            return true;
+        }
+        self.seen.remove(&key);
+        false
+    }
+}
+
+/// Windows 的路径不分大小写，/ 和 \ 都是分隔符
+fn own_key(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "\\").to_lowercase()
+}
+
+/// 整个程序只有一个数据目录，所有写入（包括设置文件、界面状态）都记在这一份里，监听线程从这里查
+static OWN_WRITES: Mutex<OwnWrites> = Mutex::new(OwnWrites::new());
+
+pub(crate) fn own_writes() -> MutexGuard<'static, OwnWrites> {
+    OWN_WRITES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 记下软件自己刚写过 path（文件或文件夹；移走、删掉了的记成不在）
+fn note_own(path: &Path) {
+    let state = PathState::of(path);
+    own_writes().note(path, state, Instant::now());
 }
 
 // ---------------------------------------------------------------------------
