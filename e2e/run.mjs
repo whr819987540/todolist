@@ -30,6 +30,7 @@ const SUITES = [
   "tabs",
   "lists",
   "split",
+  "conflict",
   "regress",
 ];
 

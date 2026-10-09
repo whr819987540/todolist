@@ -1,11 +1,12 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { App as AntApp } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import Home from "./components/Home";
 import type { Selection } from "./components/sidebar/tree";
 import WorkspaceView, { type WorkspaceViewHandle } from "./components/WorkspaceView";
-import { flushAll, useAppEvent } from "./hooks";
+import { flushAll, flushBeforeQuit, QUIT_FLUSH_TIMEOUT, useAppEvent } from "./hooks";
 import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
 import { compareName } from "./utils";
@@ -55,11 +56,14 @@ export default function App() {
   const [view, setView] = useState<View | null>(null);
   const viewRef = useRef(view);
   const workspaceRef = useRef<WorkspaceViewHandle | null>(null);
+  const { modal } = AntApp.useApp();
+  const modalRef = useRef(modal);
   const { autoSave } = useSaveOptions();
   const autoSaveRef = useRef(autoSave);
   useEffect(() => {
     autoSaveRef.current = autoSave;
     viewRef.current = view;
+    modalRef.current = modal;
   });
 
   useEffect(() => {
@@ -120,12 +124,33 @@ export default function App() {
   // 点关闭按钮时 Rust 端把窗口藏到托盘，这里阻止默认的销毁窗口并把编辑中的内容写盘（auto save 关着时不写待办）；
   // 从托盘「退出」时不论 auto save 开没开都先写盘，再真正退出
   useEffect(() => {
+    /**
+     * 从托盘「退出」：先写盘，正在编辑的待办存不上的（外部改过、被删了等）另存为新待办，都做完了才退出。
+     * 有存不下来的、一直没存完的不退出（Rust 端这一次也不强制退出），调出主窗口问用户还退不退
+     */
+    const quit = async () => {
+      api.holdQuit().catch(() => {});
+      const r = await flushBeforeQuit();
+      if (r === "saved") return api.quitApp();
+      api.cancelQuit().catch(() => {});
+      modalRef.current.confirm({
+        title: r === "failed" ? "有修改没能保存" : "还没保存完",
+        content:
+          r === "failed"
+            ? "正在编辑的待办里有修改没能保存下来（见上方的提示），现在退出会丢掉这些修改。"
+            : `正在编辑的内容 ${QUIT_FLUSH_TIMEOUT / 1000} 秒内没有保存完，现在退出可能丢掉还没保存的修改。`,
+        okText: "仍然退出",
+        okButtonProps: { danger: true },
+        cancelText: "不退出",
+        onOk: () => api.quitApp(),
+      });
+    };
     const pending = [
       getCurrentWindow().onCloseRequested((e) => {
         e.preventDefault();
         return flushAll(autoSaveRef.current);
       }),
-      listen("quit-requested", () => flushAll().finally(api.quitApp)),
+      listen("quit-requested", quit),
     ];
     return () => {
       pending.forEach((p) => p.then((unlisten) => unlisten()));

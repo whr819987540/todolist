@@ -82,18 +82,16 @@ export default async function (t) {
   await m.drag(await m.at(["工作", "要搬走的"]), await m.at(["生活"]));
   check("拖动项目到别的工作区", t.exists("生活/要搬走的") && !t.exists("工作/要搬走的"));
 
-  // 外部修改冲突：有没保存的修改时获得焦点不重新加载，保存时弹出冲突对话框
+  // 外部修改冲突：有没保存的修改时获得焦点不重新加载，立即弹出冲突对话框（离开时另存为新待办等见 conflict 套件）
   await m.ev(`return await openTodo("工作", "日常", "D")`);
   await m.ev(`const v = view(); v.focus(); v.dispatch({ changes: { from: v.state.doc.length, insert: "\\n我在软件里加的" } }); return 1`);
   await t.sleep(200);
   t.write("工作/日常/D.md", "# 待办 D\n\n外部改的\n");
   await m.emit("tauri://focus");
-  await t.sleep(600);
-  check("有没保存的修改时，获得焦点不重新加载", await m.ev(`return view().state.doc.toString().includes("我在软件里加的")`));
-  await m.press("Ctrl+S");
   await t.sleep(800);
+  check("有没保存的修改时，获得焦点不重新加载", await m.ev(`return view().state.doc.toString().includes("我在软件里加的")`));
   const modal = await m.ev(`return { title: document.querySelector(".ant-modal-title")?.textContent, buttons: [...document.querySelectorAll(".ant-modal-footer button")].map((b) => b.textContent) }`);
-  check("保存时弹出冲突对话框，有三个选择", modal.title === "文件已在外部被修改" && modal.buttons.join("|") === "放弃我的修改，重新加载|用我的内容覆盖|另存为新待办", modal);
+  check("获得焦点时立即弹出冲突对话框，有三个选择", modal.title === "文件已在外部被修改" && modal.buttons.join("|") === "放弃我的修改，重新加载|用我的内容覆盖|另存为新待办", modal);
   await m.ev(`button("用我的内容覆盖", document.querySelector(".ant-modal-footer")).click(); await sleep(800); return 1`);
   check("「用我的内容覆盖」", t.read("工作/日常/D.md").includes("我在软件里加的"));
 

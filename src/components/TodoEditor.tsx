@@ -51,7 +51,8 @@ import { type SessionMember, todoSession } from "./todoSession";
 export interface EditorHandle {
   /**
    * 立即保存所有未保存的修改（Ctrl+S、重命名 / 移动等操作前），不受 auto save 开关影响。
-   * 返回是否都存好了（没有要存的也算）；正文有冲突（弹出了冲突对话框）、保存失败（已提示）时为 false
+   * 返回是否都存好了（没有要存的也算）；正文有冲突（弹出了冲突对话框）、保存失败（已提示）时为 false。
+   * 离开这条待办（两边都关掉了）时会话另外会存一次，那时存不上的另存为新待办
    */
   flush(): Promise<boolean>;
   /** 待办已被删除/移走：之后不再尝试保存（分屏的另一边开着同一条待办时也是）。撤销记录先按原来的位置留下，由 workspaceState 跟到新位置 */
@@ -94,7 +95,7 @@ interface Props {
   onSavedAsNew: (s: TodoSummary) => void;
   /** 打开后第一次修改了标题或正文（预览标签据此固定下来） */
   onEdit: () => void;
-  /** 有没有没存好的修改（标签上的圆点）；卸载时（切走、关掉，那时会存盘）报一次 false */
+  /** 有没有没存好的修改（标签上的圆点）；卸载时（切走、关掉，那时会存盘，都关掉了时存不上的另存为新待办）报一次 false */
   onDirty: (dirty: boolean) => void;
 }
 
@@ -127,7 +128,8 @@ const otherMode = (m: EditorMode): EditorMode => (m === "live" ? "source" : "liv
  * 右侧的待办详情：标题 + Markdown 正文（实时渲染或源码模式）。
  * 正文、标题、保存和外部修改冲突在这条待办的会话里（todoSession.ts），分屏时两边开着同一条待办共用一个：
  * Ctrl+S、切换待办、从托盘退出时总是保存；有未保存的修改后还定时保存：auto save 开着时按设置的间隔，
- * 关着时满 1 小时兜底。auto save 开着时编辑器或窗口失去焦点也立即保存。
+ * 关着时满 1 小时兜底。auto save 开着时编辑器或窗口失去焦点也立即保存。窗口获得焦点时核对磁盘，有没保存的修改、
+ * 外部又改过时立即弹出冲突对话框；离开这条待办（两边都关掉了）、从托盘退出时存不上的，自动另存为新待办。
  * 这里管的是这一边自己的：编辑器（光标、滚动、查找框）、编辑模式、编辑位置、字数和大纲
  */
 export default function TodoEditor(props: Props) {
@@ -164,12 +166,16 @@ export default function TodoEditor(props: Props) {
   const mdRef = useRef<MarkdownEditorHandle | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const propsRef = useRef(props);
+  // App 级的提示：卸载后（离开时另存为新待办）也能用
   const messageRef = useRef(message);
   const saveOptionsRef = useRef(saveOptions);
+  // 快速记录存到的项目：离开时存不上、原来的项目也不在了时另存到这里
+  const quickTargetRef = useRef(keys?.quickCaptureTarget);
   useEffect(() => {
     propsRef.current = props;
     messageRef.current = message;
     saveOptionsRef.current = saveOptions;
+    quickTargetRef.current = keys?.quickCaptureTarget;
   });
 
   // 这一边自己的可变状态放在 ref 里，异步回调和卸载时都能拿到最新值。
@@ -230,9 +236,12 @@ export default function TodoEditor(props: Props) {
     const member: SessionMember = {
       id: memberId,
       onSummary: (s) => propsRef.current.onSummary(s),
+      summary: () => propsRef.current.summary,
       onEdit: () => propsRef.current.onEdit(),
       saveOptions: () => saveOptionsRef.current,
       error: (text) => messageRef.current.error(text),
+      notice: (type, text, seconds) => messageRef.current[type](text, seconds),
+      quickTarget: () => quickTargetRef.current,
       savePosition,
       loaded: (doc) => setStats(textStats(doc)),
       titleFocused: () => !!titleRef.current?.input && document.activeElement === titleRef.current.input,
