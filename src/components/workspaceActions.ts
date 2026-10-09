@@ -2,6 +2,7 @@ import { App as AntApp } from "antd";
 import { useEffect, useMemo, useRef } from "react";
 import { api, errMsg } from "../api";
 import type { How } from "../navHistory";
+import { deepTodos, inProject, isSubProject, leafName, projectLabel, reparent, subProjectsOf } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
@@ -59,7 +60,7 @@ export interface ActionContext {
   listOptions: PerWorkspace<ListOptions>;
   /** 展开工作区（WS_KEY）或项目 */
   expand: (ws: string, key: string) => void;
-  /** 展开项目所在的分支 */
+  /** 展开项目所在的分支（工作区、父项目和它自己） */
   reveal: (ws: string, project?: string) => void;
   updateTodos: (ws: string, project: string, fn: (todos: TodoSummary[]) => TodoSummary[]) => void;
   patchTodo: (ws: string, project: string, s: TodoSummary) => void;
@@ -130,6 +131,18 @@ export function useWorkspaceActions(ctx: ActionContext) {
     listOptions.forget(ws);
   };
 
+  /**
+   * 项目改名、移动后，它和子项目的折叠状态跟过去：fromWs 里的 from（路径）→ toWs 里的 to。
+   * 先按现在的状态算好要搬的，再分别改两个工作区（可以是同一个）
+   */
+  const moveCollapsed = (fromWs: string, from: string, toWs: string, to: string) => {
+    const moved: Collapsed = {};
+    for (const [k, v] of Object.entries(collapsed.get(fromWs)))
+      if (k !== WS_KEY && inProject(k, from)) moved[reparent(k, from, to)] = v;
+    setCollapsed(fromWs, (c) => Object.fromEntries(Object.entries(c).filter(([k]) => k === WS_KEY || !inProject(k, from))));
+    setCollapsed(toWs, (c) => ({ ...c, ...moved }));
+  };
+
   /** 执行操作，出错时弹出提示；返回是否成功 */
   const run = async (fn: () => Promise<void>) => {
     try {
@@ -156,6 +169,8 @@ export function useWorkspaceActions(ctx: ActionContext) {
     const tree = treeOf(ws);
     const inSel = sel.workspace === ws;
     const isSelProject = (project: string) => inSel && sel.project === project;
+    /** 右侧显示的是这个项目或它的子项目（概览或其中的待办）：改名、移动、删除它时要先存盘、跟过去 */
+    const showsProject = (project: string) => inSel && sel.project !== undefined && inProject(sel.project, project);
     const isSelTodo = (project: string, id: string) => isSelProject(project) && sel.todoId === id;
 
     return {
@@ -214,55 +229,70 @@ export function useWorkspaceActions(ctx: ActionContext) {
             setSel({ workspace: ws, project: name });
           },
         }),
+      newSubProject: (parent) =>
+        openDialog({
+          title: "新建子项目",
+          label: `在项目「${workspaces.length > 1 ? `${ws} / ` : ""}${parent}」中新建子项目`,
+          placeholder: "例如：前端、后端",
+          okText: "创建",
+          onSubmit: async (v) => {
+            const name = await api.createProject(ws, v, parent);
+            await reload();
+            reveal(ws, name);
+            setSel({ workspace: ws, project: name });
+          },
+        }),
       renameProject: (project) =>
         openDialog({
-          title: "重命名项目",
-          initial: project,
+          title: isSubProject(project) ? "重命名子项目" : "重命名项目",
+          initial: leafName(project),
           onSubmit: async (v) => {
-            if (isSelProject(project)) await flushEditor();
+            const isSel = showsProject(project);
+            if (isSel) await flushEditor();
             const name = await api.renameProject(ws, project, v);
-            if (isSelProject(project)) editorRef.current?.detach();
+            if (isSel) editorRef.current?.detach();
             renameProjectState(ws, project, name);
-            setCollapsed(ws, (c) => {
-              const { [project]: state, ...rest } = c;
-              return state === undefined ? rest : { ...rest, [name]: state };
-            });
+            moveCollapsed(ws, project, ws, name);
             await reload();
-            if (isSelProject(project)) setSel({ ...sel, project: name }, "replace");
+            if (isSel && sel.project) setSel({ ...sel, project: reparent(sel.project, project, name) }, "replace");
             message.success("已重命名");
           },
         }),
       deleteProject: (project) => {
-        const count = tree?.projects.find((p) => p.name === project)?.todos.length ?? 0;
+        const projects = tree?.projects ?? [];
+        const count = deepTodos(projects, project).length;
+        const subs = subProjectsOf(projects, project).length;
         confirmDelete(
-          `删除项目「${project}」？`,
-          `其中的 ${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
+          `删除${isSubProject(project) ? "子项目" : "项目"}「${projectLabel(project)}」？`,
+          `其中的 ${subs ? `${subs} 个子项目、` : ""}${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
-            if (isSelProject(project)) await flushEditor();
+            const isSel = showsProject(project);
+            if (isSel) await flushEditor();
             const rid = await api.deleteProject(ws, project);
-            if (isSelProject(project)) {
+            if (isSel) {
               editorRef.current?.detach();
               setSel({ workspace: ws });
             }
             forgetProjectState(ws, project);
             await reload();
-            undoDelete(`已删除项目「${project}」`, [rid]);
+            undoDelete(`已删除${isSubProject(project) ? "子项目" : "项目"}「${projectLabel(project)}」`, [rid]);
           },
         );
       },
       moveProject: (project, targetWs) =>
         run(async () => {
-          const isSel = isSelProject(project);
+          const isSel = showsProject(project);
           if (isSel) await flushEditor();
-          await api.moveProject(ws, project, targetWs);
+          // 移过去后的路径：子项目移到别的工作区后是那里的顶层项目
+          const to = await api.moveProject(ws, project, targetWs);
           if (isSel) editorRef.current?.detach();
-          moveProjectState(ws, project, targetWs);
+          moveProjectState(ws, project, targetWs, to);
           // 折叠状态跟过去；目标工作区展开，看得到移过去的项目
-          const folded = !!collapsed.get(ws)[project];
-          setCollapsed(ws, ({ [project]: _, ...rest }) => rest);
-          setCollapsed(targetWs, (c) => ({ ...c, [WS_KEY]: false, [project]: folded }));
+          moveCollapsed(ws, project, targetWs, to);
+          expand(targetWs, WS_KEY);
           await reload();
-          if (isSel) setSel({ ...sel, workspace: targetWs }, "replace");
+          if (isSel && sel.project)
+            setSel({ ...sel, workspace: targetWs, project: reparent(sel.project, project, to) }, "replace");
           message.success(`已移动到工作区「${targetWs}」`);
         }),
       openProjectFolder: (project) => run(() => api.openFolder(ws, project)),
@@ -271,8 +301,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
         run(async () => {
           const s = await api.createTodo(ws, project, title);
           updateTodos(ws, project, (todos) => [...todos, s]);
-          expand(ws, WS_KEY);
-          expand(ws, project);
+          reveal(ws, project);
           if (open) {
             // 新建的待办开在固定的标签里
             keepTodoTab({ workspace: ws, project, todoId: s.id });
@@ -319,7 +348,8 @@ export function useWorkspaceActions(ctx: ActionContext) {
           await reload();
           reveal(targetWs, target);
           if (isSel) setSel({ workspace: targetWs, project: target, todoId: moved.id }, "replace");
-          message.success(`已移动到「${targetWs === ws ? target : `${targetWs} / ${target}`}」`);
+          const where = projectLabel(target);
+          message.success(`已移动到「${targetWs === ws ? where : `${targetWs} / ${where}`}」`);
         }),
       reorderTodo: (project, id, targetId, place) =>
         run(async () => {
@@ -394,7 +424,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       reveal(targetWs, target);
       if (selMoved) setSel(selMoved, "replace");
       clearPicked();
-      if (ok) message.success(`已把 ${ok} 条移动到「${targetWs} / ${target}」`);
+      if (ok) message.success(`已把 ${ok} 条移动到「${targetWs} / ${projectLabel(target)}」`);
     },
     remove: (items) =>
       modal.confirm({
@@ -421,6 +451,9 @@ export function useWorkspaceActions(ctx: ActionContext) {
   useEffect(() => {
     actionsRef.current = actionsFor;
   });
+  // cache 是这个 useMemo 自己的，只在第一次要某个工作区的操作时放进去，放进去的对象不再变（转给最新的 actionsFor），
+  // 正是要它在渲染之间保持不变
+  // eslint-disable-next-line react-hooks/immutability
   const stableActions = useMemo(() => {
     const cache = new Map<string, Actions>();
     return (ws: string): Actions => {

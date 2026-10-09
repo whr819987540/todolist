@@ -44,6 +44,16 @@ describe("存到哪个项目", () => {
     expect(matchTarget("购物", opt)).toBe(false);
   });
 
+  it("子项目跟在父项目后面，写成「父项目 / 子项目」；可以存到子项目里", () => {
+    const withSubs = [{ name: "工作", projects: ["需求开发/后端", "日常事务", "需求开发", "需求开发/前端"] }];
+    const sub = { workspace: "工作", project: "需求开发/前端" };
+    const [group] = targetOptions(withSubs, sub);
+    expect(group.options.map((o) => o.label)).toEqual(["日常事务", "需求开发", "需求开发 / 后端", "需求开发 / 前端"]);
+    expect(group.options[3].title).toBe("工作 / 需求开发 / 前端");
+    expect(parseTargetKey(group.options[3].value)).toEqual(sub);
+    expect(targetExists(withSubs, sub)).toBe(true);
+  });
+
   it("名字里有斜杠、引号也能对回去", () => {
     const t = { workspace: 'A "B"', project: "C / D" };
     expect(parseTargetKey(targetKey(t))).toEqual(t);

@@ -13,7 +13,9 @@ import {
 
 // docs/requirements.md「隐藏已完成」：项目里有待办、而且全都完成了的才算全部完成，空项目不算；
 // 右侧正在显示的项目照常显示，切到别处后再显示一会儿才藏起来（这期间切回来就接着显示）；侧栏搜索时不隐藏；
-// 侧栏顶部的「全部折叠 / 全部展开」不算藏起来的项目，也不算折叠着的工作区里的项目（都看不见）
+// 侧栏顶部的「全部折叠 / 全部展开」不算藏起来的项目，也不算折叠着的工作区里的项目（都看不见）。
+// 「子项目」：父项目自己和子项目里的待办合起来看，都完成了才算全部完成，连同子项目一起藏；父项目没全部完成时，
+// 全部完成的子项目单独藏；右侧显示着子项目时它的父项目也照常显示；折叠着的父项目里的子项目看不见，「全部折叠」不算它
 
 const todo = (id: string, done: boolean): TodoSummary => ({
   id,
@@ -33,12 +35,22 @@ const project = (name: string, ...done: boolean[]): ProjectNode => ({
 
 describe("全部完成的项目", () => {
   it("有待办而且全都完成了才算", () => {
-    expect(isProjectDone(project("p", true, true))).toBe(true);
-    expect(isProjectDone(project("p", true, false))).toBe(false);
+    expect(isProjectDone([project("p", true, true)], "p")).toBe(true);
+    expect(isProjectDone([project("p", true, false)], "p")).toBe(false);
   });
 
   it("没有待办的项目（刚建的）不算", () => {
-    expect(isProjectDone(project("p"))).toBe(false);
+    expect(isProjectDone([project("p")], "p")).toBe(false);
+  });
+
+  it("父项目连同子项目里的待办一起看，子项目只看自己的", () => {
+    expect(isProjectDone([project("p", true), project("p/a", true)], "p")).toBe(true);
+    expect(isProjectDone([project("p", true), project("p/a", false)], "p")).toBe(false);
+    expect(isProjectDone([project("p", false), project("p/a", true)], "p/a")).toBe(true);
+    // 父项目自己没有待办，子项目里的都完成了
+    expect(isProjectDone([project("p"), project("p/a", true)], "p")).toBe(true);
+    // 名字开头相同的别的项目不算子项目
+    expect(isProjectDone([project("p", true), project("p2", false)], "p")).toBe(true);
   });
 });
 
@@ -71,6 +83,31 @@ describe("隐藏全部完成的项目时藏起哪些", () => {
     const lingering = new Set(["全完成"]);
     expect(names(hiddenDoneProjects(projects, { hide: true, keyword: "", selProject: "也完成", lingering }))).toEqual([]);
     expect(names(hiddenDoneProjects(projects, { hide: true, keyword: "", lingering }))).toEqual(["也完成"]);
+  });
+});
+
+describe("有子项目时藏起哪些", () => {
+  const names = (s: ReadonlySet<string>) => [...s].sort();
+  const hide = (projects: ProjectNode[], o: { selProject?: string; lingering?: ReadonlySet<string> } = {}) =>
+    names(hiddenDoneProjects(projects, { hide: true, keyword: "", ...o }));
+
+  it("父项目和子项目都完成了：父项目连同子项目一起藏，只算一个", () => {
+    expect(hide([project("p", true), project("p/a", true), project("p/b", true)])).toEqual(["p"]);
+  });
+
+  it("父项目还没全部完成：全部完成的子项目单独藏", () => {
+    expect(hide([project("p", false), project("p/a", true), project("p/b", false)])).toEqual(["p/a"]);
+    expect(hide([project("p", true), project("p/a", true), project("p/b", false)])).toEqual(["p/a"]);
+  });
+
+  it("右侧显示着子项目（或其中的待办）：它和父项目照常显示，别的全部完成的子项目照样藏", () => {
+    const ps = [project("p", true), project("p/a", true), project("p/b", true)];
+    expect(hide(ps, { selProject: "p/a" })).toEqual(["p/b"]);
+    expect(hide(ps, { lingering: new Set(["p/a"]) })).toEqual(["p/b"]);
+  });
+
+  it("右侧显示着父项目：父项目照常显示，其中全部完成的子项目藏", () => {
+    expect(hide([project("p", true), project("p/a", true)], { selProject: "p" })).toEqual(["p/a"]);
   });
 });
 
@@ -178,6 +215,21 @@ describe("「全部折叠 / 全部展开」看哪些项目", () => {
     expect(anyVisibleProjectOpen([work, life], wsFolded, hiding())).toBe(false);
     const lifeOpen = (ws: string): Collapsed => (ws === "工作" ? { [WS_KEY]: true } : {});
     expect(anyVisibleProjectOpen([work, life], lifeOpen, hiding())).toBe(true);
+  });
+
+  it("父项目折叠着：其中的子项目看不见，展开着也不算", () => {
+    const ws: WorkspaceTree = { name: "工作", projects: [project("p", false), project("p/a", false)] };
+    expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p"] }), hiding())).toBe(false);
+    expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p/a"] }), hiding())).toBe(true);
+    expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p", "p/a"] }), hiding())).toBe(false);
+  });
+
+  it("单独藏起来的子项目展开着也不算", () => {
+    const ws: WorkspaceTree = { name: "工作", projects: [project("p", false), project("p/a", true)] };
+    expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p"] }), hiding())).toBe(false);
+    expect(anyVisibleProjectOpen([ws], folded({}), hiding())).toBe(true);
+    const parentDone: WorkspaceTree = { name: "工作", projects: [project("p", true), project("p/a", true), project("q")] };
+    expect(anyVisibleProjectOpen([parentDone], folded({ 工作: ["q"] }), hiding())).toBe(false);
   });
 
   it("选中了多个工作区：哪个工作区里有看得见的项目展开着都是全部折叠，都折叠着才是全部展开", () => {

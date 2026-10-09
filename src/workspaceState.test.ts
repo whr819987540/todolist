@@ -67,7 +67,7 @@ describe("后退 / 前进的记录跟着走", () => {
   });
 
   it("项目移到别的工作区", () => {
-    state.moveProjectState("工作", "需求", "生活");
+    state.moveProjectState("工作", "需求", "生活", "需求");
     expect(backAll()).toEqual([
       { workspace: "生活", project: "需求", todoId: "a" },
       { workspace: "生活", project: "需求" },
@@ -76,9 +76,42 @@ describe("后退 / 前进的记录跟着走", () => {
     ]);
   });
 
+  it("父项目改名，子项目里的跟着；名字开头相同的别的项目不动", () => {
+    nav.visit({ workspace: "工作", project: "需求/前端", todoId: "b" });
+    nav.visit({ workspace: "工作", project: "需求二" });
+    state.renameProjectState("工作", "需求", "开发");
+    expect(backAll().slice(0, 4)).toEqual([
+      { workspace: "工作", project: "开发/前端", todoId: "b" },
+      { workspace: "生活" },
+      { workspace: "工作", project: "开发", todoId: "a" },
+      { workspace: "工作", project: "开发" },
+    ]);
+  });
+
+  it("项目放进别的项目成为子项目、子项目移出来", () => {
+    state.moveProjectState("工作", "需求", "工作", "日常/需求");
+    expect(backAll()).toEqual([
+      { workspace: "工作", project: "日常/需求", todoId: "a" },
+      { workspace: "工作", project: "日常/需求" },
+      { workspace: "工作" },
+      null,
+    ]);
+    // 现在在最前面（首页），往前看
+    state.moveProjectState("工作", "日常/需求", "生活", "需求");
+    expect(nav.go(1)).toEqual({ workspace: "工作" });
+    expect(nav.go(1)).toEqual({ workspace: "生活", project: "需求" });
+    expect(nav.go(1)).toEqual({ workspace: "生活", project: "需求", todoId: "a" });
+  });
+
   it("待办移到别的项目（id 因为重名变了）", () => {
     state.moveTodoState("工作", "需求", "a", ["生活", "杂事", "a-2"]);
     expect(backAll()[0]).toEqual({ workspace: "生活", project: "杂事", todoId: "a-2" });
+  });
+
+  it("删除父项目后，其中子项目里的也不再回去", () => {
+    nav.visit({ workspace: "工作", project: "需求/前端", todoId: "b" });
+    state.forgetProjectState("工作", "需求");
+    expect(backAll()).toEqual([{ workspace: "工作" }, null]);
   });
 
   it("删除的不再回去", () => {

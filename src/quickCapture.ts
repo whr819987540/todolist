@@ -1,3 +1,4 @@
+import { projectLabel, sortProjects } from "./projects";
 import type { QuickTarget, WorkspaceProjects } from "./types";
 import { compareName } from "./utils";
 
@@ -11,7 +12,8 @@ export function parseTargetKey(key: string): QuickTarget {
   return { workspace, project };
 }
 
-export const targetLabel = (t: QuickTarget) => `${t.workspace} / ${t.project}`;
+/** 工作区 / 项目（子项目是「工作区 / 父项目 / 子项目」） */
+export const targetLabel = (t: QuickTarget) => `${t.workspace} / ${projectLabel(t.project)}`;
 
 export interface TargetGroup {
   label: string;
@@ -20,7 +22,7 @@ export interface TargetGroup {
 }
 
 /**
- * 下拉框的选项：每个工作区一组，工作区、项目都按名称排序；没有项目的工作区不列。
+ * 下拉框的选项：每个工作区一组，工作区、项目都按名称排序，子项目跟在父项目后面（写成「父项目 / 子项目」）；没有项目的工作区不列。
  * 现在存到的项目还不在时（默认的「收件箱 / 快速记录」第一次用，或被删了）放在最前面，注明保存时新建
  */
 export function targetOptions(list: readonly WorkspaceProjects[], current: QuickTarget | null): TargetGroup[] {
@@ -30,9 +32,11 @@ export function targetOptions(list: readonly WorkspaceProjects[], current: Quick
     .map((w) => ({
       label: w.name,
       title: w.name,
-      options: [...w.projects]
-        .sort(compareName)
-        .map((p) => ({ value: targetKey({ workspace: w.name, project: p }), label: p, title: `${w.name} / ${p}` })),
+      options: sortProjects(w.projects.map((name) => ({ name }))).map(({ name: p }) => ({
+        value: targetKey({ workspace: w.name, project: p }),
+        label: projectLabel(p),
+        title: targetLabel({ workspace: w.name, project: p }),
+      })),
     }));
   if (current && !targetExists(list, current))
     groups.unshift({

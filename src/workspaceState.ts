@@ -11,6 +11,7 @@ import type { EditPosition, TextAnchor } from "./editor/position";
 import type { EditorMode } from "./editor/setup";
 import { registerFlusher } from "./hooks";
 import { mapPlaces } from "./navHistory";
+import { inProject, reparent } from "./projects";
 import { closeTabs, mapTabs, moveTab, type OpenTodo, openTab, type TodoRef } from "./tabs";
 import type { SortKey } from "./types";
 
@@ -420,15 +421,17 @@ function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
   mapPlaces(fn);
 }
 
+/** 项目改名（from、to 是改名前后的路径）：它和它的子项目里的待办跟过去 */
 export const renameProjectState = (ws: string, from: string, to: string) =>
-  mapTodoState(([w, p, id]) => [w, w === ws && p === from ? to : p, id]);
+  mapTodoState(([w, p, id]) => [w, w === ws ? reparent(p, from, to) : p, id]);
 
-/** 项目移到另一个工作区（项目名不变） */
-export const moveProjectState = (ws: string, project: string, target: string) =>
-  mapTodoState(([w, p, id]) => [w === ws && p === project ? target : w, p, id]);
+/** 项目移到 targetWs 里，路径变成 to（移到别的工作区、放进别的项目、子项目移出来）；它的子项目跟着 */
+export const moveProjectState = (ws: string, project: string, targetWs: string, to: string) =>
+  mapTodoState(([w, p, id]) => (w === ws && inProject(p, project) ? [targetWs, reparent(p, project, to), id] : [w, p, id]));
 
+/** 项目删除后不再记住它和它的子项目里的待办 */
 export const forgetProjectState = (ws: string, project: string) =>
-  mapTodoState((k) => (k[0] === ws && k[1] === project ? null : k));
+  mapTodoState((k) => (k[0] === ws && inProject(k[1], project) ? null : k));
 
 /** 待办移到另一个项目（可以在别的工作区里），id 可能因为重名而变 */
 export const moveTodoState = (ws: string, project: string, id: string, to: TodoKey) =>

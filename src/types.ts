@@ -14,18 +14,23 @@ export interface TodoSummary {
 }
 
 export interface ProjectNode {
+  /** 项目路径：顶层项目是名字，子项目是「父项目/子项目」（projects.ts） */
   name: string;
+  /** 只是这个项目自己的待办，不含子项目的 */
   todos: TodoSummary[];
 }
 
 export interface WorkspaceTree {
   name: string;
+  /** 全部项目，包括子项目（排好序后每个顶层项目后面跟着它的子项目） */
   projects: ProjectNode[];
 }
 
 export interface WorkspaceInfo {
   name: string;
+  /** 顶层项目的个数（子项目不另算） */
   projectCount: number;
+  /** 待办数，包括子项目里的 */
   todoCount: number;
   doneCount: number;
   updatedAt: number;
@@ -106,7 +111,7 @@ export interface QuickTarget {
   project: string;
 }
 
-/** 一个工作区里的项目名（快速记录选择存到哪里时用） */
+/** 一个工作区里的项目路径（快速记录选择存到哪里时用），包括子项目 */
 export interface WorkspaceProjects {
   name: string;
   projects: string[];

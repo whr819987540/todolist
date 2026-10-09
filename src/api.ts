@@ -32,16 +32,20 @@ export const api = {
   deleteWorkspace: (name: string) => invoke<string>("delete_workspace", { name }),
   loadWorkspace: (workspace: string) => invoke<WorkspaceTree>("load_workspace", { workspace }),
 
-  createProject: (workspace: string, name: string) =>
-    invoke<string>("create_project", { workspace, name }),
+  // 项目都是路径：顶层项目是名字，子项目是「父项目/子项目」（projects.ts）
+
+  /** 新建项目，给了 parent（顶层项目）时是在它里面新建子项目；返回新项目的路径 */
+  createProject: (workspace: string, name: string, parent?: string) =>
+    invoke<string>("create_project", { workspace, name, parent: parent ?? null }),
+  /** 改项目（或子项目）自己的名字，返回改名后的路径（子项目仍在原来的父项目里） */
   renameProject: (workspace: string, name: string, newName: string) =>
     invoke<string>("rename_project", { workspace, name, newName }),
-  /** 放进软件的回收站，返回回收站里这一项的 id */
+  /** 放进软件的回收站（连同子项目），返回回收站里这一项的 id */
   deleteProject: (workspace: string, name: string) =>
     invoke<string>("delete_project", { workspace, name }),
-  /** 连同其中的待办移到另一个工作区，项目名不变 */
+  /** 连同其中的待办（和子项目）移到另一个工作区的顶层，名字不变；返回移过去后的路径 */
   moveProject: (workspace: string, name: string, targetWorkspace: string) =>
-    invoke<void>("move_project", { workspace, name, targetWorkspace }),
+    invoke<string>("move_project", { workspace, name, targetWorkspace }),
 
   /** content 是正文，不传时新建空白待办；带正文时正文和待办在同一次调用里建好 */
   createTodo: (workspace: string, project: string, title: string, content?: string) =>

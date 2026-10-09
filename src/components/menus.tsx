@@ -4,6 +4,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   ExportOutlined,
+  FolderAddOutlined,
   FolderOpenOutlined,
   FolderOutlined,
   HomeOutlined,
@@ -13,11 +14,12 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
+import { isSubProject, projectLabel } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import type { BatchActions } from "./workspaceActions";
 
-/** 工作区视图里所有可触发的操作，由 WorkspaceView 实现，侧栏、概览、编辑器共用 */
+/** 工作区视图里所有可触发的操作，由 WorkspaceView 实现，侧栏、概览、编辑器共用。项目都是路径（子项目是「父项目/子项目」） */
 export interface Actions {
   goHome(): void;
   selectWorkspace(): void;
@@ -29,6 +31,8 @@ export interface Actions {
   openWorkspaceFolder(): void;
 
   newProject(): void;
+  /** 在顶层项目 parent 里新建子项目 */
+  newSubProject(parent: string): void;
   renameProject(project: string): void;
   deleteProject(project: string): void;
   /** 连同其中的待办移到另一个工作区 */
@@ -85,6 +89,8 @@ export function projectMenu(a: Actions, project: string): MenuProps {
   return {
     items: [
       { key: "new-todo", icon: <PlusOutlined />, label: "新建待办" },
+      // 只有一层子项目：子项目里不能再建
+      ...(isSubProject(project) ? [] : [{ key: "new-sub", icon: <FolderAddOutlined />, label: "新建子项目" }]),
       { key: "rename", icon: <EditOutlined />, label: "重命名" },
       { key: "folder", icon: <FolderOpenOutlined />, label: "在资源管理器中打开" },
       { type: "divider" },
@@ -92,6 +98,7 @@ export function projectMenu(a: Actions, project: string): MenuProps {
     ],
     onClick: handler((key) => {
       if (key === "new-todo") a.newTodo(project, "", true);
+      else if (key === "new-sub") a.newSubProject(project);
       else if (key === "rename") a.renameProject(project);
       else if (key === "folder") a.openProjectFolder(project);
       else if (key === "delete") a.deleteProject(project);
@@ -99,7 +106,7 @@ export function projectMenu(a: Actions, project: string): MenuProps {
   };
 }
 
-/** 「移动到」里一个工作区的项目 */
+/** 「移动到」里一个工作区的项目（路径，子项目跟在父项目后面） */
 export interface MoveTarget {
   workspace: string;
   projects: string[];
@@ -121,7 +128,11 @@ const moveKey = (workspace: string, project: string) => MOVE_PREFIX + JSON.strin
  */
 function moveItems(project: string, targets: readonly MoveTarget[]): NonNullable<MenuProps["items"]> {
   const [own, ...others] = targets;
-  const item = (workspace: string, p: string) => ({ key: moveKey(workspace, p), icon: <FolderOutlined />, label: p });
+  const item = (workspace: string, p: string) => ({
+    key: moveKey(workspace, p),
+    icon: <FolderOutlined />,
+    label: projectLabel(p),
+  });
   const ownItems = own ? own.projects.filter((p) => p !== project).map((p) => item(own.workspace, p)) : [];
   if (!others.length) return ownItems;
   const groups = [
@@ -180,7 +191,7 @@ export function batchMoveMenu(targets: readonly MoveTarget[], onMove: (workspace
   const item = (workspace: string, p: string) => ({
     key: BATCH_MOVE_PREFIX + JSON.stringify([workspace, p]),
     icon: <FolderOutlined />,
-    label: p,
+    label: projectLabel(p),
   });
   const items: NonNullable<MenuProps["items"]> =
     targets.length === 1

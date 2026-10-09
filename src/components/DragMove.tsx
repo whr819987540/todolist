@@ -1,5 +1,6 @@
 import { FileTextOutlined, FolderFilled } from "@ant-design/icons";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { inProject, isSubProject, leafName, projectLabel } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { displayTitle } from "../utils";
 import { parseSelKey } from "./sidebar/tree";
@@ -67,6 +68,18 @@ export const isDraggingTodo = (s: DragState | null, workspace: string, project: 
 /** 正在拖的是不是这个项目 */
 export const isDraggingProject = (s: DragState | null, workspace: string, project: string) =>
   s?.item.kind === "project" && s.item.workspace === workspace && s.item.project === project;
+
+/**
+ * 拖动和这个项目（或它的子项目）有没有关系：拖的是它（或其中的待办），或者指针在它上面。
+ * 侧栏只把拖动的状态传给有关系的项目，别的项目不必重新渲染
+ */
+export function dragConcerns(s: DragState | null, workspace: string, project: string): boolean {
+  if (!s) return false;
+  const t = s.target;
+  if (t?.workspace === workspace && t.project !== undefined && inProject(t.project, project)) return true;
+  const it = s.item;
+  return it.kind !== "todos" && it.workspace === workspace && inProject(it.project, project);
+}
 
 /** 指针下放下的地方加的样式：能放下时高亮，放不下时标红；不是指针下的地方（含调整顺序时）返回 undefined */
 export function dropClass(s: DragState | null, workspace: string, project?: string): string | undefined {
@@ -143,9 +156,10 @@ function judge(
     if (!target)
       return { status: "none", hint: trees.length > 1 ? "拖到左侧的其他工作区上" : "要移到其他工作区，先在侧栏顶部选中它" };
     if (target.workspace === item.workspace) return { status: "none", hint: "已在这个工作区里" };
-    // 项目是文件夹，Windows 上名字不区分大小写
-    const name = item.project.toLowerCase();
-    if (trees.find((t) => t.name === target.workspace)?.projects.some((p) => p.name.toLowerCase() === name))
+    // 项目是文件夹，Windows 上名字不区分大小写；子项目移过去后是顶层项目，和那里的顶层项目比
+    const name = leafName(item.project).toLowerCase();
+    const there = trees.find((t) => t.name === target.workspace)?.projects ?? [];
+    if (there.some((p) => !isSubProject(p.name) && p.name.toLowerCase() === name))
       return { status: "refused", hint: `「${target.workspace}」里已有同名项目` };
     return { status: "ok", hint: `移动到工作区「${target.workspace}」` };
   }
@@ -153,12 +167,15 @@ function judge(
     if (!target?.project) return { status: "none", hint: "拖到左侧的项目上" };
     const n = item.items.filter((x) => x.workspace !== target.workspace || x.project !== target.project).length;
     if (!n) return { status: "none", hint: "都已在这个项目里" };
-    return { status: "ok", hint: `把 ${n} 条移动到「${target.workspace} / ${target.project}」` };
+    return { status: "ok", hint: `把 ${n} 条移动到「${target.workspace} / ${projectLabel(target.project)}」` };
   }
   if (!target?.project) return { status: "none", hint: "拖到左侧的项目上，或拖到其他待办上调整顺序" };
   if (target.workspace === item.workspace && target.project === item.project)
     return { status: "none", hint: "已在这个项目里；拖到其他待办上可以调整顺序" };
-  const where = target.workspace === item.workspace ? target.project : `${target.workspace} / ${target.project}`;
+  const where =
+    target.workspace === item.workspace
+      ? projectLabel(target.project)
+      : `${target.workspace} / ${projectLabel(target.project)}`;
   return { status: "ok", hint: `移动到「${where}」` };
 }
 
@@ -312,7 +329,7 @@ export function useDragMove(opts: {
             ? displayTitle(item.todo).text
             : item.kind === "todos"
               ? `${item.items.length} 条待办`
-              : item.project}
+              : projectLabel(item.project)}
         </span>
       </div>
       <div className="drag-ghost-hint">{state.hint}</div>

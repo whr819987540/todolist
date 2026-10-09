@@ -1,6 +1,7 @@
 import {
   CheckOutlined,
   EditOutlined,
+  FolderAddOutlined,
   FolderFilled,
   FolderOpenOutlined,
   MoreOutlined,
@@ -9,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import { Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "antd";
 import { useState } from "react";
+import { deepTodos, isSubProject, leafName, parentOf, subProjectsOf } from "../projects";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime, sortTodos, useNow } from "../utils";
 import { type DragMove, isDraggingProject, isDraggingTodo, reorderMark } from "./DragMove";
@@ -21,11 +23,55 @@ function latest(todos: TodoSummary[]): number {
   return todos.reduce((m, t) => Math.max(m, t.updatedAt), 0);
 }
 
-/** 未选中项目时右侧显示的工作区概览；项目卡片可以拖到左侧的其他工作区上 */
-export function WorkspaceOverview({ tree, actions: a, drag }: { tree: WorkspaceTree; actions: Actions; drag: DragMove }) {
+/**
+ * 项目卡片（工作区概览里的顶层项目、父项目概览里的子项目）：点击进入，右键是项目的菜单，可以拖到左侧。
+ * 完成进度和数目包括子项目里的待办
+ */
+function ProjectCard({ workspace, projects, name, actions: a, drag }: {
+  workspace: string;
+  /** 这个工作区的全部项目 */
+  projects: readonly ProjectNode[];
+  /** 项目路径 */
+  name: string;
+  actions: Actions;
+  drag: DragMove;
+}) {
   const now = useNow();
+  const todos = deepTodos(projects, name);
+  const d = todos.filter((t) => t.done).length;
+  const last = latest(todos);
+  const subs = isSubProject(name) ? 0 : subProjectsOf(projects, name).length;
+  return (
+    <Dropdown menu={projectMenu(a, name)} trigger={["contextMenu"]}>
+      <div
+        className={`card project-card${isDraggingProject(drag.state, workspace, name) ? " drag-source" : ""}`}
+        onMouseDown={(e) => drag.start(e, { kind: "project", workspace, project: name })}
+        onClick={() => a.selectProject(name)}
+      >
+        <div className="card-head">
+          <FolderFilled className="project-icon big" />
+          <span className="card-name" title={leafName(name)}>
+            {leafName(name)}
+          </span>
+          {subs > 0 && <span className="card-subs muted">{subs} 个子项目</span>}
+        </div>
+        <Progress percent={percent(d, todos.length)} size="small" />
+        <div className="card-foot">
+          <span>
+            {todos.length - d} 条未完成 / 共 {todos.length} 条
+          </span>
+          <span>{last ? `更新于 ${relativeTime(last, now)}` : "暂无待办"}</span>
+        </div>
+      </div>
+    </Dropdown>
+  );
+}
+
+/** 未选中项目时右侧显示的工作区概览：顶层项目的卡片（数目包括子项目里的），可以拖到左侧的其他工作区上 */
+export function WorkspaceOverview({ tree, actions: a, drag }: { tree: WorkspaceTree; actions: Actions; drag: DragMove }) {
   const all = tree.projects.flatMap((p) => p.todos);
   const done = all.filter((t) => t.done).length;
+  const tops = tree.projects.filter((p) => !isSubProject(p.name));
 
   return (
     <section className="overview">
@@ -51,7 +97,7 @@ export function WorkspaceOverview({ tree, actions: a, drag }: { tree: WorkspaceT
       </div>
 
       <div className="stat-row">
-        <Stat label="项目" value={tree.projects.length} />
+        <Stat label="项目" value={tops.length} />
         <Stat label="待办总数" value={all.length} />
         <Stat label="未完成" value={all.length - done} accent="primary" />
         <Stat label="已完成" value={done} accent="success" />
@@ -67,33 +113,16 @@ export function WorkspaceOverview({ tree, actions: a, drag }: { tree: WorkspaceT
         </Empty>
       ) : (
         <div className="card-grid">
-          {tree.projects.map((p) => {
-            const d = p.todos.filter((t) => t.done).length;
-            const last = latest(p.todos);
-            return (
-              <Dropdown key={p.name} menu={projectMenu(a, p.name)} trigger={["contextMenu"]}>
-                <div
-                  className={`card project-card${isDraggingProject(drag.state, tree.name, p.name) ? " drag-source" : ""}`}
-                  onMouseDown={(e) => drag.start(e, { kind: "project", workspace: tree.name, project: p.name })}
-                  onClick={() => a.selectProject(p.name)}
-                >
-                  <div className="card-head">
-                    <FolderFilled className="project-icon big" />
-                    <span className="card-name" title={p.name}>
-                      {p.name}
-                    </span>
-                  </div>
-                  <Progress percent={percent(d, p.todos.length)} size="small" />
-                  <div className="card-foot">
-                    <span>
-                      {p.todos.length - d} 条未完成 / 共 {p.todos.length} 条
-                    </span>
-                    <span>{last ? `更新于 ${relativeTime(last, now)}` : "暂无待办"}</span>
-                  </div>
-                </div>
-              </Dropdown>
-            );
-          })}
+          {tops.map((p) => (
+            <ProjectCard
+              key={p.name}
+              workspace={tree.name}
+              projects={tree.projects}
+              name={p.name}
+              actions={a}
+              drag={drag}
+            />
+          ))}
           <div className="card card-add" onClick={a.newProject}>
             <PlusOutlined /> 新建项目
           </div>
@@ -103,10 +132,15 @@ export function WorkspaceOverview({ tree, actions: a, drag }: { tree: WorkspaceT
   );
 }
 
-/** 选中项目（未选中具体待办）时右侧显示的项目概览 */
+/**
+ * 选中项目（未选中具体待办）时右侧显示的项目概览。父项目的完成进度和数目包括子项目里的待办，上面列出子项目的卡片，
+ * 下面是它自己的待办（快速添加的也加在它自己里）
+ */
 export function ProjectOverview(p: {
   workspace: string;
   project: ProjectNode;
+  /** 这个工作区的全部项目（找子项目） */
+  projects: readonly ProjectNode[];
   /** 右键「移动到」列出的项目（第一组是这个工作区的） */
   moveTargets: MoveTarget[];
   sortKey: SortKey;
@@ -123,6 +157,13 @@ export function ProjectOverview(p: {
   const sorted = sortTodos(project.todos, p.sortKey);
   const undone = sorted.filter((t) => !t.done);
   const done = sorted.filter((t) => t.done);
+  const isSub = isSubProject(project.name);
+  const subs = isSub ? [] : subProjectsOf(p.projects, project.name);
+  const all = deepTodos(p.projects, project.name);
+  const allDone = all.filter((t) => t.done).length;
+  const parent = parentOf(project.name);
+  // 有子项目时，下面的待办列表是它自己的，标题里说清楚
+  const own = subs.length ? "自己的" : "";
 
   const quickAdd = async () => {
     const title = draft.trim();
@@ -178,17 +219,26 @@ export function ProjectOverview(p: {
     <section className="overview">
       <Breadcrumb
         className="overview-crumb"
-        items={[{ title: <a onClick={a.selectWorkspace}>{p.workspace}</a> }, { title: project.name }]}
+        items={[
+          { title: <a onClick={a.selectWorkspace}>{p.workspace}</a> },
+          ...(parent !== undefined ? [{ title: <a onClick={() => a.selectProject(parent)}>{parent}</a> }] : []),
+          { title: leafName(project.name) },
+        ]}
       />
       <div className="overview-head">
         <FolderFilled className="project-icon huge" />
         <div className="overview-title">
-          <h2>{project.name}</h2>
+          <h2>{leafName(project.name)}</h2>
           <div className="muted">
-            共 {project.todos.length} 条 · 未完成 {undone.length} 条 · 已完成 {done.length} 条
+            共 {all.length} 条{subs.length ? "（含子项目）" : ""} · 未完成 {all.length - allDone} 条 · 已完成 {allDone} 条
           </div>
         </div>
         <div className="overview-actions">
+          {!isSub && (
+            <Button icon={<FolderAddOutlined />} onClick={() => a.newSubProject(project.name)}>
+              新建子项目
+            </Button>
+          )}
           <Button icon={<EditOutlined />} onClick={() => a.renameProject(project.name)}>
             重命名
           </Button>
@@ -201,7 +251,7 @@ export function ProjectOverview(p: {
         </div>
       </div>
 
-      <Progress percent={percent(done.length, project.todos.length)} className="overview-progress" />
+      <Progress percent={percent(allDone, all.length)} className="overview-progress" />
 
       <div className="quick-add">
         <Input
@@ -220,15 +270,44 @@ export function ProjectOverview(p: {
         </Button>
       </div>
 
+      {subs.length > 0 && (
+        <>
+          <div className="section-title">子项目（{subs.length}）</div>
+          <div className="card-grid">
+            {subs.map((s) => (
+              <ProjectCard
+                key={s.name}
+                workspace={p.workspace}
+                projects={p.projects}
+                name={s.name}
+                actions={a}
+                drag={p.drag}
+              />
+            ))}
+            <div className="card card-add" onClick={() => a.newSubProject(project.name)}>
+              <PlusOutlined /> 新建子项目
+            </div>
+          </div>
+        </>
+      )}
+
       {project.todos.length === 0 ? (
-        <Empty className="overview-empty" description="还没有待办，在上方输入标题快速添加" />
+        subs.length ? (
+          <div className="list-empty">这个项目自己还没有待办，在上方输入标题快速添加</div>
+        ) : (
+          <Empty className="overview-empty" description="还没有待办，在上方输入标题快速添加" />
+        )
       ) : (
         <>
-          <div className="section-title">未完成（{undone.length}）</div>
+          <div className="section-title">
+            {own}未完成（{undone.length}）
+          </div>
           <div className="list">{undone.length ? undone.map(row) : <div className="list-empty">全部完成了，真棒！</div>}</div>
           {done.length > 0 && (
             <>
-              <div className="section-title">已完成（{done.length}）</div>
+              <div className="section-title">
+                {own}已完成（{done.length}）
+              </div>
               <div className="list">{done.map(row)}</div>
             </>
           )}

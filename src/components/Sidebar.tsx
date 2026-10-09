@@ -1,5 +1,6 @@
 import type { InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { parentOf } from "../projects";
 import { type ContentHits, NO_HITS } from "../search";
 import type { MenuProps } from "antd";
 import type { WorkspaceTree } from "../types";
@@ -99,11 +100,11 @@ export default function Sidebar(props: Props) {
   );
 
   // 「隐藏全部完成的项目」开着时，右侧显示的内容离开一个全部完成的项目后，它再显示一会儿才藏起来（sidebar/lingering.ts）；
-  // 搜索时本来就不藏，不必留
+  // 搜索时本来就不藏，不必留。离开的是子项目时，它全部完成了，它或者它的父项目（也全部完成了时）会被藏起来
   const lingering = useLingeringProjects(sel, (ws, project) => {
     if (kw || !listOptionsOf(ws).hideDoneProjects) return false;
-    const p = trees.find((t) => t.name === ws)?.projects.find((x) => x.name === project);
-    return !!p && isProjectDone(p);
+    const projects = trees.find((t) => t.name === ws)?.projects ?? [];
+    return isProjectDone(projects, project);
   });
 
   // 各工作区藏起来的项目，参数和下面传给 WorkspaceBranch 的一样：顶部的「全部折叠 / 全部展开」不看它们。
@@ -142,8 +143,9 @@ export default function Sidebar(props: Props) {
     const keys = rows().map((r) => r.dataset.sel!);
     if (!keys.length) return;
     let at = keys.indexOf(current);
-    // 选中项被折叠或筛选掉了：从它所在的项目 / 工作区开始
-    if (at < 0 && sel.project) at = keys.indexOf(selKey({ workspace: sel.workspace, project: sel.project }));
+    // 选中项被折叠或筛选掉了：从它所在的项目、父项目、工作区开始
+    for (const project of [sel.project, sel.project && parentOf(sel.project)])
+      if (at < 0 && project) at = keys.indexOf(selKey({ workspace: sel.workspace, project }));
     if (at < 0) at = keys.indexOf(selKey({ workspace: sel.workspace }));
     const next = at < 0 ? 0 : at + step;
     if (next >= 0 && next < keys.length && next !== at) props.onSelect(parseSelKey(keys[next]));
@@ -151,7 +153,8 @@ export default function Sidebar(props: Props) {
 
   useImperativeHandle(handleRef, () => ({ focus: focusTree, move }));
 
-  // 列表获得焦点时：↑↓ 移动，← → 折叠 / 展开（或回到上一级），Enter 打开待办或折叠 / 展开
+  // 列表获得焦点时：↑↓ 移动，← → 折叠 / 展开（或回到上一级：待办 → 所在的项目，子项目 → 父项目，项目 → 工作区），
+  // Enter 打开待办或折叠 / 展开
   const onTreeKey = (e: React.KeyboardEvent) => {
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     const ws = sel.workspace;
@@ -175,7 +178,7 @@ export default function Sidebar(props: Props) {
     } else if (e.key === "ArrowLeft") {
       if (branch && open && !kw) setOpen(false);
       else if (sel.todoId) props.onSelect({ workspace: ws, project: sel.project });
-      else if (sel.project) props.onSelect({ workspace: ws });
+      else if (sel.project) props.onSelect({ workspace: ws, project: parentOf(sel.project) });
     } else if (e.key === "Enter" && !kw) setOpen(!open);
   };
 

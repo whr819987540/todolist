@@ -31,6 +31,7 @@ import { activeIndex, type OutlineItem } from "../editor/outline";
 import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
 import { registerFlusher, useWindowFocus } from "../hooks";
+import { leafName, parentOf } from "../projects";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
@@ -82,7 +83,8 @@ interface Props {
   onToggleDone: () => void;
   onOpenExternal: () => void;
   onSelectWorkspace: () => void;
-  onSelectProject: () => void;
+  /** 点编辑区上方的项目（子项目时还有它的父项目），参数是项目路径 */
+  onSelectProject: (project: string) => void;
   /** 外部修改冲突时选了「另存为新待办」：新建的那条（同一项目里），由外层加进列表并打开 */
   onSavedAsNew: (s: TodoSummary) => void;
   /** 打开后第一次修改了标题或正文（预览标签据此固定下来） */
@@ -635,7 +637,9 @@ export default function TodoEditor(props: Props) {
           className="editor-crumb"
           items={[
             { title: <a onClick={props.onSelectWorkspace}>{workspace}</a> },
-            { title: <a onClick={props.onSelectProject}>{project}</a> },
+            ...[parentOf(project), project]
+              .filter((p) => p !== undefined)
+              .map((p) => ({ title: <a onClick={() => props.onSelectProject(p)}>{leafName(p)}</a> })),
           ]}
         />
         <div className="editor-actions">

@@ -318,6 +318,11 @@ mark {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 项目卡片上「N 个子项目」 */
+.card-subs {
+  flex-shrink: 0;
+  font-size: 12px;
+}
 .card-foot {
   display: flex;
   justify-content: space-between;

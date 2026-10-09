@@ -3,6 +3,7 @@ import { Dropdown, type MenuProps } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { type OpenTodo, sameTodo, type TodoRef } from "../tabs";
 import type { TodoSummary } from "../types";
+import { projectLabel } from "../projects";
 import { displayTitle } from "../utils";
 import { swallowClick } from "./DragMove";
 import { selKey } from "./sidebar/tree";
@@ -212,7 +213,7 @@ export default function EditorTabs({ tabs, active, activeDirty, onActivate, onCl
               aria-selected={isActive}
               data-tab={key}
               className={cls.filter(Boolean).join(" ")}
-              title={`${t.workspace} / ${t.project} / ${text}${dirty ? `\n${DIRTY_HINT}` : ""}${t.preview ? `\n${PREVIEW_HINT}` : ""}`}
+              title={`${t.workspace} / ${projectLabel(t.project)} / ${text}${dirty ? `\n${DIRTY_HINT}` : ""}${t.preview ? `\n${PREVIEW_HINT}` : ""}`}
               onClick={() => onActivate(t)}
               onDoubleClick={() => t.preview && onKeep(t)}
               // 左键按住拖动；中键按下时不让 WebView 进入自动滚动，松开时关掉

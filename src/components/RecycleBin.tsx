@@ -3,6 +3,7 @@ import { App as AntApp, Button, Empty, Input, Modal, Popconfirm, Spin, Tooltip }
 import { useCallback, useEffect, useState } from "react";
 import { api, errMsg } from "../api";
 import type { RecycleEntry, RecycleKind } from "../types";
+import { parentOf, projectLabel } from "../projects";
 import { avatarColor, firstChar, fullTime, relativeTime, useNow } from "../utils";
 import { restoredPlace } from "./undo";
 
@@ -11,11 +12,12 @@ const KIND_LABELS: Record<RecycleKind, string> = { todo: "待办", project: "项
 /** 回收站列表里显示的名字：待办没有标题时用正文开头 */
 const nameOf = (e: RecycleEntry) => e.title.trim() || e.preview || "空白待办";
 
-/** 原来在哪里 */
+/** 原来在哪里：工作区（子项目还有父项目）、待办所在的项目 */
 function placeOf(e: RecycleEntry): string {
   if (e.kind === "workspace") return "";
-  if (e.kind === "project") return e.workspace;
-  return `${e.workspace} / ${e.project}`;
+  const parent = e.project ? parentOf(e.project) : undefined;
+  if (e.kind === "project") return parent === undefined ? e.workspace : `${e.workspace} / ${parent}`;
+  return `${e.workspace} / ${projectLabel(e.project ?? "")}`;
 }
 
 function KindIcon({ e }: { e: RecycleEntry }) {

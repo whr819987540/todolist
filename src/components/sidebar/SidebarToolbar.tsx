@@ -3,6 +3,7 @@ import {
   ColumnHeightOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
+  FolderAddOutlined,
   FolderFilled,
   HomeOutlined,
   PlusOutlined,
@@ -11,6 +12,7 @@ import {
   VerticalAlignMiddleOutlined,
 } from "@ant-design/icons";
 import { Button, Dropdown, Input, Tooltip, type InputRef, type MenuProps } from "antd";
+import { parentOf, projectLabel } from "../../projects";
 import { ThemeButton } from "../../theme";
 import type { SortKey, WorkspaceTree } from "../../types";
 import type { ListOptions } from "../../workspaceState";
@@ -71,7 +73,10 @@ export default function SidebarToolbar(props: {
   // 「新建」按钮作用于右侧正在显示的工作区
   const selTree = trees.find((t) => t.name === sel.workspace);
   const currentProject = sel.project ?? (selTree?.projects.length === 1 ? selTree.projects[0].name : undefined);
-  const where = (project?: string) => [multi ? sel.workspace : "", project ?? ""].filter(Boolean).join(" / ");
+  const where = (project?: string) =>
+    [multi ? sel.workspace : "", project ? projectLabel(project) : ""].filter(Boolean).join(" / ");
+  // 新建子项目：在右侧显示着的项目里（显示着子项目时是在它的父项目里）
+  const subParent = sel.project === undefined ? undefined : (parentOf(sel.project) ?? sel.project);
   const newMenu: MenuProps = {
     items: [
       {
@@ -82,10 +87,14 @@ export default function SidebarToolbar(props: {
         extra: "Ctrl+N",
       },
       { key: "project", icon: <FolderFilled />, label: multi ? `新建项目（${where()}）` : "新建项目" },
+      ...(subParent === undefined
+        ? []
+        : [{ key: "sub", icon: <FolderAddOutlined />, label: `新建子项目（在「${where(subParent)}」里）` }]),
     ],
     onClick: ({ key }) => {
       if (key === "todo" && currentProject) a.newTodo(currentProject, "", true);
       if (key === "project") a.newProject();
+      if (key === "sub" && subParent !== undefined) a.newSubProject(subParent);
     },
   };
 

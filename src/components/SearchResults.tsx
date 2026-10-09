@@ -1,9 +1,10 @@
 import { CheckOutlined, FolderFilled } from "@ant-design/icons";
 import { Empty, Spin, Tooltip } from "antd";
 import { useMemo } from "react";
+import { deepTodos, leafName, parentOf, projectLabel, sortProjects } from "../projects";
 import { type ContentHits, hitKey, searchSnippet } from "../search";
 import type { ProjectNode, TodoSummary, WorkspaceInfo, WorkspaceTree } from "../types";
-import { compareName, displayTitle, fullTime, matchTodo, relativeTime, useNow } from "../utils";
+import { displayTitle, fullTime, matchTodo, relativeTime, useNow } from "../utils";
 import Highlight from "./Highlight";
 import type { Selection } from "./sidebar/tree";
 
@@ -25,12 +26,14 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
   const k = kw.toLowerCase();
 
   const { projects, todos } = useMemo(() => {
-    const projects: { workspace: string; project: ProjectNode }[] = [];
+    // 项目按自己的名字匹配（子项目不看父项目的名字），数目包括子项目里的待办
+    const projects: { workspace: string; project: ProjectNode; todos: TodoSummary[] }[] = [];
     const todos: { workspace: string; project: string; todo: TodoSummary; snippet: string | null }[] = [];
     for (const tree of trees ?? []) {
       const found = hits?.get(tree.name);
-      for (const p of [...tree.projects].sort((a, b) => compareName(a.name, b.name))) {
-        if (p.name.toLowerCase().includes(k)) projects.push({ workspace: tree.name, project: p });
+      for (const p of sortProjects(tree.projects)) {
+        if (leafName(p.name).toLowerCase().includes(k))
+          projects.push({ workspace: tree.name, project: p, todos: deepTodos(tree.projects, p.name) });
         for (const t of p.todos) {
           const hit = found?.get(hitKey(p.name, t.id));
           if (matchTodo(t, kw) || hit !== undefined)
@@ -72,8 +75,10 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
             <>
               <div className="section-title">项目（{projects.length}）</div>
               <div className="list">
-                {projects.map(({ workspace, project }) => {
-                  const undone = project.todos.filter((t) => !t.done).length;
+                {projects.map(({ workspace, project, todos: all }) => {
+                  const undone = all.filter((t) => !t.done).length;
+                  const parent = parentOf(project.name);
+                  const where = parent === undefined ? workspace : `${workspace} / ${parent}`;
                   return (
                     <div
                       key={`${workspace}/${project.name}`}
@@ -82,13 +87,13 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
                     >
                       <FolderFilled className="project-icon" />
                       <span className="list-title">
-                        <Highlight text={project.name} kw={kw} />
+                        <Highlight text={leafName(project.name)} kw={kw} />
                       </span>
-                      <span className="list-path" title={workspace}>
-                        {workspace}
+                      <span className="list-path" title={where}>
+                        {where}
                       </span>
                       <span className="list-time">
-                        {undone} 条未完成 / 共 {project.todos.length} 条
+                        {undone} 条未完成 / 共 {all.length} 条
                       </span>
                     </div>
                   );
@@ -120,8 +125,8 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
                           </div>
                         )}
                       </div>
-                      <span className="list-path" title={`${workspace} / ${project}`}>
-                        {workspace} / {project}
+                      <span className="list-path" title={`${workspace} / ${projectLabel(project)}`}>
+                        {workspace} / {projectLabel(project)}
                       </span>
                       <Tooltip title={`修改时间：${fullTime(t.updatedAt)}`}>
                         <span className="list-time">修改 {relativeTime(t.updatedAt, now)}</span>

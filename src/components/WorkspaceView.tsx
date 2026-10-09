@@ -5,11 +5,12 @@ import { useAppEvent, useWindowFocus } from "../hooks";
 import { rangePick, togglePick } from "../picking";
 import { useContentSearch } from "../search";
 import { type How, visit } from "../navHistory";
+import { parentOf, sortProjects } from "../projects";
 import { useSettings } from "../settings";
 import { eventShortcut, isRefreshShortcut, sameShortcut } from "../shortcuts";
 import { activeAfterClose, neighborTab, sameTodo, stepTab, tabIndex, type TodoRef } from "../tabs";
 import type { TodoSummary, WorkspaceTree } from "../types";
-import { compareName, useLocalState } from "../utils";
+import { useLocalState } from "../utils";
 import {
   closeTodoTabs,
   collapsedKey,
@@ -68,8 +69,9 @@ function sideOf(el: EventTarget | null): Side | null {
   return el.closest(".sidebar") ? "sidebar" : el.closest(".main") ? "main" : null;
 }
 
+/** 项目按名字排，每个顶层项目后面跟着它的子项目 */
 function sortTree(t: WorkspaceTree): WorkspaceTree {
-  return { ...t, projects: [...t.projects].sort((a, b) => compareName(a.name, b.name)) };
+  return { ...t, projects: sortProjects(t.projects) };
 }
 
 const sameFields = <T extends object>(a: T, b: T) => {
@@ -292,7 +294,9 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     }
     if (!sel.project) return;
     const p = t.projects.find((x) => x.name === sel.project);
-    if (!p) setSel({ workspace: sel.workspace }, "replace");
+    // 子项目不在了退回它的父项目（父项目也不在了时下一次再退回工作区）
+    const parent = parentOf(sel.project);
+    if (!p) setSel({ workspace: sel.workspace, project: parent }, "replace");
     else if (sel.todoId && !p.todos.some((x) => x.id === sel.todoId))
       setSel({ workspace: sel.workspace, project: sel.project }, "replace");
   }, [loaded, sel, workspaces, setSel]);
@@ -359,11 +363,12 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
 
   const expand = (ws: string, key: string) => setCollapsed(ws, (c) => (c[key] ? { ...c, [key]: false } : c));
 
-  /** 展开项目所在的分支，左侧能看到它和其中的待办 */
+  /** 展开项目所在的分支（工作区、父项目和它自己），左侧能看到它和其中的待办 */
   const reveal = useCallback(
     (ws: string, project?: string) => {
-      if (project)
-        setCollapsed(ws, (c) => (c[WS_KEY] || c[project] ? { ...c, [WS_KEY]: false, [project]: false } : c));
+      if (!project) return;
+      const keys = [WS_KEY, parentOf(project), project].filter((k) => k !== undefined);
+      setCollapsed(ws, (c) => (keys.some((k) => c[k]) ? { ...c, ...Object.fromEntries(keys.map((k) => [k, false])) } : c));
     },
     [setCollapsed],
   );
@@ -764,7 +769,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         onToggleDone={() => a.toggleDone(selProject.name, selTodo)}
         onOpenExternal={() => a.openExternal(selProject.name, selTodo)}
         onSelectWorkspace={a.selectWorkspace}
-        onSelectProject={() => a.selectProject(selProject.name)}
+        onSelectProject={a.selectProject}
         onSavedAsNew={(created) => {
           updateTodos(selTree.name, selProject.name, (todos) => [...todos, created]);
           const s = { workspace: selTree.name, project: selProject.name, todoId: created.id };
@@ -781,6 +786,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       <ProjectOverview
         workspace={selTree.name}
         project={selProject}
+        projects={selTree.projects}
         moveTargets={moveTargets(trees, selTree.name)}
         sortKey={listOptions.get(selTree.name).sortKey}
         actions={a}

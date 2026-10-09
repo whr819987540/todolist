@@ -26,6 +26,7 @@ const SUITES = [
   "batch",
   "recycle",
   "hidedone",
+  "subprojects",
   "tabs",
   "regress",
 ];
