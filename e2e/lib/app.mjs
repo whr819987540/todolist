@@ -20,6 +20,8 @@ export const EXE = join(TARGET_DIR, "debug", "todo-list.exe");
 // 用长路径：GitHub 的 Windows 机器上 TEMP 是短文件名（C:\Users\RUNNER~1\...），Windows 回收站记的原位置是长路径，对不上
 export const WORK = join(realpathSync.native(tmpdir()), "todolist-e2e");
 export const DATA = join(WORK, "data");
+/** 自动备份默认存在数据目录旁边的「数据目录名-backups」，测试数据的就在这里，不碰真实的备份目录 */
+export const BACKUPS = join(WORK, "data-backups");
 export const CDP_PORT = 9223;
 export const VITE_URL = "http://localhost:1420";
 
@@ -94,9 +96,10 @@ export function killLeftovers() {
   }
 }
 
-/** 重建测试数据（程序没在运行时调用） */
+/** 重建测试数据（程序没在运行时调用）；自动备份的目录也清掉，每个套件启动时都像第一次用 */
 export function resetData(settings = {}) {
   rmSync(DATA, { recursive: true, force: true });
+  rmSync(BACKUPS, { recursive: true, force: true });
   mkdirSync(DATA, { recursive: true });
   seed(DATA, settings);
 }

@@ -101,3 +101,23 @@ export const setApproved = (name, bytes) =>
 /** 删掉 name 的开机启动项和任务管理器标记 */
 export const removeAutostart = (name) =>
   ps(`Remove-ItemProperty -Path ${quote(RUN)} -Name ${quote(name)} -ErrorAction SilentlyContinue; Remove-ItemProperty -Path ${quote(APPROVED)} -Name ${quote(name)} -ErrorAction SilentlyContinue`);
+
+const ZIP = "Add-Type -AssemblyName System.IO.Compression; Add-Type -AssemblyName System.IO.Compression.FileSystem;";
+
+/** zip 里的各项（包里的路径，文件夹以 / 结尾） */
+export const zipEntries = (path) =>
+  JSON.parse(
+    ps(`${ZIP} $z = [IO.Compression.ZipFile]::OpenRead(${quote(path)}); try { ConvertTo-Json -Compress -InputObject @($z.Entries | ForEach-Object { $_.FullName }) } finally { $z.Dispose() }`) || "[]",
+  );
+
+/** zip 里一个文件的内容（UTF-8），没有这个文件时为空字符串 */
+export const zipText = (path, entry) =>
+  ps(`${ZIP} $z = [IO.Compression.ZipFile]::OpenRead(${quote(path)}); try { $e = $z.GetEntry(${quote(entry)}); if ($e) { $r = New-Object IO.StreamReader($e.Open()); $r.ReadToEnd(); $r.Dispose() } } finally { $z.Dispose() }`);
+
+/** 拼一个 zip（已有的先删掉）：files 是 { 包里的路径: 内容 }，路径照原样写进去（可以是 ../ 这种不安全的） */
+export function makeZip(path, files) {
+  ps(`${ZIP} Remove-Item -LiteralPath ${quote(path)} -ErrorAction SilentlyContinue; $files = ${quote(JSON.stringify(files))} | ConvertFrom-Json;
+    $z = [IO.Compression.ZipFile]::Open(${quote(path)}, 'Create');
+    foreach ($p in $files.PSObject.Properties) { $w = New-Object IO.StreamWriter($z.CreateEntry($p.Name).Open()); $w.Write([string]$p.Value); $w.Dispose() }
+    $z.Dispose()`);
+}

@@ -99,6 +99,8 @@ export function readListOptions(ws: string): ListOptions {
 let saved: Record<string, unknown> = {};
 /** 读文件出错（不是还没有这个文件）时，这次运行不写，免得把文件里原有的覆盖掉 */
 let writable = true;
+/** 恢复待办数据期间不写（suspendUiState），免得把恢复出来的 .state.json 覆盖掉 */
+let suspended = false;
 let dirty = false;
 let timer = 0;
 let writing: Promise<boolean> = Promise.resolve(true);
@@ -140,7 +142,7 @@ export function loadUiState(): Promise<void> {
 function saveUiState(): Promise<boolean> {
   window.clearTimeout(timer);
   timer = 0;
-  if (!writable) return Promise.resolve(false);
+  if (!writable || suspended) return Promise.resolve(false);
   if (!dirty) return writing;
   dirty = false;
   const data = JSON.stringify(saved);
@@ -160,7 +162,26 @@ function writeSaved(key: string, value: unknown) {
   if (JSON.stringify(saved[key]) === JSON.stringify(value)) return;
   saved = { ...saved, [key]: value };
   dirty = true;
-  if (!timer) timer = window.setTimeout(saveUiState, SAVE_DELAY);
+  if (!timer && !suspended) timer = window.setTimeout(saveUiState, SAVE_DELAY);
+}
+
+/**
+ * 恢复待办数据前：把没写盘的界面状态写掉（恢复前的备份里有它），之后不再写盘，直到 resumeUiState。
+ * 恢复成功后整页重新加载，内存里的标签、编辑位置等不会在稍后写盘时把恢复出来的 .state.json 覆盖掉
+ */
+export async function suspendUiState(): Promise<void> {
+  await saveUiState();
+  suspended = true;
+  window.clearTimeout(timer);
+  timer = 0;
+  // 正在写的等它写完，免得写盘晚于恢复
+  await writing;
+}
+
+/** 恢复失败（数据没换）：界面状态照常写盘，期间改动的稍后写 */
+export function resumeUiState() {
+  suspended = false;
+  if (dirty && !timer) timer = window.setTimeout(saveUiState, SAVE_DELAY);
 }
 
 // 隐藏到托盘、退出前写盘。flushAll 依次调用各个 flusher，正在编辑的待办在它的 flusher 里同步记下编辑位置，

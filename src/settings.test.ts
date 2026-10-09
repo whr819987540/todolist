@@ -23,6 +23,10 @@ const DEFAULTS: AppSettings = {
   autostartHidden: true,
   theme: "system",
   editShortcuts: {},
+  autoBackup: true,
+  autoBackupDir: "",
+  autoBackupKeep: 10,
+  autoBackupWebdav: false,
 };
 const info = (settings: Partial<AppSettings> = {}): SettingsInfo => ({
   settings: { ...DEFAULTS, ...settings },

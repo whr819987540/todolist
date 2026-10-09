@@ -2021,6 +2021,35 @@ body.drag-moving .editor-tab-close {
   font-size: 12px;
   text-align: center;
 }
+.backup-item .backup-kind {
+  margin-inline-end: 0;
+}
+/* 自动备份：状态、备份目录 */
+.auto-backup-status {
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  border-radius: 6px;
+  background: var(--c-fill);
+}
+.auto-backup-status .error-text {
+  word-break: break-all;
+}
+.backup-dir-row .backup-dir {
+  flex: 1;
+  min-width: 0;
+}
+.backup-dir-reset.ant-btn {
+  height: auto;
+  padding: 0 4px;
+  font-size: 12px;
+}
+.auto-backup-keep {
+  width: 72px;
+}
+.auto-backup-webdav {
+  margin-top: 4px;
+}
 
 .shortcut-box {
   flex: 1;
