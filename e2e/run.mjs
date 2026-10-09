@@ -37,6 +37,7 @@ const SUITES = [
   "images",
   "tables",
   "backup",
+  "history",
   "regress",
 ];
 

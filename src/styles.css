@@ -532,14 +532,19 @@ mark {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+/* 放不下时在几段之间换行，每段自己不断开 */
+.sidebar-stats > span {
+  display: inline-block;
   white-space: nowrap;
 }
-.sidebar-recycle {
+.sidebar-recycle,
+.sidebar-history {
   flex-shrink: 0;
   color: var(--c-text-3);
 }
-.sidebar-recycle:hover {
+.sidebar-recycle:hover,
+.sidebar-history:hover {
   color: var(--c-primary);
 }
 
@@ -573,6 +578,189 @@ mark {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  font-size: 12px;
+  text-align: left;
+}
+
+/* 完成记录 */
+.history-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.history-search {
+  flex: 1;
+  min-width: 140px;
+}
+.history-scope-name {
+  display: inline-block;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.history-loading,
+.history-empty {
+  padding: 32px 0;
+  text-align: center;
+}
+.history-stats {
+  display: flex;
+  align-items: flex-end;
+  gap: 28px;
+  margin-bottom: 14px;
+  padding: 12px 16px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+}
+.history-stat {
+  flex: none;
+}
+/* 按天的柱状图：一天一根，柱子最宽 24px、顶端 4px 圆角、底端是方的，从同一条细基线长出来；
+   悬停（键盘聚焦）的那根变浅。只有一组数据，用主色，不要图例；条数在悬停提示和下面每天的组名里 */
+.history-chart {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  margin-left: 8px;
+}
+.history-slot {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.history-slot.empty {
+  cursor: default;
+}
+.history-slot:focus-visible {
+  outline: none;
+}
+.history-plot {
+  /* 上面留出最多的那天标条数的地方 */
+  margin-top: 14px;
+  height: 44px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--c-border-strong);
+}
+.history-slot:focus-visible .history-plot {
+  background: var(--c-hover);
+}
+.history-bar {
+  position: relative;
+  width: min(24px, calc(100% - 4px));
+  border-radius: 4px 4px 0 0;
+  background: var(--c-primary);
+  transition: opacity 0.15s;
+}
+.history-slot:hover .history-bar,
+.history-slot:focus-visible .history-bar {
+  opacity: 0.7;
+}
+.history-peak {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding-bottom: 2px;
+  font-size: 11px;
+  line-height: 12px;
+  color: var(--c-text-2);
+}
+/* 30 天时一根很窄，日期比它宽：两边一样地伸出去，仍在柱子正下方 */
+.history-tick {
+  display: flex;
+  justify-content: center;
+  height: 16px;
+  padding-top: 3px;
+  font-size: 11px;
+  line-height: 13px;
+  color: var(--c-text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.history-bar-tip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.history-bar-tip span {
+  opacity: 0.75;
+}
+.history-list {
+  /* 点柱状图滚到那天的组时按它算位置 */
+  position: relative;
+  max-height: min(48vh, 440px);
+  overflow-y: auto;
+}
+.history-group + .history-group {
+  margin-top: 12px;
+}
+/* 组名滚动时停在列表顶上 */
+.history-day {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 2px 6px;
+  font-size: 13px;
+  background: var(--c-bg-elevated, var(--c-bg));
+}
+.history-day-name {
+  font-weight: 600;
+  color: var(--c-text);
+}
+.history-day .muted {
+  font-size: 12px;
+}
+/* 「全部」里可能有几千条：不在可见区域里的组不排版、不绘制，按估计的高度占位（DoneHistory 里给的）；
+   组名不在里面，照样能停在顶上 */
+.history-group > .list {
+  content-visibility: auto;
+}
+.history-row {
+  padding: 8px 10px 8px 16px;
+}
+/* 标题后面以后放标签、优先级 */
+.history-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.history-main .list-title {
+  flex: 0 1 auto;
+}
+.history-time {
+  flex: none;
+  width: 40px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+/* 「标记为未完成」悬停在这一行上时才显示，位置一直占着 */
+.history-undo {
+  opacity: 0;
+}
+.history-row:hover .history-undo,
+.history-undo:focus-visible,
+.history-undo.ant-btn-loading {
+  opacity: 1;
+}
+.history-foot {
   font-size: 12px;
   text-align: left;
 }

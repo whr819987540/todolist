@@ -68,6 +68,14 @@ export interface SearchHit {
   snippet: string;
 }
 
+/** 完成记录里的一条：已完成的待办和它在哪里 */
+export interface DoneTodo {
+  workspace: string;
+  /** 项目路径：子项目是「父项目/子项目」（projects.ts） */
+  project: string;
+  todo: TodoSummary;
+}
+
 /** 软件回收站里一项是什么 */
 export type RecycleKind = "todo" | "project" | "workspace";
 
