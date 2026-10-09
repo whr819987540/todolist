@@ -8,11 +8,12 @@ import {
   type Lingering,
   lingeringAfter,
   NO_LINGERING,
+  WS_KEY,
 } from "./tree";
 
 // docs/requirements.md「隐藏已完成」：项目里有待办、而且全都完成了的才算全部完成，空项目不算；
 // 右侧正在显示的项目照常显示，切到别处后再显示一会儿才藏起来（这期间切回来就接着显示）；侧栏搜索时不隐藏；
-// 侧栏顶部的「全部折叠 / 全部展开」不算藏起来的项目
+// 侧栏顶部的「全部折叠 / 全部展开」不算藏起来的项目，也不算折叠着的工作区里的项目（都看不见）
 
 const todo = (id: string, done: boolean): TodoSummary => ({
   id,
@@ -169,6 +170,14 @@ describe("「全部折叠 / 全部展开」看哪些项目", () => {
     const off = (t: WorkspaceTree) => hiddenDoneProjects(t.projects, { hide: false, keyword: "" });
     expect(anyVisibleProjectOpen([work], othersFolded, off)).toBe(true);
     expect(anyVisibleProjectOpen([work], othersFolded, hiding({ keyword: "完成" }))).toBe(true);
+  });
+
+  it("折叠着的工作区里的项目看不见，展开着也不算", () => {
+    const wsFolded = (ws: string): Collapsed => (ws === "工作" ? { [WS_KEY]: true } : { 杂事: true });
+    expect(anyVisibleProjectOpen([work], wsFolded, hiding())).toBe(false);
+    expect(anyVisibleProjectOpen([work, life], wsFolded, hiding())).toBe(false);
+    const lifeOpen = (ws: string): Collapsed => (ws === "工作" ? { [WS_KEY]: true } : {});
+    expect(anyVisibleProjectOpen([work, life], lifeOpen, hiding())).toBe(true);
   });
 
   it("选中了多个工作区：哪个工作区里有看得见的项目展开着都是全部折叠，都折叠着才是全部展开", () => {

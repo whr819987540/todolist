@@ -1,5 +1,5 @@
 // 隐藏全部完成的项目：侧栏「隐藏已完成」里的第二个选项；空项目不算，右侧正在显示的不藏、切走 1 秒后才藏（在它下面双击时
-// 第二下不落到别的行上），搜索时不藏，「全部折叠 / 全部展开」不算藏起来的，只影响侧栏
+// 第二下不落到别的行上），搜索时不藏，「全部折叠 / 全部展开」不算藏起来的（也不算折叠着的工作区里的），只影响侧栏
 export const title = "隐藏全部完成的项目";
 
 export default async function (t) {
@@ -166,6 +166,22 @@ export default async function (t) {
   await clickCollapseBtn();
   const restored = await folds();
   check("再点「全部展开」：看得见的项目都展开", restored.btn === "全部折叠" && restored.req && restored.empty, restored);
+  // 折叠着的工作区里的项目看不见，展开着也不算；「全部展开」时工作区也展开，看得见其中的项目
+  const wsOpen = () => m.ev(`return row("工作").closest(".ws-branch").getAttribute("aria-expanded")`);
+  await m.ev(`row("工作").querySelector(".chevron").click(); await sleep(300); return 1`);
+  const wsFolded = { btn: await collapseBtn(), ws: await wsOpen() };
+  check(
+    "折叠工作区后（其中的项目还展开着），按钮是「全部展开」",
+    wsFolded.btn === "全部展开" && wsFolded.ws === "false",
+    wsFolded,
+  );
+  await clickCollapseBtn();
+  const wsOpened = { ...(await folds()), ws: await wsOpen() };
+  check(
+    "点「全部展开」：折叠着的工作区也展开，其中的项目展开着",
+    wsOpened.ws === "true" && wsOpened.btn === "全部折叠" && wsOpened.req && wsOpened.empty,
+    wsOpened,
+  );
 
   // 「显示」：关掉这一项
   await m.ev(`document.querySelector(".hidden-projects a").click(); await sleep(400); return 1`);

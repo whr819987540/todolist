@@ -16,7 +16,7 @@ import type { SortKey, WorkspaceTree } from "../../types";
 import type { ListOptions } from "../../workspaceState";
 import type { Actions } from "../menus";
 import SettingsButton from "../SettingsButton";
-import { anyVisibleProjectOpen, type Collapsed, type Selection } from "./tree";
+import { anyVisibleProjectOpen, type Collapsed, type Selection, WS_KEY } from "./tree";
 import WorkspacePicker from "./WorkspacePicker";
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -54,14 +54,16 @@ export default function SidebarToolbar(props: {
   const { trees, sel, actions: a, searchRef, keyword, collapsedOf, setCollapsed } = props;
   const multi = trees.length > 1;
 
-  // 没藏起来的项目有展开着的时是「全部折叠」。点了连藏起来的一起折叠 / 展开：关掉隐藏、其中的待办改回未完成后
-  // 再显示出来时，它们和别的项目一样折叠着 / 展开着
+  // 看得见的项目有展开着的时是「全部折叠」。点了连藏起来的、折叠着的工作区里的一起折叠 / 展开：关掉隐藏、其中的待办
+  // 改回未完成、展开工作区后再显示出来时，它们和别的项目一样折叠着 / 展开着。「全部展开」时折叠着的工作区也展开，
+  // 不然展开了也看不见；「全部折叠」只折叠项目，工作区那一级不动
   const anyProjectOpen = anyVisibleProjectOpen(trees, collapsedOf, props.hiddenOf);
   const toggleAll = () => {
     for (const t of trees)
       setCollapsed(t.name, (c) => {
         const next = { ...c };
         for (const p of t.projects) next[p.name] = anyProjectOpen;
+        if (!anyProjectOpen) next[WS_KEY] = false;
         return next;
       });
   };

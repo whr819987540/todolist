@@ -51,10 +51,10 @@ export function hiddenDoneProjects(
 }
 
 /**
- * 侧栏顶部「全部折叠 / 全部展开」显示哪个：没藏起来的项目有展开着的时是「全部折叠」，都折叠着时是「全部展开」。
- * hiddenOf(tree) 是这个工作区里藏起来的项目（hiddenDoneProjects，和侧栏的树用同样的参数算），它们不算：默认展开着，
- * 看不见也折叠不了，算进去的话折叠完看得见的项目后按钮还是「全部折叠」，点了界面没有变化。
- * 只对有展开着的项目的工作区才调用 hiddenOf
+ * 侧栏顶部「全部折叠 / 全部展开」显示哪个：看得见的项目有展开着的时是「全部折叠」，都折叠着时是「全部展开」。
+ * 看不见的不算：折叠着的工作区里的项目；hiddenOf(tree) 是这个工作区里藏起来的项目（hiddenDoneProjects，和侧栏的树
+ * 用同样的参数算），它们默认展开着，看不见也折叠不了。算进去的话折叠完看得见的项目后按钮还是「全部折叠」，点了界面
+ * 没有变化。只对展开着、有展开着的项目的工作区才调用 hiddenOf
  */
 export function anyVisibleProjectOpen(
   trees: readonly WorkspaceTree[],
@@ -63,6 +63,7 @@ export function anyVisibleProjectOpen(
 ): boolean {
   return trees.some((t) => {
     const c = collapsedOf(t.name);
+    if (c[WS_KEY]) return false;
     const open = t.projects.filter((p) => !c[p.name]);
     if (!open.length) return false;
     const hidden = hiddenOf(t);
