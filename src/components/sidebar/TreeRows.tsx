@@ -65,11 +65,12 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
     [tree.projects, hideDoneProjects, kw, selProject],
   );
 
-  // 搜索时：标题、正文开头（前端匹配）或正文全文（hits）里有关键字的待办，和名字里有关键字的项目
-  const visible = useMemo(() => {
+  // 各项目里列出的待办，排好序；搜索时：标题、正文开头（前端匹配）或正文全文（hits）里有关键字的待办，和名字里有关键字的项目。
+  // 这里不管哪些项目藏起来：藏起哪些跟着右侧显示的项目变，变了时不必把全部待办重新排序，各项目拿到的 todos 还是原来的数组，
+  // 项目不必重新渲染
+  const listed = useMemo(() => {
     const k = kw.toLowerCase();
     return tree.projects
-      .filter((project) => !hidden.has(project.name))
       .map((project) => {
         let todos = sortTodos(project.todos, sortKey);
         if (hideDone) todos = todos.filter((t) => !t.done);
@@ -77,7 +78,11 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
         return { project, todos, nameMatch: !!k && project.name.toLowerCase().includes(k) };
       })
       .filter((x) => !kw || x.todos.length > 0 || x.nameMatch);
-  }, [tree, kw, hits, hideDone, sortKey, hidden]);
+  }, [tree, kw, hits, hideDone, sortKey]);
+  const visible = useMemo(
+    () => (hidden.size ? listed.filter((x) => !hidden.has(x.project.name)) : listed),
+    [listed, hidden],
+  );
 
   const total = countAll(tree);
   const done = countDone(tree);
