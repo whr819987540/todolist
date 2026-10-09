@@ -34,9 +34,15 @@ const NONE_HIDDEN: ReadonlySet<string> = new Set();
  */
 export function hiddenDoneProjects(
   projects: readonly ProjectNode[],
-  o: { hide: boolean; keyword: string; selProject?: string; lingering?: ReadonlySet<string> },
+  o: {
+    hide: boolean;
+    /** 侧栏搜索的关键字，调用方传 trim 过的（Sidebar 的 kw），空的是没在搜索 */
+    keyword: string;
+    selProject?: string;
+    lingering?: ReadonlySet<string>;
+  },
 ): ReadonlySet<string> {
-  if (!o.hide || o.keyword.trim()) return NONE_HIDDEN;
+  if (!o.hide || o.keyword) return NONE_HIDDEN;
   const hidden = projects
     .filter((p) => p.name !== o.selProject && !o.lingering?.has(p.name) && isProjectDone(p))
     .map((p) => p.name);

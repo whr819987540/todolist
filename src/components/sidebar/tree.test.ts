@@ -48,9 +48,8 @@ describe("隐藏全部完成的项目时藏起哪些", () => {
     expect(names(hiddenDoneProjects(projects, { hide: true, keyword: "", selProject: "全完成" }))).toEqual(["也完成"]);
   });
 
-  it("侧栏搜索时不藏；只有空格不算在搜索", () => {
+  it("侧栏搜索时不藏", () => {
     expect(hiddenDoneProjects(projects, { hide: true, keyword: "完成" }).size).toBe(0);
-    expect(hiddenDoneProjects(projects, { hide: true, keyword: "  " }).size).toBe(2);
   });
 
   it("里面有一条改回未完成：又显示出来", () => {
