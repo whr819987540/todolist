@@ -4,6 +4,7 @@ import type {
   DataBackupDone,
   DataBackupInfo,
   DataRestoreDone,
+  DoneTodo,
   EditorBackground,
   FontArea,
   QuickTarget,
@@ -97,6 +98,13 @@ export const api = {
   /** 在正文全文里查找（不区分大小写），返回正文里有关键字的待办；workspaces 为 null 时查全部工作区 */
   searchTodos: (workspaces: string[] | null, keyword: string) =>
     invoke<SearchHit[]>("search_todos", { workspaces, keyword }),
+
+  /**
+   * 完成记录：已完成的待办（顺序不定）。workspaces 为 null 时是全部工作区；给了 since（毫秒）时只要完成时间不早于它的，
+   * 没有完成时间的（以前的版本留下的）只在 since 为 null 时列出
+   */
+  listDoneTodos: (workspaces: string[] | null, since: number | null) =>
+    invoke<DoneTodo[]>("list_done_todos", { workspaces, since }),
 
   /** 全部工作区和其中的项目名（不读待办） */
   listProjects: () => invoke<WorkspaceProjects[]>("list_projects"),

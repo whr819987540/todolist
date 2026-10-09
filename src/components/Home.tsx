@@ -29,6 +29,7 @@ import { ThemeButton } from "../theme";
 import type { WorkspaceInfo, WorkspaceTree } from "../types";
 import { avatarColor, compareName, firstChar, relativeTime, useNow } from "../utils";
 import { forgetWorkspaceState, renameWorkspaceState } from "../workspaceState";
+import DoneHistoryButton from "./DoneHistory";
 import Highlight from "./Highlight";
 import Logo from "./Logo";
 import { useNameDialog } from "./NameDialog";
@@ -229,6 +230,11 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
           <Tooltip title="刷新（F5）">
             <Button icon={<ReloadOutlined />} onClick={reload} />
           </Tooltip>
+          <DoneHistoryButton
+            version={list}
+            onOpen={(t) => onEnter(t.workspace, { project: t.project, todoId: t.todoId })}
+            onUndone={() => reload()}
+          />
           <RecycleBinButton />
           <Button icon={<FolderOpenOutlined />} onClick={() => api.openFolder()}>
             打开数据目录

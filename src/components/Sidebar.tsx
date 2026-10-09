@@ -3,9 +3,11 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "r
 import { parentOf } from "../projects";
 import { type ContentHits, NO_HITS } from "../search";
 import type { MenuProps } from "antd";
-import type { WorkspaceTree } from "../types";
+import type { TodoRef } from "../tabs";
+import type { TodoSummary, WorkspaceTree } from "../types";
 import { useNow } from "../utils";
 import type { ListOptions } from "../workspaceState";
+import DoneHistoryButton from "./DoneHistory";
 import type { DragMove } from "./DragMove";
 import { type Actions, moveTargets } from "./menus";
 import RecycleBinButton from "./RecycleBin";
@@ -71,6 +73,15 @@ interface Props {
   onTodoDoubleClick: (s: Selection) => void;
   /** 在多选了的待办上右键时的菜单；不变的函数 */
   pickedMenu: () => MenuProps | null;
+  /**
+   * 侧栏底部的「完成记录」：version 变了说明加载的数据变了（开着时跟着重新读），点了一条时打开它，
+   * 标记为未完成后更新侧栏
+   */
+  doneHistory: {
+    version: unknown;
+    onOpen: (t: TodoRef) => void;
+    onUndone: (workspace: string, project: string, s: TodoSummary) => void;
+  };
 }
 
 /** 没有多选的、没有刚切走的项目的工作区都用这一个，行不必重新渲染 */
@@ -259,9 +270,13 @@ export default function Sidebar(props: Props) {
       {popups.node}
 
       <div className="sidebar-foot">
+        {/* 放不下时在这几段之间换行，不截掉 */}
         <span className="sidebar-stats">
-          {multi && `${trees.length} 个工作区，`}共 {total} 条待办，已完成 {done} 条
+          {multi && <span>{trees.length} 个工作区，</span>}
+          <span>共 {total} 条待办，</span>
+          <span>已完成 {done} 条</span>
         </span>
+        <DoneHistoryButton variant="link" workspaces={props.workspaces} {...props.doneHistory} />
         <RecycleBinButton variant="link" />
       </div>
     </aside>

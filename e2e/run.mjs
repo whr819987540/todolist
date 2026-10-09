@@ -29,6 +29,7 @@ const SUITES = [
   "subprojects",
   "tabs",
   "backup",
+  "history",
   "regress",
 ];
 

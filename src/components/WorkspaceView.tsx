@@ -377,23 +377,21 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const initialProject = initialSel.project;
   useEffect(() => reveal(initialWorkspace, initialProject), [initialWorkspace, initialProject, reveal]);
 
-  useImperativeHandle(handleRef, () => {
-    const show = (s: Selection) => {
-      if (!workspacesRef.current.includes(s.workspace)) setWorkspaces((list) => sortNames([...list, s.workspace]));
-      reveal(s.workspace, s.project);
-      setFocusTitleId(null);
-      setFocusBodyKey(null);
-      setSel(s);
-    };
-    return {
-      show,
-      async open(s) {
-        // 还没选中的工作区选中后会整个加载；已经显示着的先重新加载，否则新的待办还不在列表里，会被当成已删除退回上一级
-        if (workspacesRef.current.includes(s.workspace)) await reloadRef.current();
-        show(s);
-      },
-    };
-  });
+  /** 右侧改显示工作区里的一处：它所在的工作区没选中时选中，展开它所在的分支 */
+  const show = (s: Selection) => {
+    if (!workspacesRef.current.includes(s.workspace)) setWorkspaces((list) => sortNames([...list, s.workspace]));
+    reveal(s.workspace, s.project);
+    setFocusTitleId(null);
+    setFocusBodyKey(null);
+    setSel(s);
+  };
+  /** 同 show，但先从磁盘重新加载（要打开的待办可能是刚在别处新建、外部改过的） */
+  const openFresh = async (s: Selection) => {
+    // 还没选中的工作区选中后会整个加载；已经显示着的先重新加载，否则新的待办还不在列表里，会被当成已删除退回上一级
+    if (workspacesRef.current.includes(s.workspace)) await reloadRef.current();
+    show(s);
+  };
+  useImperativeHandle(handleRef, () => ({ show, open: openFresh }));
 
   /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
   const flushEditor = () => editorRef.current?.flush() ?? Promise.resolve(true);
@@ -829,6 +827,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         onTodoClick={onTodoClick}
         onTodoDoubleClick={onTodoDoubleClick}
         pickedMenu={pickedMenu}
+        doneHistory={{ version: loaded, onOpen: openFresh, onUndone: patchTodo }}
       />
       <div className="resizer" onMouseDown={startResize} onDoubleClick={() => setWidth(300)} title="拖动调整宽度，双击恢复默认" />
       <main className="main" ref={mainRef} tabIndex={-1}>
