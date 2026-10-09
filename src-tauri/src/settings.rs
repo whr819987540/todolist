@@ -22,6 +22,9 @@ pub const DEFAULT_QUICK_PROJECT: &str = "快速记录";
 /// 定时保存的可调范围（秒）：1 秒到 1 小时；前端 settings.tsx 的 SAVE_DELAY_LIMITS 与此一致
 pub const SAVE_DELAY_RANGE: RangeInclusive<u32> = 1..=3600;
 
+/// 自动备份保留几份的可调范围；前端 settings.tsx 的 AUTO_BACKUP_KEEP_LIMITS 与此一致
+pub const AUTO_BACKUP_KEEP_RANGE: RangeInclusive<u32> = 1..=100;
+
 /// 快捷键格式如 `Ctrl+Alt+T`，None 表示不使用；文件里缺的字段取默认值
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -60,6 +63,14 @@ pub struct Settings {
     /// 没改过的不记，用前端 editShortcuts.ts 里的默认值
     #[serde(deserialize_with = "lenient_edit_shortcuts")]
     pub edit_shortcuts: BTreeMap<String, Option<String>>,
+    /// 每天自动备份待办数据（见 data_backup.rs）
+    pub auto_backup: bool,
+    /// 自动备份存到的目录；空表示默认的（数据目录旁边的「数据目录名-backups」）
+    pub auto_backup_dir: String,
+    /// 自动备份保留最近几份，多的删掉最旧的
+    pub auto_backup_keep: u32,
+    /// 自动备份时同时上传到 WebDAV（那里同样只留最近 auto_backup_keep 份）
+    pub auto_backup_webdav: bool,
 }
 
 /// 快速记录存到的项目
@@ -118,6 +129,10 @@ impl Default for Settings {
             autostart_hidden: true,
             theme: Theme::default(),
             edit_shortcuts: BTreeMap::new(),
+            auto_backup: true,
+            auto_backup_dir: String::new(),
+            auto_backup_keep: 10,
+            auto_backup_webdav: false,
         }
     }
 }
@@ -253,6 +268,9 @@ impl Settings {
             self.set_font_size(area, self.font_size(area));
         }
         self.save_delay_secs = self.save_delay_secs.clamp(*SAVE_DELAY_RANGE.start(), *SAVE_DELAY_RANGE.end());
+        self.auto_backup_keep =
+            self.auto_backup_keep.clamp(*AUTO_BACKUP_KEEP_RANGE.start(), *AUTO_BACKUP_KEEP_RANGE.end());
+        self.auto_backup_dir = self.auto_backup_dir.trim().to_string();
         self.editor_custom_color =
             parse_color(&self.editor_custom_color).unwrap_or_else(|| DEFAULT_CUSTOM_COLOR.into());
         let t = &self.quick_capture_target;
