@@ -1,17 +1,20 @@
 mod autostart;
 mod backup;
+mod data_backup;
 mod settings;
 mod store;
 mod webdav;
 
 use backup::RemoteBackup;
 use chrono::Local;
+use data_backup::{AutoLocal, AutoRun, BackupInfo, BackupJobs, LocalBackup, Outcome, Packed, Restored};
 use serde::Serialize;
 use settings::{
     EditorBackground, FontArea, QuickTarget, Settings, SettingsStore, ShortcutAction, StartupView, Theme,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use store::{
@@ -1023,6 +1026,8 @@ fn restore_settings(app: &AppHandle, settings: &SettingsStore, mut next: Setting
     settings.save(next.clone())?;
     // 全局快捷键被占用不影响恢复，设置界面会提示
     register_global_shortcuts(app, &next);
+    // 自动备份的设置可能变了，马上检查一次
+    app.state::<BackupJobs>().wake();
     Ok(settings_info(settings))
 }
 
@@ -1042,6 +1047,273 @@ fn check_shortcuts(s: &Settings) -> Cmd<()> {
         seen.push((action, parsed));
     }
     Ok(())
+}
+
+// ----- 待办数据的备份与恢复（data_backup.rs） -----
+
+/// 设置里的自动备份目录（空的是默认的，数据目录旁边的「数据目录名-backups」）
+fn data_backup_dir(app: &AppHandle) -> PathBuf {
+    data_backup::backup_dir(&app.state::<SettingsStore>().get().auto_backup_dir, app.state::<Store>().root())
+}
+
+/// 打包、解压这些可能要好几秒的事放到后台线程里做，不占着处理命令的线程
+async fn in_background<T: Send + 'static>(app: &AppHandle, f: impl FnOnce(&AppHandle) -> Cmd<T> + Send + 'static) -> Cmd<T> {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || f(&app))
+        .await
+        .map_err(|e| format!("后台任务出错：{e}"))?
+}
+
+/// 本地备份、恢复数据用的文件对话框：挂在主窗口上，只列 zip，从自动备份目录打开（还没有这个目录时先建；
+/// 设置里的目录不合用时（恢复的别的电脑的设置里，可能在这里的数据目录里面）不建，免得建出一个工作区）
+fn data_backup_dialog(app: &AppHandle, window: &WebviewWindow, title: &str) -> FileDialogBuilder<tauri::Wry> {
+    let dir = data_backup_dir(app);
+    if data_backup::check_backup_dir(&dir, app.state::<Store>().root()).is_ok() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+    window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title(title)
+        .add_filter("待办数据备份", &["zip"])
+        .set_directory(dir)
+}
+
+/// 弹出「另存为」对话框选择数据备份存到哪里，返回路径；取消时返回 null。之后前端调 backup_data_to_file
+#[tauri::command]
+async fn pick_data_backup_target(app: AppHandle, window: WebviewWindow) -> Cmd<Option<String>> {
+    let picked = data_backup_dialog(&app, &window, "备份数据到本地")
+        .set_file_name(data_backup::file_name(Local::now()))
+        .blocking_save_file();
+    let Some(path) = picked else { return Ok(None) };
+    let path = path.into_path().map_err(|e| format!("无法保存到这个位置：{e}"))?;
+    data_backup::check_target(&path, app.state::<Store>().root())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// 把待办数据打包存到 path（在后台线程里做）
+#[tauri::command]
+async fn backup_data_to_file(app: AppHandle, path: String) -> Cmd<Packed> {
+    in_background(&app, move |app| {
+        let store = app.state::<Store>();
+        let path = PathBuf::from(path);
+        data_backup::check_target(&path, store.root())?;
+        let _busy = app.state::<BackupJobs>().inner().exclusive();
+        data_backup::pack(&store, &path, Local::now())
+    })
+    .await
+}
+
+/// 把待办数据打包上传到 WebDAV 的远程目录（先打包到系统的临时目录，传完删掉）
+#[tauri::command]
+async fn backup_data_to_webdav(app: AppHandle, webdav: State<'_, WebDavStore>) -> Cmd<Packed> {
+    let dav = webdav.connect()?;
+    let now = Local::now();
+    let name = data_backup::file_name(now);
+    let tmp = std::env::temp_dir().join(format!("todolist-upload-{}-{name}", std::process::id()));
+    let packing = tmp.clone();
+    let packed = in_background(&app, move |app| {
+        let _busy = app.state::<BackupJobs>().inner().exclusive();
+        data_backup::pack(&app.state::<Store>(), &packing, now)
+    })
+    .await;
+    let uploaded = match packed {
+        Ok(p) => data_backup::upload(&dav, &tmp, &name, None).await.map(|_| Packed { path: name.clone(), ..p }),
+        Err(e) => Err(e),
+    };
+    let _ = std::fs::remove_file(&tmp);
+    uploaded
+}
+
+/// 弹出「打开」对话框（从自动备份目录打开）选择要恢复的数据备份，返回路径；取消时返回 null。
+/// 之后前端调 inspect_data_backup 读出备份时间等，确认后调 restore_data_from_file
+#[tauri::command]
+async fn pick_data_backup_file(app: AppHandle, window: WebviewWindow) -> Cmd<Option<String>> {
+    let Some(path) = data_backup_dialog(&app, &window, "从本地文件恢复数据").blocking_pick_file() else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|e| format!("无法打开这个文件：{e}"))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// 读出本地数据备份的说明（备份时间、几个工作区几条待办）；不是数据备份时说明是什么
+#[tauri::command]
+async fn inspect_data_backup(path: String) -> Cmd<BackupInfo> {
+    data_backup::inspect(Path::new(&path))
+}
+
+/// 用本地的数据备份恢复（在后台线程里做）
+#[tauri::command]
+async fn restore_data_from_file(app: AppHandle, path: String) -> Cmd<Restored> {
+    in_background(&app, move |app| {
+        let _busy = app.state::<BackupJobs>().inner().exclusive();
+        data_backup::restore_file(&app.state::<Store>(), Path::new(&path), &data_backup_dir(app), Local::now())
+    })
+    .await
+}
+
+/// 用 WebDAV 上的数据备份恢复：先下载到数据目录里的临时文件夹
+#[tauri::command]
+async fn restore_data_from_webdav(app: AppHandle, webdav: State<'_, WebDavStore>, name: String) -> Cmd<Restored> {
+    let dav = webdav.connect()?;
+    let now = Local::now();
+    let staging = data_backup::staging_dir(app.state::<Store>().root(), now)?;
+    let zip = staging.join("download.zip");
+    let result = match dav.download_to(&name, &zip).await {
+        Ok(()) => {
+            let (staging, zip) = (staging.clone(), zip.clone());
+            in_background(&app, move |app| {
+                let _busy = app.state::<BackupJobs>().inner().exclusive();
+                data_backup::restore_at(&app.state::<Store>(), &staging, &zip, &data_backup_dir(app), now)
+            })
+            .await
+        }
+        Err(e) => Err(e),
+    };
+    data_backup::clean_staging(&staging);
+    result
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoBackupStatus {
+    /// 现在用的备份目录
+    dir: String,
+    default_dir: String,
+    /// 正在自动备份
+    running: bool,
+    /// 备份目录里最新的一份自动备份
+    latest: Option<LocalBackup>,
+    /// 备份目录里有几份
+    count: usize,
+    /// 这次运行期间最近一次自动备份的结果
+    last_run: Option<AutoRun>,
+}
+
+#[tauri::command]
+fn get_auto_backup_status(app: AppHandle, jobs: State<'_, BackupJobs>) -> AutoBackupStatus {
+    let dir = data_backup_dir(&app);
+    let list = data_backup::local_backups(&dir);
+    AutoBackupStatus {
+        default_dir: data_backup::default_dir(app.state::<Store>().root()).to_string_lossy().into_owned(),
+        dir: dir.to_string_lossy().into_owned(),
+        running: jobs.running(),
+        count: list.len(),
+        latest: list.into_iter().next(),
+        last_run: jobs.last(),
+    }
+}
+
+/// 修改自动备份的设置：开关、备份目录（空的是默认的）、保留几份（超出范围取边界值）、是否同时上传到 WebDAV；
+/// 改完马上检查一次
+#[tauri::command]
+fn set_auto_backup(
+    app: AppHandle,
+    settings: State<'_, SettingsStore>,
+    store: State<'_, Store>,
+    enabled: bool,
+    dir: String,
+    keep: u32,
+    webdav: bool,
+) -> Cmd<SettingsInfo> {
+    let dir = dir.trim().to_string();
+    if !dir.is_empty() {
+        data_backup::check_backup_dir(Path::new(&dir), store.root())?;
+    }
+    let mut next = settings.get();
+    next.auto_backup = enabled;
+    next.auto_backup_dir = dir;
+    next.auto_backup_keep = keep;
+    next.auto_backup_webdav = webdav;
+    settings.save(next)?;
+    app.state::<BackupJobs>().wake();
+    Ok(settings_info(&settings))
+}
+
+/// 选备份目录的对话框（从现在的备份目录打开），返回选中的文件夹；取消时返回 null
+#[tauri::command]
+async fn pick_backup_dir(app: AppHandle, window: WebviewWindow) -> Cmd<Option<String>> {
+    let dir = data_backup_dir(&app);
+    let start = if dir.is_dir() { dir } else { dir.parent().map(Path::to_path_buf).unwrap_or(dir) };
+    let picked = window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("选择自动备份的目录")
+        .set_directory(start)
+        .blocking_pick_folder();
+    let Some(path) = picked else { return Ok(None) };
+    let path = path.into_path().map_err(|e| format!("无法使用这个文件夹：{e}"))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// 在资源管理器中打开自动备份目录（还没有时先建）
+#[tauri::command]
+async fn open_backup_dir(app: AppHandle) -> Cmd<()> {
+    let dir = data_backup_dir(&app);
+    data_backup::check_backup_dir(&dir, app.state::<Store>().root())?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建备份目录 {}：{e}", dir.display()))?;
+    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("无法打开文件夹：{e}"))
+}
+
+/// 自动备份每隔多久检查一次（到没到 24 小时、数据变没变）
+const AUTO_BACKUP_CHECK: Duration = Duration::from_secs(10 * 60);
+
+/// 自动备份：启动几秒后检查一次，之后每 10 分钟检查一次，改了自动备份的设置时马上检查（BackupJobs::wake）；
+/// 藏在托盘里也照常
+fn start_auto_backup(app: &AppHandle) {
+    let (tx, rx) = mpsc::channel();
+    app.state::<BackupJobs>().set_waker(tx);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let mut wait = Duration::from_secs(5);
+        loop {
+            if let Err(RecvTimeoutError::Disconnected) = rx.recv_timeout(wait) {
+                return;
+            }
+            // 连着叫醒几次的只检查一次
+            while rx.try_recv().is_ok() {}
+            auto_backup_once(&app);
+            wait = AUTO_BACKUP_CHECK;
+        }
+    });
+}
+
+/// 检查一次自动备份；有了结果（备份了、跳过了、失败了）记下来，通知主窗口刷新设置里显示的状态。失败不弹窗
+fn auto_backup_once(app: &AppHandle) {
+    let settings = app.state::<SettingsStore>().get();
+    if !settings.auto_backup {
+        return;
+    }
+    let store = app.state::<Store>();
+    let jobs = app.state::<BackupJobs>();
+    let _busy = jobs.exclusive();
+    let dir = data_backup::backup_dir(&settings.auto_backup_dir, store.root());
+    let keep = settings.auto_backup_keep as usize;
+    let result = data_backup::run_auto(&store, &dir, keep, Local::now(), || {
+        jobs.set_running(true);
+        let _ = app.emit_to("main", "auto-backup", ());
+    });
+    jobs.set_running(false);
+    let run = match result {
+        Ok(AutoLocal::NotYet) => return,
+        Ok(AutoLocal::Unchanged) => AutoRun::new(Outcome::Unchanged),
+        Ok(AutoLocal::Done(packed)) => {
+            let mut run = AutoRun::new(Outcome::Done);
+            if settings.auto_backup_webdav {
+                let uploaded = app.state::<WebDavStore>().connect().and_then(|dav| {
+                    tauri::async_runtime::block_on(data_backup::upload(&dav, Path::new(&packed.path), &packed.name, Some(keep)))
+                });
+                run.webdav_error = uploaded.err();
+            }
+            run.name = Some(packed.name);
+            run
+        }
+        Err(e) => AutoRun { error: Some(e), ..AutoRun::new(Outcome::Failed) },
+    };
+    jobs.set_last(run);
+    let _ = app.emit_to("main", "auto-backup", ());
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1081,7 +1353,9 @@ pub fn run() {
             app.manage(store);
             app.manage(settings);
             app.manage(webdav);
+            app.manage(BackupJobs::default());
             setup_tray(app)?;
+            start_auto_backup(app.handle());
             // 启动后过一会儿（不和主窗口抢启动时间）先把快速记录小窗建好，第一次按快捷键时不用等它加载；
             // 软件回收站里放了超过 30 天的移到系统回收站
             let handle = app.handle().clone();
@@ -1170,6 +1444,17 @@ pub fn run() {
             list_webdav_backups,
             restore_from_webdav,
             restore_from_file,
+            pick_data_backup_target,
+            backup_data_to_file,
+            backup_data_to_webdav,
+            pick_data_backup_file,
+            inspect_data_backup,
+            restore_data_from_file,
+            restore_data_from_webdav,
+            get_auto_backup_status,
+            set_auto_backup,
+            pick_backup_dir,
+            open_backup_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

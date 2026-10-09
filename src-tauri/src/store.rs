@@ -13,6 +13,7 @@
 //!   .recycle/                软件的回收站：删除的工作区、项目、待办先放在这里，可以恢复
 //!     {条目 id}/entry.json   原来在哪里、标题和完成状态等
 //!     {条目 id}/{原名}       删除的 .md 文件或目录
+//!   .restoring-…/            恢复待办数据时的临时文件夹（data_backup.rs），恢复完就删掉
 //! ```
 //!
 //! 接口里的项目用路径表示：顶层项目是它的名字，子项目是「父项目/子项目」（名字里不能有 /，不会混淆）。
@@ -321,6 +322,13 @@ impl Store {
 
     fn guard(&self) -> MutexGuard<'_, MemCache> {
         self.lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 拿着锁执行 f：备份待办数据时每读一个文件拿一次，免得和保存、改名、移动同时进行
+    /// （Windows 上文件夹里有文件开着时，这个文件夹改不了名）
+    pub fn locked<T>(&self, f: impl FnOnce() -> T) -> T {
+        let _g = self.guard();
+        f()
     }
 
     fn ws_dir(&self, ws: &str) -> Result<PathBuf> {
@@ -855,6 +863,45 @@ impl Store {
         atomic_write(&self.root.join(UI_STATE_FILE), data.as_bytes()).map_err(|e| format!("保存界面状态失败：{e}"))
     }
 
+    // ----- 恢复待办数据（data_backup.rs） -----
+
+    /// 用 staged 里的工作区和 .state.json 换掉数据目录里现在的。拿着锁做，期间别的操作（保存、快速记录等）等着：
+    /// 先调 before（把现在的数据备份一份，失败了就什么都不动），再把现在的移进 old、staged 里的移过来。
+    /// 中途失败时换回原来的；换不回来的留在 old 里。软件的回收站和数据目录里别的文件（设置等）不动
+    pub fn replace_data<T>(&self, staged: &Path, old: &Path, before: impl FnOnce() -> Result<T>) -> Result<T> {
+        let mut g = self.guard();
+        let done = before()?;
+        let current = data_items(&self.root)?;
+        let incoming = data_items(staged)?;
+        fs::create_dir_all(old).map_err(|e| format!("恢复失败：{e}"))?;
+        let mut moved_out = Vec::new();
+        for name in &current {
+            if let Err(e) = fs::rename(self.root.join(name), old.join(name)) {
+                let back = move_items(&moved_out, old, &self.root);
+                return Err(rollback_error(name, e, back, old));
+            }
+            moved_out.push(name.clone());
+        }
+        let mut moved_in = Vec::new();
+        for name in &incoming {
+            let target = self.root.join(name);
+            // 数据目录里还有同名的（不是工作区的文件）：不覆盖它（Windows 上文件夹改名能把同名的文件顶掉）
+            let moved = match fs::symlink_metadata(&target) {
+                Ok(_) => Err(io::Error::new(io::ErrorKind::AlreadyExists, "数据目录里已有同名的文件")),
+                Err(_) => fs::rename(staged.join(name), &target),
+            };
+            if let Err(e) = moved {
+                let back = move_items(&moved_in, &self.root, staged).and(move_items(&moved_out, old, &self.root));
+                return Err(rollback_error(name, e, back, old));
+            }
+            moved_in.push(name.clone());
+        }
+        // 路径没变、内容全换了：缓存整个丢掉
+        *g = MemCache::default();
+        let _ = fs::remove_dir_all(old);
+        Ok(done)
+    }
+
     // ----- 软件的回收站 -----
 
     fn recycle_root(&self) -> PathBuf {
@@ -1294,6 +1341,50 @@ fn readable_entry_name(f: &RecycleFile, id: &str) -> String {
     }
 }
 
+/// 数据目录（或解压出来的备份）里算待办数据的：工作区文件夹（点开头的不算）和 .state.json
+fn data_items(dir: &Path) -> Result<Vec<String>> {
+    let mut items: Vec<String> = list_subdirs(dir)?.into_iter().map(|(name, _)| name).collect();
+    if dir.join(UI_STATE_FILE).is_file() {
+        items.push(UI_STATE_FILE.into());
+    }
+    Ok(items)
+}
+
+/// 把 names 从 from 移回 to；有没移成的返回错误
+fn move_items(names: &[String], from: &Path, to: &Path) -> io::Result<()> {
+    let mut result = Ok(());
+    for name in names {
+        if let Err(e) = fs::rename(from.join(name), to.join(name)) {
+            result = Err(e);
+        }
+    }
+    result
+}
+
+/// 替换数据时移不动 name（多半正被其他程序占用）的提示；back 是换回原来的数据成没成
+fn rollback_error(name: &str, e: io::Error, back: io::Result<()>, old: &Path) -> String {
+    match back {
+        Ok(()) => format!("恢复失败，「{name}」可能有文件正被其他程序占用：{e}。现在的数据没有改动"),
+        Err(back) => format!(
+            "恢复失败，「{name}」可能有文件正被其他程序占用：{e}；而且没能把原来的数据全部换回来（{back}）。\
+             原来的数据在自动备份目录里恢复前的备份中，没换回来的部分在 {}",
+            old.display()
+        ),
+    }
+}
+
+/// 数据目录（或解压出来的备份）里有几个工作区、几条待办（包括子项目里的），和左侧、首页的算法一样
+pub fn count_data(root: &Path) -> Result<(usize, usize)> {
+    let workspaces = list_subdirs(root)?;
+    let mut todos = 0;
+    for (_, dir) in &workspaces {
+        for (_, pdir) in project_dirs(dir)? {
+            todos += markdown_files(&pdir)?.len();
+        }
+    }
+    Ok((workspaces.len(), todos))
+}
+
 /// 在 parent 里恢复名为 name 的目录用的名字：被占用时加「（恢复）」「（恢复 2）」…；返回名字和是否改了名
 fn free_name(parent: &Path, name: &str) -> (String, bool) {
     if !parent.join(name).exists() {
@@ -1608,7 +1699,7 @@ fn clean_title(title: &str) -> String {
 const INVALID_CHARS: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 
 /// 访问已有条目时的宽松校验：只防路径穿越和非法字符
-fn check_component(name: &str, what: &str) -> Result<()> {
+pub(crate) fn check_component(name: &str, what: &str) -> Result<()> {
     if name.is_empty()
         || name == "."
         || name == ".."
@@ -1634,15 +1725,17 @@ pub fn normalize_name(raw: &str, what: &str) -> Result<String> {
     if name.starts_with('.') || name.ends_with('.') {
         return Err(format!("{what}名称不能以“.”开头或结尾"));
     }
-    let stem = name.split('.').next().unwrap_or(name).trim_end().to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.len() == 4
-            && stem.as_bytes()[3].is_ascii_digit());
-    if reserved {
+    if is_reserved_name(name) {
         return Err(format!("“{name}”是 Windows 保留名称，请换一个"));
     }
     Ok(name.to_string())
+}
+
+/// Windows 的保留名称（CON、NUL、COM1 等，带扩展名的也算），不能用作文件名
+pub(crate) fn is_reserved_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end().to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit())
 }
 
 // ---------------------------------------------------------------------------
@@ -2769,6 +2862,133 @@ mod tests {
         list.sort_by(|a, b| a.name.cmp(&b.name));
         let names: Vec<(&str, Vec<String>)> = list.iter().map(|w| (w.name.as_str(), w.projects.clone())).collect();
         assert_eq!(names, [("工作", vec![]), ("收件箱", vec!["快速记录".to_string()])]);
+    }
+
+    /// 恢复待办数据用的「备份里的内容」：一个工作区、一条待办，加上界面状态
+    fn staged_backup(tmp: &TempRoot) -> PathBuf {
+        let staged = tmp.0.join("staged");
+        fs::create_dir_all(staged.join("备份的工作区").join("项目")).unwrap();
+        fs::write(staged.join("备份的工作区").join("项目").join("备份的待办.md"), "备份里的正文").unwrap();
+        fs::write(staged.join(UI_STATE_FILE), r#"{"from":"backup"}"#).unwrap();
+        staged
+    }
+
+    #[test]
+    fn replace_data_swaps_workspaces_and_state_only() {
+        let (tmp, s) = store("replace");
+        s.create_workspace("现在的").unwrap();
+        s.create_project("现在的", "p").unwrap();
+        let t = s.create_todo("现在的", "p", "要删的", "x").unwrap();
+        s.delete_todo("现在的", "p", &t.id).unwrap();
+        s.create_todo("现在的", "p", "留着的", "现在的正文").unwrap();
+        s.write_ui_state(r#"{"from":"now"}"#).unwrap();
+        fs::write(s.root().join(".settings.json"), "{}").unwrap();
+        // 读一遍，缓存里有现在的
+        assert_eq!(s.load_workspace("现在的").unwrap().projects[0].todos.len(), 1);
+        let staged = staged_backup(&tmp);
+        let old = s.root().join(".restoring-test").join("old");
+
+        let mut seen = None;
+        s.replace_data(&staged, &old, || {
+            // 替换之前，现在的数据还在原处（这时把它备份一份）
+            seen = Some(s.root().join("现在的").is_dir());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, Some(true));
+        let names: Vec<String> = s.list_workspaces().unwrap().into_iter().map(|w| w.name).collect();
+        assert_eq!(names, ["备份的工作区"]);
+        let tree = s.load_workspace("备份的工作区").unwrap();
+        assert_eq!(tree.projects[0].todos[0].preview, "备份里的正文");
+        assert_eq!(s.read_ui_state().unwrap().as_deref(), Some(r#"{"from":"backup"}"#));
+        // 回收站、设置文件不动；放原来数据的临时目录删掉了
+        assert_eq!(s.list_recycle().unwrap().len(), 1);
+        assert!(s.root().join(".settings.json").is_file());
+        assert!(!old.exists());
+        assert_eq!(count_data(s.root()).unwrap(), (1, 1));
+    }
+
+    #[test]
+    fn replace_data_without_state_removes_current_state() {
+        let (tmp, s) = store("replace-nostate");
+        s.create_workspace("现在的").unwrap();
+        s.write_ui_state("{}").unwrap();
+        let staged = staged_backup(&tmp);
+        fs::remove_file(staged.join(UI_STATE_FILE)).unwrap();
+        s.replace_data(&staged, &tmp.0.join("old"), || Ok(())).unwrap();
+        assert_eq!(s.read_ui_state().unwrap(), None);
+    }
+
+    #[test]
+    fn replace_data_keeps_everything_when_it_fails() {
+        let (tmp, s) = store("replace-fail");
+        s.create_workspace("现在的").unwrap();
+        s.create_project("现在的", "p").unwrap();
+        s.create_todo("现在的", "p", "t", "现在的正文").unwrap();
+        s.write_ui_state(r#"{"from":"now"}"#).unwrap();
+        let staged = staged_backup(&tmp);
+        let old = tmp.0.join("old");
+
+        // 先备份现在的数据失败：什么都不动
+        let err = s.replace_data(&staged, &old, || Err::<(), _>("磁盘满了".to_string())).unwrap_err();
+        assert_eq!(err, "磁盘满了");
+        assert!(s.root().join("现在的").is_dir() && staged.join("备份的工作区").is_dir());
+
+        // 换到一半移不过去（数据目录里有个同名的文件挡着）：换回原来的
+        fs::create_dir_all(staged.join("挡着的")).unwrap();
+        fs::write(s.root().join("挡着的"), "不是文件夹").unwrap();
+        let err = s.replace_data(&staged, &old, || Ok(())).unwrap_err();
+        assert!(err.contains("「挡着的」") && err.contains("现在的数据没有改动"), "{err}");
+        let names: Vec<String> = s.list_workspaces().unwrap().into_iter().map(|w| w.name).collect();
+        assert_eq!(names, ["现在的"]);
+        assert_eq!(s.read_ui_state().unwrap().as_deref(), Some(r#"{"from":"now"}"#));
+        assert!(staged.join("备份的工作区").join("项目").join("备份的待办.md").is_file());
+        assert!(fs::read_dir(&old).map_or(true, |mut d| d.next().is_none()));
+        assert_eq!(fs::read_to_string(s.root().join("挡着的")).unwrap(), "不是文件夹");
+    }
+
+    /// Windows 上工作区里有文件正被别的程序独占打开时，这个工作区移不走：换回原来的，什么都不丢
+    #[cfg(windows)]
+    #[test]
+    fn replace_data_when_a_file_is_in_use() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (tmp, s) = store("replace-locked");
+        for ws in ["甲", "乙"] {
+            s.create_workspace(ws).unwrap();
+            s.create_project(ws, "p").unwrap();
+            s.create_todo(ws, "p", "t", "现在的正文").unwrap();
+        }
+        let staged = staged_backup(&tmp);
+        let busy = s.project_path("乙", "p").unwrap().join(META_FILE);
+        let lock = OpenOptions::new().read(true).share_mode(0).open(&busy).unwrap();
+        let err = s.replace_data(&staged, &tmp.0.join("old"), || Ok(())).unwrap_err();
+        drop(lock);
+        assert!(err.contains("正被其他程序占用") && err.contains("现在的数据没有改动"), "{err}");
+        let mut names: Vec<String> = s.list_workspaces().unwrap().into_iter().map(|w| w.name).collect();
+        names.sort();
+        assert_eq!(names, ["乙", "甲"]);
+        assert_eq!(s.load_workspace("甲").unwrap().projects[0].todos.len(), 1);
+    }
+
+    #[test]
+    fn counts_workspaces_and_todos_like_the_home_page() {
+        let (_tmp, s) = store("count");
+        assert_eq!(count_data(s.root()).unwrap(), (0, 0));
+        s.create_workspace("w").unwrap();
+        s.create_workspace("空的").unwrap();
+        s.create_project("w", "p").unwrap();
+        s.create_sub_project("w", "p", "sub").unwrap();
+        s.create_todo("w", "p", "a", "").unwrap();
+        s.create_todo("w", "p/sub", "b", "").unwrap();
+        // 不算：回收站、点开头的文件夹、临时文件、子项目里的文件夹
+        let t = s.create_todo("w", "p", "c", "").unwrap();
+        s.delete_todo("w", "p", &t.id).unwrap();
+        let pdir = s.project_path("w", "p").unwrap();
+        fs::create_dir_all(pdir.join(".assets")).unwrap();
+        fs::write(pdir.join(".assets").join("x.md"), "").unwrap();
+        fs::write(pdir.join(".x.md.tmp"), "").unwrap();
+        fs::create_dir_all(pdir.join("sub").join("深").join("d.md")).unwrap();
+        assert_eq!(count_data(s.root()).unwrap(), (2, 2));
     }
 
     #[test]
