@@ -18,6 +18,10 @@ export interface OpenTodo extends TodoRef {
 export const sameTodo = (a: TodoRef, b: TodoRef) =>
   a.workspace === b.workspace && a.project === b.project && a.todoId === b.todoId;
 
+/** todo 在 list 里的位置；todo 是 null 或不在 list 里时是 -1 */
+export const tabIndex = (list: readonly TodoRef[], todo: TodoRef | null) =>
+  todo ? list.findIndex((t) => sameTodo(t, todo)) : -1;
+
 /**
  * 打开一条待办。已经有标签的不挪位置，keep 时预览标签变成固定的。
  * 没有标签的：preview 时顶替原来的预览标签（在原处），没有预览标签时放在 after（正显示着的那个）后面，找不到 after 时放在最后；
@@ -34,7 +38,7 @@ export function openTab(list: readonly OpenTodo[], todo: TodoRef, keep: boolean,
     const p = list.findIndex((t) => t.preview);
     if (p >= 0) return list.map((t, i) => (i === p ? tab : t));
   }
-  const a = after ? list.findIndex((t) => sameTodo(t, after)) : -1;
+  const a = tabIndex(list, after);
   return a < 0 ? [...list, tab] : [...list.slice(0, a + 1), tab, ...list.slice(a + 1)];
 }
 
@@ -87,9 +91,18 @@ export function activeAfterClose(
  */
 export function stepTab(shown: readonly OpenTodo[], active: TodoRef | null, step: 1 | -1): OpenTodo | null {
   if (!shown.length) return null;
-  const at = active ? shown.findIndex((t) => sameTodo(t, active)) : -1;
+  const at = tabIndex(shown, active);
   if (at < 0) return step > 0 ? shown[0] : shown[shown.length - 1];
   return shown[(at + step + shown.length) % shown.length];
+}
+
+/**
+ * 焦点在右侧时的 Alt+← / Alt+→：shown 里 active 左边（step=-1）/ 右边（step=1）的标签。到头了不从另一头接着（不同于 Ctrl+Tab），
+ * 返回 null，这时 Alt+← 回到左侧列表、Alt+→ 把焦点放进正文；没有正显示着的标签时也返回 null
+ */
+export function neighborTab(shown: readonly OpenTodo[], active: TodoRef | null, step: 1 | -1): OpenTodo | null {
+  const at = tabIndex(shown, active);
+  return at < 0 ? null : (shown[at + step] ?? null);
 }
 
 /**

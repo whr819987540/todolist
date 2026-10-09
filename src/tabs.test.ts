@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { activeAfterClose, closeTabs, mapTabs, moveTab, type OpenTodo, openTab, stepTab, type TodoRef } from "./tabs";
+import { activeAfterClose, closeTabs, mapTabs, moveTab, neighborTab, type OpenTodo, openTab, stepTab, type TodoRef } from "./tabs";
 
 // docs/requirements.md「右侧标签页」：单击打开在预览标签里，再打开别的待办时预览标签被替换（在原处）；修改、双击、新建的是固定标签；
 // 已经有标签的切过去、不挪位置；新开的放在正显示着的右边。关掉正显示着的切到右边的（没有时左边的），都关掉了回到项目。
-// Ctrl+Tab / Ctrl+Shift+Tab 到头了从另一头接着。改名、移动后跟着走，删除后关掉
+// Ctrl+Tab / Ctrl+Shift+Tab 到头了从另一头接着。改名、移动后跟着走，删除后关掉。
+// 「快捷键」的区域切换：焦点在右侧、正显示着一条待办时 Alt+← / Alt+→ 切到左边 / 右边的标签，最左边 / 最右边的标签上不切换
+// （Alt+← 回到左侧列表，Alt+→ 把焦点放进正文）
 
 const todo = (id: string, project = "需求", workspace = "工作"): TodoRef => ({ workspace, project, todoId: id });
 const fixed = (id: string, project?: string, workspace?: string): OpenTodo => ({ ...todo(id, project, workspace), preview: false });
@@ -116,6 +118,29 @@ describe("Ctrl+Tab / Ctrl+Shift+Tab", () => {
 
   it("没有标签时什么都不做", () => {
     expect(stepTab([], null, 1)).toBeNull();
+  });
+});
+
+describe("焦点在右侧时的 Alt+← / Alt+→", () => {
+  const shown = [fixed("a"), fixed("b"), fixed("c")];
+
+  it("切到左边 / 右边的标签", () => {
+    expect(neighborTab(shown, todo("b"), -1)?.todoId).toBe("a");
+    expect(neighborTab(shown, todo("b"), 1)?.todoId).toBe("c");
+  });
+
+  it("到头了不从另一头接着（不同于 Ctrl+Tab）：最左边的标签上没有左边的，最右边的标签上没有右边的", () => {
+    expect(neighborTab(shown, todo("a"), -1)).toBeNull();
+    expect(neighborTab(shown, todo("c"), 1)).toBeNull();
+    expect(neighborTab([fixed("a")], todo("a"), -1)).toBeNull();
+    expect(neighborTab([fixed("a")], todo("a"), 1)).toBeNull();
+  });
+
+  it("没有正显示着的标签（显示概览）时：不切标签", () => {
+    expect(neighborTab(shown, null, -1)).toBeNull();
+    expect(neighborTab(shown, null, 1)).toBeNull();
+    expect(neighborTab(shown, todo("x"), 1)).toBeNull();
+    expect(neighborTab([], null, 1)).toBeNull();
   });
 });
 

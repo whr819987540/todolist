@@ -7,7 +7,7 @@ import { useContentSearch } from "../search";
 import { type How, visit } from "../navHistory";
 import { useSettings } from "../settings";
 import { eventShortcut, isRefreshShortcut, sameShortcut } from "../shortcuts";
-import { activeAfterClose, sameTodo, stepTab, type TodoRef } from "../tabs";
+import { activeAfterClose, neighborTab, sameTodo, stepTab, tabIndex, type TodoRef } from "../tabs";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { compareName, useLocalState } from "../utils";
 import {
@@ -630,13 +630,13 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
         e.preventDefault();
         const { shownTabs, activeTodo, activateTab, closeTabs } = tabsRef.current;
-        const at = activeTodo ? shownTabs.findIndex((t) => sameTodo(t, activeTodo)) : -1;
+        const at = tabIndex(shownTabs, activeTodo);
         if (region.current === "main" && at >= 0 && pickedItems.length < 2 && e.key !== "ArrowDown") {
           if (e.key === "ArrowUp") {
             if (!e.repeat) closeTabs([shownTabs[at]]);
             return;
           }
-          const next = shownTabs[at + (e.key === "ArrowRight" ? 1 : -1)];
+          const next = neighborTab(shownTabs, activeTodo, e.key === "ArrowRight" ? 1 : -1);
           if (next) {
             activateTab(next);
             return;
