@@ -10,7 +10,7 @@ import {
 } from "@ant-design/icons";
 import { Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "antd";
 import { useState } from "react";
-import { deepTodos, isSubProject, leafName, parentOf, subProjectsOf } from "../projects";
+import { deepTodos, isSubProject, leafName, parentOf, subProjectsOf, topProjects } from "../projects";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime, sortTodos, useNow } from "../utils";
 import { type DragMove, isDraggingProject, isDraggingTodo, reorderMark } from "./DragMove";
@@ -84,7 +84,7 @@ export function WorkspaceOverview({
 }) {
   const all = tree.projects.flatMap((p) => p.todos);
   const done = all.filter((t) => t.done).length;
-  const tops = tree.projects.filter((p) => !isSubProject(p.name));
+  const tops = topProjects(tree.projects);
 
   return (
     <section className="overview">

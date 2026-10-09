@@ -72,6 +72,12 @@ export default async function (t) {
     sub: row("工作", "需求/前端").querySelector(".row-count").textContent }`);
   check("父项目行上的未完成数包括子项目里的", counts.parent === "5" && counts.sub === "1", counts);
 
+  // 侧栏里删除工作区的确认：项目数同首页的卡片，只算顶层项目（需求、日常），待办数包括子项目里的（4 + 1 + 1）
+  await menu(["工作"], "删除工作区");
+  const wsConfirm = await m.ev(`return (await waitFor(() => document.querySelector(".ant-modal-confirm-content")))?.textContent ?? ""`);
+  await m.ev(`button("取消", document.querySelector(".ant-modal-confirm-btns")).click(); await sleep(400); return 1`);
+  check("侧栏里删除工作区的确认：项目数只算顶层项目，待办数包括子项目里的", wsConfirm.includes("其中的 2 个项目、6 条待办"), wsConfirm);
+
   // 父项目的概览
   await m.ev(`row("工作", "需求").click(); await sleep(600); return 1`);
   const overview = await m.ev(`return {

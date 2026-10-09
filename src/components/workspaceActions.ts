@@ -2,7 +2,16 @@ import { App as AntApp } from "antd";
 import { useEffect, useMemo, useRef } from "react";
 import { api, errMsg } from "../api";
 import type { How } from "../navHistory";
-import { deepTodos, inProject, isSubProject, leafName, projectLabel, reparent, subProjectsOf } from "../projects";
+import {
+  deepTodos,
+  inProject,
+  isSubProject,
+  leafName,
+  projectLabel,
+  reparent,
+  subProjectsOf,
+  topProjects,
+} from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
@@ -205,10 +214,12 @@ export function useWorkspaceActions(ctx: ActionContext) {
           },
         }),
       deleteWorkspace: () => {
-        const count = tree?.projects.reduce((n, p) => n + p.todos.length, 0) ?? 0;
+        // 同首页的卡片：项目数只算顶层项目（子项目不另算），待办数包括子项目里的
+        const projects = tree?.projects ?? [];
+        const count = projects.reduce((n, p) => n + p.todos.length, 0);
         confirmDelete(
           `删除工作区「${ws}」？`,
-          `其中的 ${tree?.projects.length ?? 0} 个项目、${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
+          `其中的 ${topProjects(projects).length} 个项目、${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
             if (inSel) await saveFirst("删除");
             const rid = await api.deleteWorkspace(ws);
