@@ -17,6 +17,7 @@ import {
   shortProjectLabel,
   sortProjects,
   subProjectsOf,
+  topProjects,
 } from "./projects";
 import type { ProjectNode, TodoSummary } from "./types";
 
@@ -100,6 +101,12 @@ describe("子项目", () => {
     const ps = [project("需求", todo("a")), project("需求/前端", todo("b"), todo("c")), project("需求二", todo("d"))];
     expect(deepTodos(ps, "需求").map((t) => t.id)).toEqual(["a", "b", "c"]);
     expect(deepTodos(ps, "需求/前端").map((t) => t.id)).toEqual(["b", "c"]);
+  });
+
+  it("工作区的项目数只算顶层项目（各级子项目都不另算）", () => {
+    expect(topProjects(list).map((p) => p.name)).toEqual(["需求", "日常"]);
+    const deep = [...list, project("需求/前端/组件"), project("需求/前端/组件/按钮"), project("需求二")];
+    expect(topProjects(deep).map((p) => p.name)).toEqual(["需求", "日常", "需求二"]);
   });
 });
 

@@ -61,6 +61,10 @@ export const subProjectsOf = <T extends { name: string }>(projects: readonly T[]
 export const descendantsOf = <T extends { name: string }>(projects: readonly T[], project: string): T[] =>
   projects.filter((p) => p.name.startsWith(project + PROJECT_SEP));
 
+/** 顶层项目（不含子项目）：首页、工作区概览、删除工作区的确认里的项目数只算这些 */
+export const topProjects = <T extends { name: string }>(projects: readonly T[]): T[] =>
+  projects.filter((p) => !isSubProject(p.name));
+
 /** 项目连同各级子项目的全部待办 */
 export const deepTodos = (projects: readonly ProjectNode[], project: string): TodoSummary[] =>
   projects.filter((p) => inProject(p.name, project)).flatMap((p) => p.todos);

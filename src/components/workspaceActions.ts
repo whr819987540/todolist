@@ -13,6 +13,7 @@ import {
   reparent,
   shortPlaceLabel,
   shortProjectLabel,
+  topProjects,
 } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
@@ -223,10 +224,12 @@ export function useWorkspaceActions(ctx: ActionContext) {
           },
         }),
       deleteWorkspace: () => {
-        const count = tree?.projects.reduce((n, p) => n + p.todos.length, 0) ?? 0;
+        // 同首页的卡片：项目数只算顶层项目（各级子项目不另算），待办数包括各级子项目里的
+        const projects = tree?.projects ?? [];
+        const count = projects.reduce((n, p) => n + p.todos.length, 0);
         confirmDelete(
           `删除工作区「${ws}」？`,
-          `其中的 ${tree?.projects.length ?? 0} 个项目、${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
+          `其中的 ${topProjects(projects).length} 个项目、${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
             await saveFirst("删除", (t) => t.workspace === ws);
             const rid = await api.deleteWorkspace(ws);

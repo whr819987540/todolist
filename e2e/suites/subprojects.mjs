@@ -121,6 +121,17 @@ export default async function (t) {
     { deepTodo, deepCounts },
   );
 
+  // 侧栏里删除工作区的确认：项目数同首页的卡片，只算顶层项目（需求、日常；前端、组件、按钮这几级子项目不另算），
+  // 待办数包括各级子项目里的（需求 4 + 前端 1 + 按钮 1 + 日常 1）
+  await menu(["工作"], "删除工作区");
+  const wsConfirm = await m.ev(`return (await waitFor(() => document.querySelector(".ant-modal-confirm-content")))?.textContent ?? ""`);
+  await m.ev(`button("取消", document.querySelector(".ant-modal-confirm-btns")).click(); await sleep(400); return 1`);
+  check(
+    "侧栏里删除工作区的确认：项目数只算顶层项目，待办数包括各级子项目里的",
+    wsConfirm.includes("其中的 2 个项目、7 条待办"),
+    wsConfirm,
+  );
+
   // 编辑区上方的路径每一级都能点
   await m.ev(`row("工作", "需求/前端/组件/按钮", ${JSON.stringify(deepTodo)}).click();
     await waitFor(() => document.querySelector(".editor-title")?.value === "深处的待办"); await sleep(300); return 1`);
