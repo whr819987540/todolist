@@ -31,6 +31,7 @@ const SUITES = [
   "lists",
   "split",
   "conflict",
+  "watch",
   "regress",
 ];
 

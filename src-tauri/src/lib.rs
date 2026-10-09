@@ -2,6 +2,7 @@ mod autostart;
 mod backup;
 mod settings;
 mod store;
+mod watch;
 mod webdav;
 
 use backup::RemoteBackup;
@@ -27,6 +28,7 @@ use tauri::{
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
+use watch::DataChanged;
 use webdav::{WebDav, WebDavConfig, WebDavInfo, WebDavStore};
 
 type Cmd<T> = Result<T, String>;
@@ -615,7 +617,7 @@ fn with_window_state(text: Option<&str>, label: &str, state: serde_json::Value) 
     serde_json::to_string_pretty(&all).ok()
 }
 
-/// 把主窗口从托盘 / 最小化状态调回前台
+/// 把主窗口从托盘 / 最小化状态调回前台；藏在托盘里时数据目录有变化的，这时让它刷新
 fn show_main_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if hidden_at_start().take().is_some() {
@@ -624,7 +626,32 @@ fn show_main_window(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        if let Some(changed) = hidden_changes().take() {
+            let _ = app.emit_to("main", "data-changed", changed);
+        }
     }
+}
+
+// ----- 数据目录在外部变了 -----
+
+/// 主窗口藏在托盘里时数据目录的变化先攒着，显示出来时一起发（show_main_window）
+static HIDDEN_CHANGES: Mutex<Option<DataChanged>> = Mutex::new(None);
+
+fn hidden_changes() -> MutexGuard<'static, Option<DataChanged>> {
+    HIDDEN_CHANGES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 监听到数据目录在外部变了（watch.rs 合并过、去掉了软件自己写的）：让主窗口刷新变了的部分（data-changed 带上变了什么）。
+/// 主窗口藏在托盘里时不白白刷新，攒着等显示出来再发（显示出来获得焦点时本来也会刷新，这样没拿到焦点时也不会漏）。
+/// 快速记录小窗不用通知，每次弹出时自己重新列出项目
+fn on_data_changed(app: &AppHandle, changed: DataChanged) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    // 不能拿着 HIDDEN_CHANGES 的锁问窗口是否可见：要等主线程回话，主线程上的 show_main_window 可能正等着这把锁
+    if w.is_visible().unwrap_or(true) {
+        let _ = app.emit_to("main", "data-changed", changed);
+        return;
+    }
+    hidden_changes().get_or_insert_with(DataChanged::default).merge(changed);
 }
 
 /// 主窗口在前台时藏到托盘，否则（隐藏、最小化、被其他窗口挡住）调到前台
@@ -1102,6 +1129,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let store = Store::new(data_root(app)?)?;
+            let root = store.root().to_path_buf();
             let settings = SettingsStore::load(store.root());
             let settings_hidden = settings.get().autostart_hidden;
             // 注册失败（被其他程序占用）不影响启动，设置界面里会提示
@@ -1110,6 +1138,16 @@ pub fn run() {
             app.manage(store);
             app.manage(settings);
             app.manage(webdav);
+            // 数据目录在外部变了（网盘同步、别的程序保存、在资源管理器里增删改名）时通知主窗口刷新。
+            // 监听建不起来（数据目录在不支持变化通知的网络盘上等）时只在窗口获得焦点、F5 时刷新，不打扰用户
+            let handle = app.handle().clone();
+            match watch::start(&root, move |changed| on_data_changed(&handle, changed)) {
+                // 留着它才一直监听
+                Ok(watcher) => {
+                    app.manage(watcher);
+                }
+                Err(e) => eprintln!("没能监听数据目录 {}，只在窗口获得焦点时刷新：{e}", root.display()),
+            }
             setup_tray(app)?;
             // 启动后过一会儿（不和主窗口抢启动时间）先把快速记录小窗建好，第一次按快捷键时不用等它加载；
             // 软件回收站里放了超过 30 天的移到系统回收站

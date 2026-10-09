@@ -29,12 +29,13 @@ import { webUrl } from "../editor/links";
 import { activeIndex, type OutlineItem } from "../editor/outline";
 import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
-import { useWindowFocus } from "../hooks";
+import { useAppEvent, useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoSummary } from "../types";
 import type { TodoRef } from "../tabs";
 import { formatDuration, fullTime, MY_VERSION, relativeTime, textStats, useNow } from "../utils";
+import { type DataChange, todoTouched } from "../watch";
 import {
   keepUndo,
   readEditorMode,
@@ -319,6 +320,11 @@ export default function TodoEditor(props: Props) {
   useWindowFocus((focused) => {
     if (!focused) savePosition();
     if (session.getState().lead === memberId) session.windowFocus(focused);
+  });
+  // 监听到这条的正文文件（或所在的项目、各级父项目、工作区的文件夹）在外部变了：窗口一直在前台、没切换焦点时也立即核对。
+  // 两边开着同一条待办时同样只由最早打开的那一边去查
+  useAppEvent<DataChange>("data-changed", (c) => {
+    if (session.getState().lead === memberId && todoTouched(c, workspace, project, id)) session.checkDisk();
   });
 
   const zoomBy = (step: number) => {

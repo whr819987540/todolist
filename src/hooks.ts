@@ -28,8 +28,8 @@ export function useWindowFocus(onChange: (focused: boolean) => void) {
 const localEvent = (name: string) => `app-event:${name}`;
 
 /**
- * 收到 Rust 端发给这个窗口的事件时回调，如快速记录存好后的 data-changed（数据变了，要刷新）、
- * open-todo（打开刚记下的待办）；前端自己用 emitAppEvent 发的同名事件也收
+ * 收到 Rust 端发给这个窗口的事件时回调，如 data-changed（数据目录在外部变了，带着变了什么，见 watch.ts；
+ * 快速记录存好后等也发，不带内容）、open-todo（打开刚记下的待办）；前端自己用 emitAppEvent 发的同名事件也收
  */
 export function useAppEvent<T>(name: string, onEvent: (payload: T) => void) {
   const ref = useRef(onEvent);

@@ -28,6 +28,7 @@ import { eventShortcut, isRefreshShortcut } from "../shortcuts";
 import { ThemeButton } from "../theme";
 import type { WorkspaceInfo, WorkspaceTree } from "../types";
 import { avatarColor, compareName, firstChar, relativeTime, useNow } from "../utils";
+import { type DataChange, dataTouched } from "../watch";
 import { forgetWorkspaceState, renameWorkspaceState } from "../workspaceState";
 import Highlight from "./Highlight";
 import Logo from "./Logo";
@@ -74,8 +75,10 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
   useWindowFocus((focused) => {
     if (focused) reload();
   });
-  // 用快速记录记了一条
-  useAppEvent("data-changed", () => reload());
+  // 数据目录在外部变了（只是回收站变了的不算）、用快速记录记了一条
+  useAppEvent<DataChange>("data-changed", (c) => {
+    if (dataTouched(c)) reload();
+  });
 
   // 搜索时才加载各工作区的项目和待办；工作区列表刷新（切回窗口、F5）后跟着重新加载
   useEffect(() => {

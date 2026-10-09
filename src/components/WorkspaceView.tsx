@@ -20,6 +20,7 @@ import {
 } from "../tabs";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { useLocalState } from "../utils";
+import { type DataChange, workspacesTouched } from "../watch";
 import {
   closeTodoTabs,
   collapsedKey,
@@ -308,8 +309,10 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   useWindowFocus((focused) => {
     if (focused) reload();
   });
-  // 用快速记录记了一条
-  useAppEvent("data-changed", () => reload());
+  // 数据目录在外部变了（侧栏里选中的工作区有变化才重新加载，内容没变的部分不重新渲染）、用快速记录记了一条
+  useAppEvent<DataChange>("data-changed", (c) => {
+    if (workspacesTouched(c, workspacesRef.current)) reload();
+  });
   const reloadRef = useRef(reload);
   useEffect(() => {
     reloadRef.current = reload;
