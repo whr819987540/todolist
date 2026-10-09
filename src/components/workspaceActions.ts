@@ -279,21 +279,24 @@ export function useWorkspaceActions(ctx: ActionContext) {
           },
         );
       },
-      moveProject: (project, targetWs) =>
+      moveProject: (project, targetWs, parent) =>
         run(async () => {
           const isSel = showsProject(project);
           if (isSel) await flushEditor();
-          // 移过去后的路径：子项目移到别的工作区后是那里的顶层项目
-          const to = await api.moveProject(ws, project, targetWs);
+          // 移过去后的路径：放进项目后是「父项目/名字」，子项目移出来后是名字
+          const to = await api.moveProject(ws, project, targetWs, parent);
           if (isSel) editorRef.current?.detach();
           moveProjectState(ws, project, targetWs, to);
-          // 折叠状态跟过去；目标工作区展开，看得到移过去的项目
+          // 折叠状态跟过去；展开目标工作区、放进的项目，看得到移过去的项目
           moveCollapsed(ws, project, targetWs, to);
-          expand(targetWs, WS_KEY);
+          reveal(targetWs, to);
           await reload();
           if (isSel && sel.project)
             setSel({ ...sel, workspace: targetWs, project: reparent(sel.project, project, to) }, "replace");
-          message.success(`已移动到工作区「${targetWs}」`);
+          const there = targetWs === ws ? "" : `${targetWs} / `;
+          if (parent !== undefined) message.success(`已放进「${there}${parent}」`);
+          else if (targetWs === ws) message.success("已移出来，放在顶层");
+          else message.success(`已移动到工作区「${targetWs}」`);
         }),
       openProjectFolder: (project) => run(() => api.openFolder(ws, project)),
 

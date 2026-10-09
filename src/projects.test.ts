@@ -5,6 +5,7 @@ import {
   inProject,
   leafName,
   parentOf,
+  projectMoveProblem,
   projectLabel,
   reparent,
   sortProjects,
@@ -75,5 +76,48 @@ describe("子项目", () => {
     const ps = [project("需求", todo("a")), project("需求/前端", todo("b"), todo("c")), project("需求二", todo("d"))];
     expect(deepTodos(ps, "需求").map((t) => t.id)).toEqual(["a", "b", "c"]);
     expect(deepTodos(ps, "需求/前端").map((t) => t.id)).toEqual(["b", "c"]);
+  });
+});
+
+// 「拖动移动项目」「右键项目『移动到』」：项目可以放进别的顶层项目成为子项目，子项目可以移到顶层，都可以跨工作区；
+// 只有一层子项目，有子项目的项目不能放进别的项目；那里已有同名的（不分大小写）不能放
+describe("项目能不能移到那里", () => {
+  const work = [project("需求"), project("需求/前端"), project("日常"), project("杂项"), project("杂项/前端")];
+  const life = [project("购物"), project("购物/日常"), project("旅行")];
+  const problem = (p: string, parent: string | undefined, to = work) =>
+    projectMoveProblem({ project: p, from: work, to, sameWorkspace: to === work, parent })?.code ?? null;
+
+  it("顶层项目放进同一工作区的别的项目，成为子项目", () => {
+    expect(problem("日常", "需求")).toBeNull();
+  });
+
+  it("子项目移到顶层、放进别的项目", () => {
+    expect(problem("需求/前端", undefined, life)).toBeNull();
+    expect(problem("需求/前端", "旅行", life)).toBeNull();
+  });
+
+  it("放进它自己、放进子项目不行", () => {
+    expect(problem("日常", "日常")).toBe("self");
+    expect(problem("日常", "需求/前端")).toBe("nested");
+  });
+
+  it("已经在那里：顶层项目移到自己工作区的顶层、子项目放进它的父项目", () => {
+    expect(problem("日常", undefined)).toBe("here");
+    expect(problem("需求/前端", "需求")).toBe("here");
+  });
+
+  it("有子项目的项目不能放进别的项目，可以移到别的工作区的顶层", () => {
+    expect(problem("需求", "日常")).toBe("hasSubs");
+    expect(problem("需求", "旅行", life)).toBe("hasSubs");
+    expect(problem("需求", undefined, life)).toBeNull();
+  });
+
+  it("那里已有同名的（不分大小写）不能放", () => {
+    expect(problem("需求/前端", "杂项")).toBe("taken");
+    expect(problem("日常", "购物", life)).toBe("taken");
+    expect(problem("杂项/前端", undefined, [project("前端")])).toBe("taken");
+    expect(projectMoveProblem({ project: "abc", from: [project("abc")], to: [project("ABC")], sameWorkspace: false })?.code).toBe(
+      "taken",
+    );
   });
 });

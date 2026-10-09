@@ -1,12 +1,13 @@
 import { FileTextOutlined, FolderFilled } from "@ant-design/icons";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { inProject, isSubProject, leafName, projectLabel } from "../projects";
+import { inProject, parentOf, projectLabel, projectMoveProblem } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { displayTitle } from "../utils";
 import { parseSelKey } from "./sidebar/tree";
 
 // 拖动移动：在左侧列表或概览里按住待办，拖到左侧的另一个项目上（可以是别的工作区的）松开；
-// 按住项目，拖到左侧的另一个工作区上松开。
+// 按住项目，拖到左侧的另一个项目上松开放进去成为子项目（指针在子项目上时是放进它的父项目），拖到工作区那一行
+// （项目以外的地方）上松开移到那个工作区的顶层。
 // 在同一个项目里把待办拖到另一条待办上（左侧列表或项目概览里），放在它的前面 / 后面，调整顺序（手动排序）。
 // 用鼠标事件自己实现，不用 HTML5 拖放：WebView2 里拖放默认被 Tauri 接管（给拖文件进窗口用），
 // 自己做也好控制放下的位置、跟着指针的说明和自动滚动。
@@ -19,13 +20,16 @@ export interface TodoAt {
   todo: TodoSummary;
 }
 
-/** 拖动中的东西：待办拖到别的项目（或同一项目里调整顺序），多选的几条待办一起拖到别的项目，项目拖到别的工作区 */
+/** 拖动中的东西：待办拖到别的项目（或同一项目里调整顺序），多选的几条待办一起拖到别的项目，项目拖到别的项目或工作区 */
 export type DragItem =
   | ({ kind: "todo" } & TodoAt)
   | { kind: "todos"; items: TodoAt[] }
   | { kind: "project"; workspace: string; project: string };
 
-/** 放下的地方：待办放在项目上，项目放在工作区上；调整顺序时是同一项目里另一条待办的前面 / 后面 */
+/**
+ * 放下的地方：待办放在项目上；项目放在顶层项目上（project，成为它的子项目）或工作区上（移到顶层）；
+ * 调整顺序时是同一项目里另一条待办的前面 / 后面
+ */
 export interface DropTarget {
   workspace: string;
   project?: string;
@@ -33,12 +37,12 @@ export interface DropTarget {
   place?: "before" | "after";
 }
 
-/** ok：可以放下；refused：指针下的地方放不下（工作区里已有同名项目）；none：指针不在能放的地方，或者就在原处 */
+/** ok：可以放下；refused：指针下的地方放不下（那里已有同名项目、有子项目的放不进别的项目）；none：指针不在能放的地方，或者就在原处 */
 export type DropStatus = "ok" | "refused" | "none";
 
 export interface DragState {
   item: DragItem;
-  /** 指针下的项目（拖待办时）或工作区（拖项目时） */
+  /** 指针下的项目（拖待办时），或项目、工作区（拖项目时） */
   target: DropTarget | null;
   status: DropStatus;
   /** 跟着指针显示的说明：移到哪里，或者该往哪里拖 */
@@ -117,13 +121,12 @@ function hitTest(x: number, y: number, item: DragItem): { target: DropTarget | n
   const wsEl = el?.closest<HTMLElement>(".sidebar [data-drop-ws]");
   if (!el || !wsEl) return { target: null };
   const workspace = wsEl.dataset.dropWs!;
-  // 项目放在工作区里的哪一行上都算放在这个工作区上
-  if (item.kind === "project") return { target: { workspace } };
+  const collapsed = wsEl.getAttribute("aria-expanded") === "false" ? workspace : undefined;
   const project = el.closest<HTMLElement>("[data-drop-project]")?.dataset.dropProject;
-  return {
-    target: project ? { workspace, project } : null,
-    collapsed: wsEl.getAttribute("aria-expanded") === "false" ? workspace : undefined,
-  };
+  // 项目：在某个项目（连同它的子项目、待办）上是放进这个顶层项目，在工作区那一行等项目以外的地方是移到顶层
+  if (item.kind === "project")
+    return { target: project === undefined ? { workspace } : { workspace, project: parentOf(project) ?? project }, collapsed };
+  return { target: project ? { workspace, project } : null, collapsed };
 }
 
 /** 调整顺序能不能放在 target 那条旁边：已完成的和未完成的、置顶的和没置顶的各排各的 */
@@ -153,15 +156,23 @@ function judge(
 ): { status: DropStatus; hint: string } {
   if (item.kind === "todo" && target?.todoId) return judgeReorder(item.todo, target, trees, canReorder);
   if (item.kind === "project") {
-    if (!target)
-      return { status: "none", hint: trees.length > 1 ? "拖到左侧的其他工作区上" : "要移到其他工作区，先在侧栏顶部选中它" };
-    if (target.workspace === item.workspace) return { status: "none", hint: "已在这个工作区里" };
-    // 项目是文件夹，Windows 上名字不区分大小写；子项目移过去后是顶层项目，和那里的顶层项目比
-    const name = leafName(item.project).toLowerCase();
-    const there = trees.find((t) => t.name === target.workspace)?.projects ?? [];
-    if (there.some((p) => !isSubProject(p.name) && p.name.toLowerCase() === name))
-      return { status: "refused", hint: `「${target.workspace}」里已有同名项目` };
-    return { status: "ok", hint: `移动到工作区「${target.workspace}」` };
+    if (!target) return { status: "none", hint: "拖到别的项目上放进去成为子项目，或拖到工作区那一行上移到顶层" };
+    const same = target.workspace === item.workspace;
+    const problem = projectMoveProblem({
+      project: item.project,
+      from: trees.find((t) => t.name === item.workspace)?.projects ?? [],
+      to: trees.find((t) => t.name === target.workspace)?.projects ?? [],
+      sameWorkspace: same,
+      parent: target.project,
+    });
+    // 那里已有同名的、有子项目的放不进别的项目：标红；已经在那里、放进自己：不算能放的地方
+    if (problem)
+      return {
+        status: problem.code === "taken" || problem.code === "hasSubs" ? "refused" : "none",
+        hint: problem.code === "taken" && !target.project ? `「${target.workspace}」里已有同名项目` : problem.reason,
+      };
+    if (target.project) return { status: "ok", hint: `放进「${same ? "" : `${target.workspace} / `}${target.project}」，成为子项目` };
+    return { status: "ok", hint: same ? "移出来，放在顶层" : `移动到工作区「${target.workspace}」` };
   }
   if (item.kind === "todos") {
     if (!target?.project) return { status: "none", hint: "拖到左侧的项目上" };

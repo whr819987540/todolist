@@ -27,7 +27,7 @@ function latest(todos: TodoSummary[]): number {
  * 项目卡片（工作区概览里的顶层项目、父项目概览里的子项目）：点击进入，右键是项目的菜单，可以拖到左侧。
  * 完成进度和数目包括子项目里的待办
  */
-function ProjectCard({ workspace, projects, name, actions: a, drag }: {
+function ProjectCard({ workspace, projects, name, actions: a, drag, moveTargets }: {
   workspace: string;
   /** 这个工作区的全部项目 */
   projects: readonly ProjectNode[];
@@ -35,6 +35,8 @@ function ProjectCard({ workspace, projects, name, actions: a, drag }: {
   name: string;
   actions: Actions;
   drag: DragMove;
+  /** 右键「移动到」列出的地方（第一组是这个工作区的） */
+  moveTargets: MoveTarget[];
 }) {
   const now = useNow();
   const todos = deepTodos(projects, name);
@@ -42,7 +44,7 @@ function ProjectCard({ workspace, projects, name, actions: a, drag }: {
   const last = latest(todos);
   const subs = isSubProject(name) ? 0 : subProjectsOf(projects, name).length;
   return (
-    <Dropdown menu={projectMenu(a, name)} trigger={["contextMenu"]}>
+    <Dropdown menu={projectMenu(a, name, moveTargets)} trigger={["contextMenu"]}>
       <div
         className={`card project-card${isDraggingProject(drag.state, workspace, name) ? " drag-source" : ""}`}
         onMouseDown={(e) => drag.start(e, { kind: "project", workspace, project: name })}
@@ -67,8 +69,19 @@ function ProjectCard({ workspace, projects, name, actions: a, drag }: {
   );
 }
 
-/** 未选中项目时右侧显示的工作区概览：顶层项目的卡片（数目包括子项目里的），可以拖到左侧的其他工作区上 */
-export function WorkspaceOverview({ tree, actions: a, drag }: { tree: WorkspaceTree; actions: Actions; drag: DragMove }) {
+/** 未选中项目时右侧显示的工作区概览：顶层项目的卡片（数目包括子项目里的），可以拖到左侧的项目、工作区上 */
+export function WorkspaceOverview({
+  tree,
+  actions: a,
+  drag,
+  moveTargets,
+}: {
+  tree: WorkspaceTree;
+  actions: Actions;
+  drag: DragMove;
+  /** 右键项目「移动到」列出的地方（第一组是这个工作区的） */
+  moveTargets: MoveTarget[];
+}) {
   const all = tree.projects.flatMap((p) => p.todos);
   const done = all.filter((t) => t.done).length;
   const tops = tree.projects.filter((p) => !isSubProject(p.name));
@@ -121,6 +134,7 @@ export function WorkspaceOverview({ tree, actions: a, drag }: { tree: WorkspaceT
               name={p.name}
               actions={a}
               drag={drag}
+              moveTargets={moveTargets}
             />
           ))}
           <div className="card card-add" onClick={a.newProject}>
@@ -245,7 +259,7 @@ export function ProjectOverview(p: {
           <Button icon={<FolderOpenOutlined />} onClick={() => a.openProjectFolder(project.name)}>
             打开文件夹
           </Button>
-          <Dropdown menu={projectMenu(a, project.name)} trigger={["click"]} placement="bottomRight">
+          <Dropdown menu={projectMenu(a, project.name, p.moveTargets)} trigger={["click"]} placement="bottomRight">
             <Button icon={<MoreOutlined />} />
           </Dropdown>
         </div>
@@ -282,6 +296,7 @@ export function ProjectOverview(p: {
                 name={s.name}
                 actions={a}
                 drag={p.drag}
+                moveTargets={p.moveTargets}
               />
             ))}
             <div className="card card-add" onClick={() => a.newSubProject(project.name)}>

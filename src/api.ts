@@ -43,9 +43,12 @@ export const api = {
   /** 放进软件的回收站（连同子项目），返回回收站里这一项的 id */
   deleteProject: (workspace: string, name: string) =>
     invoke<string>("delete_project", { workspace, name }),
-  /** 连同其中的待办（和子项目）移到另一个工作区的顶层，名字不变；返回移过去后的路径 */
-  moveProject: (workspace: string, name: string, targetWorkspace: string) =>
-    invoke<string>("move_project", { workspace, name, targetWorkspace }),
+  /**
+   * 连同其中的待办（和子项目）移到工作区 targetWorkspace 的顶层，或放进那里的顶层项目 targetParent 成为子项目；
+   * 名字不变，返回移过去后的路径
+   */
+  moveProject: (workspace: string, name: string, targetWorkspace: string, targetParent?: string) =>
+    invoke<string>("move_project", { workspace, name, targetWorkspace, targetParent: targetParent ?? null }),
 
   /** content 是正文，不传时新建空白待办；带正文时正文和待办在同一次调用里建好 */
   createTodo: (workspace: string, project: string, title: string, content?: string) =>

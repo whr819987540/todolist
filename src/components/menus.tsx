@@ -14,7 +14,7 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import { isSubProject, projectLabel } from "../projects";
+import { isSubProject, parentOf, projectLabel, projectMoveProblem } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import type { BatchActions } from "./workspaceActions";
@@ -35,8 +35,8 @@ export interface Actions {
   newSubProject(parent: string): void;
   renameProject(project: string): void;
   deleteProject(project: string): void;
-  /** 连同其中的待办移到另一个工作区 */
-  moveProject(project: string, targetWorkspace: string): void;
+  /** 连同其中的待办（和子项目）移到工作区 targetWorkspace 的顶层，或放进那里的顶层项目 targetParent 成为子项目 */
+  moveProject(project: string, targetWorkspace: string, targetParent?: string): void;
   openProjectFolder(project: string): void;
 
   /** open=true 时创建后立即打开并聚焦标题；返回是否创建成功（失败时已弹出提示） */
@@ -85,19 +85,32 @@ export function workspaceMenu(a: Actions): MenuProps {
   };
 }
 
-export function projectMenu(a: Actions, project: string): MenuProps {
+/** targets：「移动到」列出的地方（moveTargets，第一组是项目所在的工作区） */
+export function projectMenu(a: Actions, project: string, targets: readonly MoveTarget[]): MenuProps {
+  const move = projectMoveItems(project, targets);
   return {
     items: [
       { key: "new-todo", icon: <PlusOutlined />, label: "新建待办" },
       // 只有一层子项目：子项目里不能再建
       ...(isSubProject(project) ? [] : [{ key: "new-sub", icon: <FolderAddOutlined />, label: "新建子项目" }]),
       { key: "rename", icon: <EditOutlined />, label: "重命名" },
+      {
+        key: "move",
+        icon: <SwapOutlined />,
+        label: "移动到",
+        disabled: move.length === 0,
+        children: move.length ? move : undefined,
+        popupClassName: "move-menu",
+      },
       { key: "folder", icon: <FolderOpenOutlined />, label: "在资源管理器中打开" },
       { type: "divider" },
       { key: "delete", icon: <DeleteOutlined />, label: "删除项目", danger: true },
     ],
     onClick: handler((key) => {
-      if (key === "new-todo") a.newTodo(project, "", true);
+      if (key.startsWith(PROJECT_MOVE_PREFIX)) {
+        const [workspace, parent] = JSON.parse(key.slice(PROJECT_MOVE_PREFIX.length)) as [string, string];
+        a.moveProject(project, workspace, parent || undefined);
+      } else if (key === "new-todo") a.newTodo(project, "", true);
       else if (key === "new-sub") a.newSubProject(project);
       else if (key === "rename") a.renameProject(project);
       else if (key === "folder") a.openProjectFolder(project);
@@ -138,6 +151,47 @@ function moveItems(project: string, targets: readonly MoveTarget[]): NonNullable
   const groups = [
     { workspace: own?.workspace, label: own && `${own.workspace}（当前）`, children: ownItems },
     ...others.map((t) => ({ workspace: t.workspace, label: t.workspace, children: t.projects.map((p) => item(t.workspace, p)) })),
+  ];
+  return groups
+    .filter((g) => g.children.length)
+    .map((g) => ({ type: "group" as const, key: `group:${g.workspace}`, label: g.label, children: g.children }));
+}
+
+const PROJECT_MOVE_PREFIX = "move-project:";
+
+/**
+ * 项目的「移动到」的子菜单：放进别的顶层项目成为子项目，或移到工作区的顶层（子项目移出来、移到别的工作区）。
+ * 只显示一个工作区时直接列出；同时显示了几个工作区时按工作区分组（所在的工作区排第一，标上「当前」）。
+ * 已经在那里的、放不进去的（它自己、子项目里，有子项目的项目放进别的项目）不列；那里已有同名的列出来但不能点
+ */
+function projectMoveItems(project: string, targets: readonly MoveTarget[]): NonNullable<MenuProps["items"]> {
+  const [own, ...others] = targets;
+  if (!own) return [];
+  const from = own.projects.map((name) => ({ name }));
+  const parentNow = parentOf(project);
+  const choices = (t: MoveTarget) => {
+    const to = t.projects.map((name) => ({ name }));
+    const places = [undefined, ...t.projects.filter((p) => !isSubProject(p))];
+    return places.flatMap((parent) => {
+      const problem = projectMoveProblem({ project, from, to, sameWorkspace: t === own, parent });
+      if (problem && problem.code !== "taken") return [];
+      const top = t === own && parentNow !== undefined ? `顶层（移出「${parentNow}」）` : "顶层";
+      const label = parent === undefined ? top : parent;
+      return [
+        {
+          key: PROJECT_MOVE_PREFIX + JSON.stringify([t.workspace, parent ?? ""]),
+          icon: <FolderOutlined />,
+          label: problem ? `${label}（已有同名的）` : label,
+          disabled: !!problem,
+        },
+      ];
+    });
+  };
+  const ownItems = choices(own);
+  if (!others.length) return ownItems;
+  const groups = [
+    { workspace: own.workspace, label: `${own.workspace}（当前）`, children: ownItems },
+    ...others.map((t) => ({ workspace: t.workspace, label: t.workspace, children: choices(t) })),
   ];
   return groups
     .filter((g) => g.children.length)

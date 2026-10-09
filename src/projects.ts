@@ -35,6 +35,39 @@ export const subProjectsOf = <T extends { name: string }>(projects: readonly T[]
 export const deepTodos = (projects: readonly ProjectNode[], project: string): TodoSummary[] =>
   projects.filter((p) => inProject(p.name, project)).flatMap((p) => p.todos);
 
+/**
+ * 项目为什么不能移到那里：self 放进它自己，nested 放进子项目（只有一层），here 已经在那里，
+ * hasSubs 有子项目的不能放进别的项目，taken 那里已有同名的（不分大小写，项目是文件夹）
+ */
+export interface MoveProblem {
+  code: "self" | "nested" | "here" | "hasSubs" | "taken";
+  reason: string;
+}
+
+/**
+ * 项目 project 能不能移到目标工作区的顶层（parent 为 undefined），或放进那里的顶层项目 parent 成为子项目；
+ * 可以时返回 null。from 是它所在工作区的全部项目，to 是目标工作区的全部项目（同一个工作区时一样）
+ */
+export function projectMoveProblem(o: {
+  project: string;
+  from: readonly { name: string }[];
+  to: readonly { name: string }[];
+  sameWorkspace: boolean;
+  parent?: string;
+}): MoveProblem | null {
+  const { project, parent, sameWorkspace } = o;
+  if (parent !== undefined && isSubProject(parent)) return { code: "nested", reason: "子项目里不能再放项目" };
+  if (sameWorkspace && parent === project) return { code: "self", reason: "不能放进它自己里面" };
+  if (sameWorkspace && parentOf(project) === parent)
+    return { code: "here", reason: parent === undefined ? "已在这个工作区的顶层" : "已在这个项目里" };
+  if (parent !== undefined && o.from.some((p) => parentOf(p.name) === project))
+    return { code: "hasSubs", reason: `「${leafName(project)}」里有子项目，不能放进别的项目（子项目里不能再有子项目）` };
+  const name = leafName(project).toLowerCase();
+  const taken = o.to.some((p) => parentOf(p.name) === parent && leafName(p.name).toLowerCase() === name);
+  if (taken) return { code: "taken", reason: parent === undefined ? "那里已有同名项目" : `「${parent}」里已有同名子项目` };
+  return null;
+}
+
 /** 顶层项目按名字排，每个后面跟着它的子项目（也按名字排） */
 export function sortProjects<T extends { name: string }>(projects: readonly T[]): T[] {
   const top = (p: T) => parentOf(p.name) ?? p.name;

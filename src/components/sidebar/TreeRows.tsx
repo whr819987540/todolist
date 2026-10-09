@@ -9,7 +9,7 @@ import {
 } from "@ant-design/icons";
 import { Dropdown, Tooltip, type MenuProps } from "antd";
 import type { OpenMenu } from "./RowPopups";
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { deepTodos, inProject, isSubProject, leafName, projectLabel, subProjectsOf } from "../../projects";
 import { hitKey, searchSnippet } from "../../search";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../../types";
@@ -167,7 +167,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
           </span>
           <span className="row-actions">
             <RowButton title="新建项目" icon={<PlusOutlined />} onClick={a.newProject} />
-            <RowMore menu={workspaceMenu(a)} />
+            <RowMore menu={() => workspaceMenu(a)} />
           </span>
         </div>
       </Dropdown>
@@ -269,6 +269,8 @@ const ProjectBranch = memo(function ProjectBranch(p: {
   const toggle = () => p.onToggle(name);
   const indent = p.depth * SUB_INDENT;
   const hasSubs = item.subs.length > 0;
+  // 右键、「…」的菜单打开时才算：「移动到」要列出侧栏里各工作区的项目
+  const projectMenuOf = () => projectMenu(a, name, p.moveTargets(p.workspace));
 
   return (
     <div
@@ -281,7 +283,7 @@ const ProjectBranch = memo(function ProjectBranch(p: {
           .join(" ") || undefined
       }
     >
-      <Dropdown menu={projectMenu(a, name)} trigger={["contextMenu"]}>
+      <LazyDropdown menu={projectMenuOf} trigger={["contextMenu"]}>
         <div
           className={`tree-row project-row${selected ? " selected" : ""}`}
           data-sel={selKey({ workspace: p.workspace, project: name })}
@@ -306,10 +308,10 @@ const ProjectBranch = memo(function ProjectBranch(p: {
           </span>
           <span className="row-actions">
             <RowButton title="新建待办" icon={<PlusOutlined />} onClick={() => a.newTodo(name, "", true)} />
-            <RowMore menu={projectMenu(a, name)} />
+            <RowMore menu={projectMenuOf} />
           </span>
         </div>
-      </Dropdown>
+      </LazyDropdown>
 
       {open && hasSubs && (
         <div role="group">
@@ -508,9 +510,31 @@ function RowButton({ title, icon, onClick }: { title: string; icon: React.ReactN
   );
 }
 
-function RowMore({ menu }: { menu: MenuProps }) {
+const NO_MENU: MenuProps = { items: [] };
+
+/** 下拉菜单打开时才算菜单（menu 每次打开时调用），行很多时不必每次渲染都算 */
+function LazyDropdown({
+  menu,
+  trigger,
+  placement,
+  children,
+}: {
+  menu: () => MenuProps;
+  trigger: ("click" | "contextMenu")[];
+  placement?: "bottomRight";
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
   return (
-    <Dropdown menu={menu} trigger={["click"]} placement="bottomRight">
+    <Dropdown open={open} onOpenChange={setOpen} menu={open ? menu() : NO_MENU} trigger={trigger} placement={placement}>
+      {children}
+    </Dropdown>
+  );
+}
+
+function RowMore({ menu }: { menu: () => MenuProps }) {
+  return (
+    <LazyDropdown menu={menu} trigger={["click"]} placement="bottomRight">
       <span
         className="row-btn"
         onClick={(e) => e.stopPropagation()}
@@ -518,6 +542,6 @@ function RowMore({ menu }: { menu: MenuProps }) {
       >
         <MoreOutlined />
       </span>
-    </Dropdown>
+    </LazyDropdown>
   );
 }

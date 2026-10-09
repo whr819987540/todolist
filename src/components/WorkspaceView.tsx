@@ -507,7 +507,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         return;
       }
       const a = actionsFor(item.workspace);
-      if (item.kind === "project") a.moveProject(item.project, target.workspace);
+      if (item.kind === "project") a.moveProject(item.project, target.workspace, target.project);
       else if (target.todoId && target.place) a.reorderTodo(item.project, item.todo.id, target.todoId, target.place);
       else if (target.project) a.moveTodo(item.project, item.todo, target.project, target.workspace);
     },
@@ -795,7 +795,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       />
     );
   } else {
-    main = <WorkspaceOverview tree={selTree} actions={a} drag={drag} />;
+    main = <WorkspaceOverview tree={selTree} actions={a} drag={drag} moveTargets={moveTargets(trees, selTree.name)} />;
   }
 
   return (
