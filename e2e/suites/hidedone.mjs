@@ -1,4 +1,5 @@
-// 隐藏全部完成的项目：侧栏「隐藏已完成」里的第二个选项；空项目不算，右侧正在显示的不藏，搜索时不藏，只影响侧栏
+// 隐藏全部完成的项目：侧栏「隐藏已完成」里的第二个选项；空项目不算，右侧正在显示的不藏、切走 1 秒后才藏（在它下面双击时
+// 第二下不落到别的行上），搜索时不藏，只影响侧栏
 export const title = "隐藏全部完成的项目";
 
 export default async function (t) {
@@ -50,21 +51,60 @@ export default async function (t) {
     await m.ev(`return JSON.parse(localStorage.getItem("listOptions:工作")).hideDoneProjects === true`),
   );
 
-  // 右侧正在显示的项目照常显示，切走后才藏
-  await m.click(await m.at(`.editor-tab[data-tab='${JSON.stringify(["工作", "日常", "D"])}'] .editor-tab-label`));
+  // 右侧正在显示的项目照常显示；切走后再显示 1 秒才藏起来：在它下面的项目里双击时，第一下点击后下面的行不移到鼠标底下
   const viaTab = () =>
     m.ev(`return { project: !!row("工作", "日常"), todo: !!row("工作", "日常", "D"), title: document.querySelector(".editor-title")?.value }`);
-  const opened = await t.until(async () => {
-    const v = await viaTab();
-    return v.title === "D" && v.project && v.todo;
-  });
-  check("经标签打开全部完成的项目里的待办：项目照常显示", opened, await viaTab());
-  await m.ev(`row("工作", "需求", "A").click(); await sleep(400); return 1`);
-  check("切到别处后藏起来", !(await visible("日常")));
+  /** 点标签打开「日常」里的 D，等它显示出来 */
+  const openD = async () => {
+    await m.click(await m.at(`.editor-tab[data-tab='${JSON.stringify(["工作", "日常", "D"])}'] .editor-tab-label`));
+    return t.until(async () => {
+      const v = await viaTab();
+      return v.title === "D" && v.project && v.todo;
+    });
+  };
+  /** 双击：两下中间不停（像真的双击一样快），第一下点击引起的变化已经画出来了，第二下按在那时指针底下的行上 */
+  const dblclick = async (p) => {
+    await m.mouse("mouseMoved", p);
+    for (const clickCount of [1, 2]) {
+      await m.mouse("mousePressed", p, { button: "left", buttons: 1, clickCount });
+      await m.mouse("mouseReleased", p, { button: "left", buttons: 0, clickCount });
+    }
+  };
+  /** 标签栏的样子：A 是固定的标签，(A) 是预览的，* 是正显示着的 */
+  const tabs = () =>
+    m.ev(`return [...document.querySelectorAll(".editor-tab")].map((e) => {
+      const id = JSON.parse(e.dataset.tab)[2];
+      return (e.classList.contains("preview") ? "(" + id + ")" : id) + (e.classList.contains("active") ? "*" : "");
+    }).join(" ")`);
+  const hiddenSoon = () => t.until(async () => !(await visible("日常")), 3000);
+
+  check("经标签打开全部完成的项目里的待办：项目照常显示", await openD(), await viaTab());
+  // 「日常」在「需求」上面：双击「需求」里的 B，「日常」要是第一下就藏起来，第二下会落到 B 下面的行上，打开、固定的是那一条
+  await dblclick(await m.at(["工作", "需求", "B"]));
+  const justLeft = await visible("日常");
+  const pinned = await t.until(
+    async () => (await tabs()).split(" ").includes("B*") && (await m.ev(`return document.querySelector(".editor-title")?.value`)) === "B",
+  );
+  check("看着全部完成的项目里的待办时，双击它下面项目里的待办：打开并固定的是双击的那条", pinned, await tabs());
+  check("刚切走时它还显示着", justLeft);
+  check("切走 1 秒后藏起来", await hiddenSoon());
+
+  // 双击它下面的项目：折叠的是双击的那个
+  await openD();
+  await dblclick(await m.at(["工作", "需求"]));
+  const fold = () =>
+    m.ev(`const r = row("工作", "需求");
+      return { expanded: r?.closest("[role=treeitem]")?.getAttribute("aria-expanded"), selected: !!r?.classList.contains("selected"), daily: !!row("工作", "日常") }`);
+  const folded = await fold();
+  check("看着全部完成的项目时，双击它下面的项目：折叠的是双击的那个", folded.expanded === "false" && folded.selected && folded.daily, folded);
+  await m.expandAll();
+  check("切到项目概览 1 秒后也藏起来", await hiddenSoon());
+
   await m.ev(`row("工作").click(); await sleep(400);
     [...document.querySelectorAll(".overview .card")].find((c) => c.textContent.includes("日常")).click(); await sleep(400); return 1`);
   check("工作区概览里照常列出；点进去看项目概览时侧栏照常显示", await visible("日常"));
-  await m.ev(`row("工作", "需求").click(); await sleep(400); return 1`);
+  await m.ev(`row("工作", "需求").click(); return 1`);
+  await hiddenSoon();
 
   // 搜索时不藏
   await m.press("Ctrl+Shift+F");

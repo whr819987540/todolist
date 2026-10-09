@@ -41,6 +41,8 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   hideDone: boolean;
   /** 隐藏全部完成的项目（右侧正在显示的那个除外，搜索时不隐藏） */
   hideDoneProjects: boolean;
+  /** 这个工作区里刚切走、还要再显示一会儿的全部完成的项目（见 lingering.ts） */
+  lingering: ReadonlySet<string>;
   /** 点「显示」：这个工作区不再隐藏全部完成的项目；是不变的函数 */
   onShowDoneProjects: (workspace: string) => void;
   sortKey: SortKey;
@@ -56,18 +58,19 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   onTodoClick: TodoClick;
   pickedMenu: () => MenuProps | null;
 }) {
-  const { tree, sel, actions: a, collapsed, keyword: kw, hits, hideDone, hideDoneProjects, sortKey, setCollapsed } = p;
+  const { tree, sel, actions: a, collapsed, keyword: kw, hits, hideDone, hideDoneProjects, lingering, sortKey, setCollapsed } =
+    p;
 
   // 隐藏全部完成的项目时藏起来的项目
   const selProject = sel?.project;
   const hidden = useMemo(
-    () => hiddenDoneProjects(tree.projects, { hide: hideDoneProjects, keyword: kw, selProject }),
-    [tree.projects, hideDoneProjects, kw, selProject],
+    () => hiddenDoneProjects(tree.projects, { hide: hideDoneProjects, keyword: kw, selProject, lingering }),
+    [tree.projects, hideDoneProjects, kw, selProject, lingering],
   );
 
   // 各项目里列出的待办，排好序；搜索时：标题、正文开头（前端匹配）或正文全文（hits）里有关键字的待办，和名字里有关键字的项目。
-  // 这里不管哪些项目藏起来：藏起哪些跟着右侧显示的项目变，变了时不必把全部待办重新排序，各项目拿到的 todos 还是原来的数组，
-  // 项目不必重新渲染
+  // 这里不管哪些项目藏起来：藏起哪些跟着右侧显示的、刚切走的项目变，变了时不必把全部待办重新排序，各项目拿到的 todos
+  // 还是原来的数组，项目不必重新渲染
   const listed = useMemo(() => {
     const k = kw.toLowerCase();
     return tree.projects

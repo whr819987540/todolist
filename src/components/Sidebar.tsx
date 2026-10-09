@@ -10,7 +10,17 @@ import { type Actions, moveTargets } from "./menus";
 import RecycleBinButton from "./RecycleBin";
 import { useRowPopups } from "./sidebar/RowPopups";
 import SidebarToolbar from "./sidebar/SidebarToolbar";
-import { type Collapsed, countAll, countDone, parseSelKey, type Selection, selKey, WS_KEY } from "./sidebar/tree";
+import { useLingeringProjects } from "./sidebar/lingering";
+import {
+  type Collapsed,
+  countAll,
+  countDone,
+  isProjectDone,
+  parseSelKey,
+  type Selection,
+  selKey,
+  WS_KEY,
+} from "./sidebar/tree";
 import { WorkspaceBranch } from "./sidebar/TreeRows";
 
 // 侧栏：顶部工具栏（sidebar/SidebarToolbar）、工作区 / 项目 / 待办的树（sidebar/TreeRows）、
@@ -61,7 +71,7 @@ interface Props {
   pickedMenu: () => MenuProps | null;
 }
 
-/** 没有多选的工作区都用这一个，行不必重新渲染 */
+/** 没有多选的、没有刚切走的项目的工作区都用这一个，行不必重新渲染 */
 const NONE: ReadonlySet<string> = new Set();
 
 export default function Sidebar(props: Props) {
@@ -86,6 +96,14 @@ export default function Sidebar(props: Props) {
     (ws: string) => setListOptions(ws, { hideDoneProjects: false }),
     [setListOptions],
   );
+
+  // 「隐藏全部完成的项目」开着时，右侧显示的内容离开一个全部完成的项目后，它再显示一会儿才藏起来（sidebar/lingering.ts）；
+  // 搜索时本来就不藏，不必留
+  const lingering = useLingeringProjects(sel, (ws, project) => {
+    if (kw || !listOptionsOf(ws).hideDoneProjects) return false;
+    const p = trees.find((t) => t.name === ws)?.projects.find((x) => x.name === project);
+    return !!p && isProjectDone(p);
+  });
 
   const total = trees.reduce((n, t) => n + countAll(t), 0);
   const done = trees.reduce((n, t) => n + countDone(t), 0);
@@ -209,6 +227,7 @@ export default function Sidebar(props: Props) {
             keyword={kw}
             hits={props.hits && (props.hits.get(tree.name) ?? NO_HITS)}
             {...listOptionsOf(tree.name)}
+            lingering={lingering.get(tree.name) ?? NONE}
             now={now}
             today={today}
             dragState={props.drag.state}

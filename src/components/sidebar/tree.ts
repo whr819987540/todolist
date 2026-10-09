@@ -1,4 +1,4 @@
-// 侧栏树共用的定义：右侧显示的内容（选中项）和它在行上的键、折叠状态、待办计数
+// 侧栏树共用的定义：右侧显示的内容（选中项）和它在行上的键、折叠状态、待办计数、隐藏全部完成的项目时藏起哪些
 import type { ProjectNode, WorkspaceTree } from "../../types";
 
 /** 折叠状态里工作区本身用的键（项目用项目名） */
@@ -29,15 +29,61 @@ const NONE_HIDDEN: ReadonlySet<string> = new Set();
 
 /**
  * 「隐藏全部完成的项目」开着时，侧栏里藏起来的项目（名字）：全部完成的，除了右侧正在显示的那个（项目概览，或打开着其中的
- * 待办），免得正看着的东西从左边消失；侧栏搜索时什么都不藏，名字或待办命中的照常列出
+ * 待办），免得正看着的东西从左边消失，和刚切走、还要再显示一会儿的（lingering，见 lingeringAfter）；
+ * 侧栏搜索时什么都不藏，名字或待办命中的照常列出
  */
 export function hiddenDoneProjects(
   projects: readonly ProjectNode[],
-  o: { hide: boolean; keyword: string; selProject?: string },
+  o: { hide: boolean; keyword: string; selProject?: string; lingering?: ReadonlySet<string> },
 ): ReadonlySet<string> {
   if (!o.hide || o.keyword.trim()) return NONE_HIDDEN;
-  const hidden = projects.filter((p) => p.name !== o.selProject && isProjectDone(p)).map((p) => p.name);
+  const hidden = projects
+    .filter((p) => p.name !== o.selProject && !o.lingering?.has(p.name) && isProjectDone(p))
+    .map((p) => p.name);
   return hidden.length ? new Set(hidden) : NONE_HIDDEN;
+}
+
+/**
+ * 右侧显示的内容离开一个要藏起来的项目后，它在侧栏里再显示多久（毫秒）。比 Windows 的双击间隔（默认 500，最长约 900）长：
+ * 在它下面的项目里双击时，第一下点击切走后它不会马上消失、让下面的行移到鼠标底下，第二下还落在同一行上
+ */
+export const LINGER_MS = 1000;
+
+/** 刚切走、还要在侧栏里再显示一会儿的项目：工作区 → 项目名 */
+export type Lingering = ReadonlyMap<string, ReadonlySet<string>>;
+export const NO_LINGERING: Lingering = new Map();
+
+/**
+ * 右侧显示的内容从 from 换到 to 之后，还要再显示一会儿的项目：离开的项目（在同一项目里换待办、换到它的概览不算离开）
+ * 在 keep 说要留时（会被藏起来的：开着隐藏全部完成的项目、全部完成了、不在搜索）加进来；回到的项目去掉，它正显示着，
+ * 照常显示。没有变化时返回 prev 本身，没变的工作区沿用原来的集合（侧栏里这些工作区不必重新渲染）
+ */
+export function lingeringAfter(
+  prev: Lingering,
+  from: Selection,
+  to: Selection,
+  keep: (workspace: string, project: string) => boolean,
+): Lingering {
+  let next = prev;
+  const edit = (ws: string, project: string, add: boolean) => {
+    const names = new Set(next.get(ws));
+    if (add) names.add(project);
+    else names.delete(project);
+    const m = new Map(next);
+    if (names.size) m.set(ws, names);
+    else m.delete(ws);
+    next = m;
+  };
+  const left = from.project;
+  if (
+    left &&
+    (from.workspace !== to.workspace || left !== to.project) &&
+    !next.get(from.workspace)?.has(left) &&
+    keep(from.workspace, left)
+  )
+    edit(from.workspace, left, true);
+  if (to.project && next.get(to.workspace)?.has(to.project)) edit(to.workspace, to.project, false);
+  return next;
 }
 
 export const countDone = (t: WorkspaceTree) => t.projects.reduce((n, p) => n + p.todos.filter((x) => x.done).length, 0);
