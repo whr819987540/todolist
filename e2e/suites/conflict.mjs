@@ -45,6 +45,18 @@ export default async function (t) {
   check("外部重写了一遍、内容没变：获得焦点时不弹冲突对话框，正在编辑的内容不动", !(await conflictShown()) && (await doc()) === mineD2);
   await m.press("Ctrl+S");
   check("之后照常保存", await t.until(() => t.read("工作/日常/D.md") === mineD2));
+  // 没有未保存的修改时外部重写了一遍、内容没变：不重新加载，撤销记录还在
+  t.write("工作/日常/D.md", mineD2);
+  await m.emit("tauri://focus");
+  await t.sleep(800);
+  await m.ev(`view().focus(); return 1`);
+  await m.press("Ctrl+Z");
+  check(
+    "没有未保存的修改时外部重写了一遍、内容没变：获得焦点后不重新加载，还能撤销之前的修改",
+    (await doc()) === mineD2.replace("\n再加一行", ""),
+    await doc(),
+  );
+  await m.press("Ctrl+Y");
 
   // 切到别的待办时才发现外部改过（窗口一直在前台）：自动另存为新待办
   await m.ev(`return await openTodo("工作", "需求", "A")`);

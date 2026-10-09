@@ -156,6 +156,19 @@ describe("窗口获得焦点时核对磁盘", () => {
     expect(await s.flush()).toBe(true);
     expect(disk.content).toBe("原来的\n我加的\n又加的\n");
   });
+
+  it("没有未保存的修改、外部只是把同样的内容重写了一遍：不重新加载（光标、撤销记录都不动），之后照常保存", async () => {
+    const m = member();
+    const s = await open(m);
+    writeOutside("原来的\n");
+    s.windowFocus(true);
+    await settle();
+    expect(m.reset).not.toHaveBeenCalled();
+    expect(s.getState()).toMatchObject({ conflict: false, status: "saved" });
+    s.setContent("原来的\n后来加的\n");
+    expect(await s.flush()).toBe(true);
+    expect(disk.content).toBe("原来的\n后来加的\n");
+  });
 });
 
 describe("离开时存不上的另存为新待办", () => {

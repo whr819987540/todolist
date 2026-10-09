@@ -399,8 +399,8 @@ export class TodoSession {
   /**
    * 核对磁盘上的正文（窗口重新获得焦点时，文件可能在外部被改过）。外部改过时：这里没有未保存的修改就重新加载；
    * 有的话立即弹出冲突对话框让用户选，不动正在编辑的内容（不等到存盘、离开这条待办时才发现，那时没法再问）。
-   * 外部的正文和这里打开时的一样（只是修改时间变了，如网盘同步时重写了一遍）、或者和这里改成的一样时不算冲突。
-   * 排在保存后面做：刚存完、新的修改时间还没记下时不会当成外部改的
+   * 外部的正文和这里打开时的一样（只是修改时间变了，如网盘同步时重写了一遍）、或者和这里改成的一样时不算冲突，
+   * 也不重新加载（光标、撤销记录都不动）。排在保存后面做：刚存完、新的修改时间还没记下时不会当成外部改的
    */
   checkDisk(): Promise<void> {
     return this.enqueue(async () => {
@@ -412,12 +412,14 @@ export class TodoSession {
         return; // 文件被删等情况由外层刷新处理（之后都关掉时存不上，另存为新待办）
       }
       if (d.mtime === this.mtime || this.detached || this.conflicted) return;
-      if (this.content === this.savedContent) {
-        this.applyDiskContent(d);
-      } else if (d.content === this.savedContent || d.content === this.content) {
+      if (d.content === this.savedContent || d.content === this.content) {
+        // 内容没变（只是重写了一遍）、或者改成了和这里一样的：只记下新的修改时间和编码，编辑器的内容不换
         this.mtime = d.mtime;
         this.savedContent = d.content;
+        this.set({ encoding: d.encoding });
         this.refreshStatus();
+      } else if (this.content === this.savedContent) {
+        this.applyDiskContent(d);
       } else {
         this.conflicted = true;
         this.set({ conflict: true });
