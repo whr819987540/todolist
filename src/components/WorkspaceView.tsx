@@ -582,6 +582,9 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     document.addEventListener("focusin", onFocus);
     return () => document.removeEventListener("focusin", onFocus);
   }, []);
+  // 这次按下的 Alt+↑ 关了标签：按住不放时后面的重复事件什么都不做（同 Ctrl+W 只关一个）。
+  // 不能只看还有没有标签：关掉的是最后一个时，重复事件会落到「在左侧列表里选中上一项」，按住时选中项一行行往上走
+  const altUpClosed = useRef(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
@@ -627,13 +630,19 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       // 焦点在右侧、正显示着一条待办时：Alt+←/→ 切到左边 / 右边的标签，Alt+↑ 关掉它；
       // 最左边 / 最右边的标签上仍同原来：Alt+← 回到左侧列表，Alt+→ 焦点放进正文（在标题上时用得着）
       if (e.altKey && !ctrl && !e.shiftKey && e.key.startsWith("Arrow")) {
+        const heldAfterClose = e.repeat && altUpClosed.current;
+        if (!e.repeat) altUpClosed.current = false;
         if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
         e.preventDefault();
+        if (heldAfterClose) return;
         const { shownTabs, activeTodo, activateTab, closeTabs } = tabsRef.current;
         const at = tabIndex(shownTabs, activeTodo);
         if (region.current === "main" && at >= 0 && pickedItems.length < 2 && e.key !== "ArrowDown") {
           if (e.key === "ArrowUp") {
-            if (!e.repeat) closeTabs([shownTabs[at]]);
+            if (!e.repeat) {
+              closeTabs([shownTabs[at]]);
+              altUpClosed.current = true;
+            }
             return;
           }
           const next = neighborTab(shownTabs, activeTodo, e.key === "ArrowRight" ? 1 : -1);

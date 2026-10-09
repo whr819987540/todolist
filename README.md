@@ -196,7 +196,7 @@ npm run e2e -- --keep             # 跑完留着测试数据（%TEMP%\todolist-e
 注意：
 
 - 跑的时候会弹出测试版的窗口（主窗口会最大化一下），抢前台；别在跑的时候打字。模拟的快捷键不是真的按键，测试版要拿到前台只能靠 tao 的 `set_focus`（模拟按一下 Alt 再 `SetForegroundWindow`）：锁屏了、前台的程序以管理员身份运行（模拟按键送不进去）、或有人正在别的程序里操作时，Windows 不让换前台。`quick`、`regress` 开头试一下，拿不到时「在前台」一类的检查记为跳过并说明原因，不算失败；解锁、换个普通程序在前台、别动键盘鼠标后重跑那个套件即可。别的程序（如会议软件）过一两秒就抢走前台时，快速记录小窗会按设计藏起来，后面的检查可能失败，同样重跑。拖动中窗口失去焦点、或真的鼠标在测试版窗口上动了，页面会按设计取消拖动：`drag` 看到了就松开重拖（打出「↻ 拖动被打断」），最多三次
-- 新套件放在 `e2e/suites/`，默认导出 `async function (t)`：`t.main` 是主窗口的页面（`ev` 执行页面代码，`press`、`type`、`click`、`drag` 等），`t.quick()` 是快速记录小窗，`t.win` 是窗口、快捷键、注册表、回收站的操作，`t.check(名称, 是否通过, 附加信息)` 记一项检查，`t.until(条件)` 等到条件成立（每 200 毫秒看一次，最多 5 秒；等页面、文件的变化时用它，别用固定时长的 `sleep`，机器慢时不够），`t.restart()` 重新启动；再加到 `e2e/run.mjs` 的 `SUITES`。页面里能用的工具函数（`row`、`view`、`openTodo`、`menuItem`、`button` 等）在 `e2e/lib/page.mjs`
+- 新套件放在 `e2e/suites/`，默认导出 `async function (t)`：`t.main` 是主窗口的页面（`ev` 执行页面代码，`press`（`press(按键, { repeat: 5 })` 是按住不放）、`type`、`click`、`drag` 等），`t.quick()` 是快速记录小窗，`t.win` 是窗口、快捷键、注册表、回收站的操作，`t.check(名称, 是否通过, 附加信息)` 记一项检查，`t.until(条件)` 等到条件成立（每 200 毫秒看一次，最多 5 秒；等页面、文件的变化时用它，别用固定时长的 `sleep`，机器慢时不够），`t.restart()` 重新启动；再加到 `e2e/run.mjs` 的 `SUITES`。页面里能用的工具函数（`row`、`view`、`openTodo`、`menuItem`、`button` 等）在 `e2e/lib/page.mjs`
 - 测不到、要手动试的（真的注销 / 重启后的开机自启、安装包的卸载和升级、多显示器、托盘菜单、真实的输入法）列在 `docs/windows-test-checklist.md`
 
 #### 在 GitHub Actions 上跑

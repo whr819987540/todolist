@@ -151,9 +151,14 @@ export default async function (t) {
   check("Ctrl+W 关掉最右边正显示着的标签，切到左边的", (await tabs()) === "B C*", await tabs());
   await m.click(await tabAt("B"));
   await loaded("B");
-  await m.press("Alt+ArrowUp");
+  await m.press("Alt+ArrowUp", { repeat: 5 });
   await loaded("C");
-  check("焦点在正文里时 Alt+↑ 关掉正显示着的标签，切到右边的", (await tabs()) === "C*" && (await bodyFocused()), await tabs());
+  await t.sleep(300);
+  check(
+    "焦点在正文里时 Alt+↑ 关掉正显示着的标签，切到右边的（按住不放只关一个）",
+    (await tabs()) === "C*" && (await bodyFocused()),
+    await tabs(),
+  );
   await m.ev(`return await openTodo("工作", "需求", "A")`);
   await middleClick(await tabAt("C"));
   check("鼠标中键关掉标签", (await tabs()) === "(A)*", await tabs());
@@ -168,6 +173,17 @@ export default async function (t) {
   check(
     "关掉最后一个标签：显示它所在的项目",
     (await tabs()) === "" && (await m.ev(`return !!document.querySelector(".overview") && !document.querySelector(".editor-tabs")`)),
+  );
+  // 按住 Alt+↑ 关掉最后一个标签：后面的重复按键什么都不做，不会接着在左侧列表里一行行往上选
+  await m.ev(`return await openTodo("工作", "需求", "A")`);
+  await m.ev(`view().focus(); return 1`);
+  await m.press("Alt+ArrowUp", { repeat: 5 });
+  await t.sleep(400);
+  const heldSel = await m.ev(`return document.querySelector(".tree-row.selected")?.dataset.sel`);
+  check(
+    "按住 Alt+↑ 关掉最后一个标签：只关这一个，左侧列表的选中项停在它所在的项目上",
+    (await tabs()) === "" && heldSel === JSON.stringify(["工作", "需求", ""]),
+    { tabs: await tabs(), sel: heldSel },
   );
 
   // 显示概览时标签栏仍在，没有高亮的，点标签回到那条待办

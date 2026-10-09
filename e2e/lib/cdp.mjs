@@ -41,7 +41,7 @@ const WATCH_STOP = `return window.__e2e.stopWatch?.() ?? ""`;
 /**
  * 连到页面：kind 为 "main"（主窗口）或 "quick"（快速记录小窗）。返回的对象：
  * - ev(code)：在页面里执行一段 async 函数体（可以用 page.mjs 里的工具函数），返回 return 的值
- * - press("Ctrl+Shift+F")、type(text)：真实的按键、输入
+ * - press("Ctrl+Shift+F")、type(text)：真实的按键、输入；press(combo, { repeat: 5 }) 是按住不放
  * - click(p, { ctrl, shift, right })、drag：鼠标
  */
 export async function connect(kind = "main") {
@@ -82,7 +82,8 @@ export async function connect(kind = "main") {
     return r.result?.result?.value;
   };
 
-  const press = async (combo) => {
+  /** 按一下 combo；repeat 是按住不放时的自动重复次数（像真的按住一样，先停一会儿再连着发，事件的 repeat 为 true） */
+  const press = async (combo, { repeat = 0 } = {}) => {
     const parts = combo.split("+");
     const k = parts.pop() || "+";
     const ctrl = parts.includes("Ctrl");
@@ -95,9 +96,12 @@ export async function connect(kind = "main") {
     else [code, vk, key] = [`Key${k.toUpperCase()}`, k.toUpperCase().charCodeAt(0), shift ? k.toUpperCase() : k.toLowerCase()];
     const base = { modifiers, key, code, windowsVirtualKeyCode: vk };
     // Enter 要带上文字（\r），输入框里才会换行
-    if (k === "Enter" && !alt) await send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: "\r", unmodifiedText: "\r" });
-    else await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
-    if (!ctrl && !alt && key.length === 1) await send("Input.dispatchKeyEvent", { type: "char", ...base, text: key });
+    const down = k === "Enter" && !alt ? { type: "keyDown", ...base, text: "\r", unmodifiedText: "\r" } : { type: "rawKeyDown", ...base };
+    for (let i = 0; i <= repeat; i++) {
+      if (i) await sleep(i === 1 ? 250 : 35);
+      await send("Input.dispatchKeyEvent", { ...down, autoRepeat: i > 0 });
+      if (!ctrl && !alt && key.length === 1) await send("Input.dispatchKeyEvent", { type: "char", ...base, text: key, autoRepeat: i > 0 });
+    }
     await send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
     await sleep(80);
   };
