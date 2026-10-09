@@ -579,6 +579,18 @@ impl Store {
         if title.is_empty() && content.is_empty() {
             return Err("没有要记的内容".into());
         }
+        self.create_todo_creating_project(ws, project, &title, &content)
+    }
+
+    /// 同 create_todo，但工作区、项目（可以是子项目）不在时先建：快速记录，和离开一条待办时存不上、
+    /// 原来的项目也不在了，另存到快速记录存到的项目里时用
+    pub fn create_todo_creating_project(
+        &self,
+        ws: &str,
+        project: &str,
+        title: &str,
+        content: &str,
+    ) -> Result<TodoSummary> {
         let ws = normalize_name(ws, "工作区")?;
         let project = normalize_project_path(project)?;
         {
@@ -589,7 +601,7 @@ impl Store {
                     .map_err(|e| format!("创建项目「{}」失败：{e}", project_label(&project)))?;
             }
         }
-        self.create_todo(&ws, &project, &title, &content)
+        self.create_todo(&ws, &project, title, content)
     }
 
     pub fn read_todo(&self, ws: &str, project: &str, id: &str) -> Result<TodoDetail> {
@@ -2374,6 +2386,23 @@ mod tests {
         s.create_workspace("w").unwrap();
         assert!(s.create_todo("w", "不存在", "标题", "正文").is_err());
         assert!(s.list_workspaces().unwrap()[0].todo_count == 0);
+    }
+
+    #[test]
+    fn create_todo_creating_missing_project() {
+        let (_tmp, s) = store("create-creating");
+        // 离开待办时存不上、原来的项目也不在了：另存到快速记录存到的项目，工作区、项目不在时先建；
+        // 标题、正文原样存（不像快速记录那样拆第一行）
+        let mine = "第一行\n\n第二段  \n";
+        let t = s.create_todo_creating_project("收件箱", "快速记录", "周报（我的版本）", mine).unwrap();
+        assert_eq!(t.title, "周报（我的版本）");
+        assert_eq!(s.read_todo("收件箱", "快速记录", &t.id).unwrap().content, mine);
+        // 已经在：直接加进去；子项目也行
+        s.create_todo_creating_project("收件箱", "快速记录", "第二条", "").unwrap();
+        assert_eq!(s.load_workspace("收件箱").unwrap().projects[0].todos.len(), 2);
+        let sub = s.create_todo_creating_project("收件箱", "灵感/产品", "子项目里", "x").unwrap();
+        assert_eq!(s.read_todo("收件箱", "灵感/产品", &sub.id).unwrap().content, "x");
+        assert!(s.create_todo_creating_project("收件箱", "a\\b", "标题", "x").is_err());
     }
 
     #[test]

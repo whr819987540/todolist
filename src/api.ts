@@ -50,9 +50,12 @@ export const api = {
   moveProject: (workspace: string, name: string, targetWorkspace: string, targetParent?: string) =>
     invoke<string>("move_project", { workspace, name, targetWorkspace, targetParent: targetParent ?? null }),
 
-  /** content 是正文，不传时新建空白待办；带正文时正文和待办在同一次调用里建好 */
-  createTodo: (workspace: string, project: string, title: string, content?: string) =>
-    invoke<TodoSummary>("create_todo", { workspace, project, title, content: content ?? null }),
+  /**
+   * content 是正文，不传时新建空白待办；带正文时正文和待办在同一次调用里建好。
+   * createProject 为 true 时工作区、项目不在就先建（离开待办时存不上的修改另存到快速记录存到的项目）
+   */
+  createTodo: (workspace: string, project: string, title: string, content?: string, createProject = false) =>
+    invoke<TodoSummary>("create_todo", { workspace, project, title, content: content ?? null, createProject }),
   readTodo: (workspace: string, project: string, id: string) =>
     invoke<TodoDetail>("read_todo", { workspace, project, id }),
   saveTodoContent: (
@@ -118,6 +121,10 @@ export const api = {
   openFolder: (workspace?: string, project?: string) =>
     invoke<void>("open_folder", { workspace: workspace ?? null, project: project ?? null }),
   quitApp: () => invoke<void>("quit_app"),
+  /** 收到退出请求、开始存盘：Rust 端这一次不再强制退出，存好后调 quitApp */
+  holdQuit: () => invoke<void>("hold_quit"),
+  /** 有修改存不下来，这次不退出：把主窗口调出来 */
+  cancelQuit: () => invoke<void>("cancel_quit"),
 
   getSettings: () => invoke<SettingsInfo>("get_settings"),
   /** shortcut 为 null 表示不使用 */

@@ -12,6 +12,7 @@ use settings::{
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use store::{
@@ -168,7 +169,8 @@ fn follow_quick_target(settings: &SettingsStore, f: impl FnOnce(&QuickTarget) ->
 
 // ----- 待办 -----
 
-/// 新建待办；content 是正文，不传时是空白待办（外部修改冲突时「另存为新待办」带着正文一起建）
+/// 新建待办；content 是正文，不传时是空白待办（外部修改冲突时「另存为新待办」带着正文一起建）。
+/// create_project 为 true 时工作区、项目不在就先建（离开待办时存不上、原来的项目也不在了，另存到快速记录存到的项目）
 #[tauri::command]
 async fn create_todo(
     store: State<'_, Store>,
@@ -176,8 +178,14 @@ async fn create_todo(
     project: String,
     title: String,
     content: Option<String>,
+    create_project: Option<bool>,
 ) -> Cmd<TodoSummary> {
-    store.create_todo(&workspace, &project, &title, content.as_deref().unwrap_or_default())
+    let content = content.as_deref().unwrap_or_default();
+    if create_project == Some(true) {
+        store.create_todo_creating_project(&workspace, &project, &title, content)
+    } else {
+        store.create_todo(&workspace, &project, &title, content)
+    }
 }
 
 #[tauri::command]
@@ -368,6 +376,23 @@ fn open_url(url: String) -> Cmd<()> {
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+/// 第几次从托盘请求退出（request_quit）
+static QUIT_REQUESTS: AtomicU64 = AtomicU64::new(0);
+/// 前端已经收到、接手了的那一次（hold_quit）：这一次不再强制退出
+static QUIT_HELD: AtomicU64 = AtomicU64::new(0);
+
+/// 前端收到退出请求、开始存盘时调用：由前端存好后调 quit_app；有存不下来的修改时不退出，问用户（cancel_quit）
+#[tauri::command]
+fn hold_quit() {
+    QUIT_HELD.store(QUIT_REQUESTS.load(Ordering::SeqCst), Ordering::SeqCst);
+}
+
+/// 退出前有修改存不下来（或一直没存完），这次不退出：把主窗口调出来，让用户看到提示、决定还退不退
+#[tauri::command]
+fn cancel_quit(app: AppHandle) {
+    show_main_window(&app);
 }
 
 // ----- 快速记录 -----
@@ -615,13 +640,17 @@ fn toggle_main_window(app: &AppHandle) {
     }
 }
 
-/// 通知前端保存后调用 quit_app；前端卡住没响应时 5 秒后强制退出
+/// 通知前端保存后调用 quit_app；前端卡住没响应（5 秒内没有 hold_quit）时强制退出。
+/// 前端接手了的不强制退出：离开时存不上的修改要另存为新待办，存不下来时不退出、问用户
 fn request_quit(app: &AppHandle) {
+    let seq = QUIT_REQUESTS.fetch_add(1, Ordering::SeqCst) + 1;
     let _ = app.emit("quit-requested", ());
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(5));
-        app.exit(0);
+        if QUIT_HELD.load(Ordering::SeqCst) < seq {
+            app.exit(0);
+        }
     });
 }
 
@@ -1145,6 +1174,8 @@ pub fn run() {
             open_folder,
             open_url,
             quit_app,
+            hold_quit,
+            cancel_quit,
             get_settings,
             set_shortcut,
             set_edit_shortcuts,

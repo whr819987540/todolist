@@ -30,12 +30,14 @@ import { webUrl } from "../editor/links";
 import { activeIndex, type OutlineItem } from "../editor/outline";
 import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
-import { registerFlusher, useWindowFocus } from "../hooks";
+import { emitAppEvent, registerFlusher, useWindowFocus } from "../hooks";
 import { leafName, parentOf } from "../projects";
+import { type Leftover, leaveProblem, type LeaveProblem, type ProjectAt, rescueAsNew, rescueNotice } from "../rescue";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
 import {
+  displayTitle,
   formatDuration,
   fullTime,
   MY_VERSION,
@@ -50,6 +52,7 @@ import {
   readEditorMode,
   readEditPosition,
   takeUndo,
+  type UndoSnapshot,
   writeEditorMode,
   writeEditPosition,
 } from "../workspaceState";
@@ -59,7 +62,8 @@ import Outline from "./Outline";
 export interface EditorHandle {
   /**
    * 立即保存所有未保存的修改（Ctrl+S、重命名 / 移动等操作前），不受 auto save 开关影响。
-   * 返回是否都存好了（没有要存的也算）；正文有冲突（弹出了冲突对话框）、保存失败（已提示）时为 false
+   * 返回是否都存好了（没有要存的也算）；正文有冲突（弹出了冲突对话框）、保存失败（已提示）时为 false。
+   * 离开这条待办（卸载）时另外会存一次，那时存不上的另存为新待办
    */
   flush(): Promise<boolean>;
   /** 待办已被删除/移走：之后不再尝试保存。撤销记录先按原来的位置留下，由 workspaceState 跟到新位置 */
@@ -89,7 +93,7 @@ interface Props {
   onSavedAsNew: (s: TodoSummary) => void;
   /** 打开后第一次修改了标题或正文（预览标签据此固定下来） */
   onEdit: () => void;
-  /** 有没有没存好的修改（标签上的圆点）；卸载时（切走、关掉，那时会存盘）报一次 false */
+  /** 有没有没存好的修改（标签上的圆点）；卸载时（切走、关掉，那时会存盘，存不上的另存为新待办）报一次 false */
   onDirty: (dirty: boolean) => void;
 }
 
@@ -129,7 +133,8 @@ const otherMode = (m: EditorMode): EditorMode => (m === "live" ? "source" : "liv
 /**
  * 右侧的待办详情：标题 + Markdown 正文（实时渲染或源码模式）。
  * Ctrl+S、切换待办、从托盘退出时总是保存；有未保存的修改后还定时保存：auto save 开着时按设置的间隔，
- * 关着时满 1 小时兜底。auto save 开着时编辑器或窗口失去焦点也立即保存
+ * 关着时满 1 小时兜底。auto save 开着时编辑器或窗口失去焦点也立即保存。
+ * 切换待办、从托盘退出时存不上的（正文在外部被改过、待办在外部被删了等），自动另存为新待办（leave）
  */
 export default function TodoEditor(props: Props) {
   const { workspace, project, summary, handleRef } = props;
@@ -171,12 +176,16 @@ export default function TodoEditor(props: Props) {
   const mdRef = useRef<MarkdownEditorHandle | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const propsRef = useRef(props);
+  // App 级的提示：卸载后（离开时另存为新待办）也能用
   const messageRef = useRef(message);
   const saveOptionsRef = useRef(saveOptions);
+  // 快速记录存到的项目：离开时存不上、原来的项目也不在了时另存到这里
+  const quickTargetRef = useRef(keys?.quickCaptureTarget);
   useEffect(() => {
     propsRef.current = props;
     messageRef.current = message;
     saveOptionsRef.current = saveOptions;
+    quickTargetRef.current = keys?.quickCaptureTarget;
   });
 
   // 保存相关的可变状态放在 ref 里，异步回调和卸载时都能拿到最新值。
@@ -206,6 +215,12 @@ export default function TodoEditor(props: Props) {
     activeHeading: -1,
     /** 打开后修改过标题或正文 */
     edited: false,
+    /** 最近一次存盘失败的原因（离开时另存的提示里说明） */
+    saveError: "",
+    /** 正在离开（卸载、从托盘退出）：存盘失败不单独提示，和另存的结果一起说 */
+    leaving: false,
+    /** 已经卸载了 */
+    left: false,
   }).current;
 
   const isDirty = () => s.content !== s.savedContent || s.title !== s.savedTitle;
@@ -289,8 +304,9 @@ export default function TodoEditor(props: Props) {
         refreshStatus();
       } catch (e) {
         ok = false;
+        s.saveError = errMsg(e);
         setStatus("error");
-        messageRef.current.error(`保存失败：${errMsg(e)}`);
+        if (!s.leaving) messageRef.current.error(`保存失败：${s.saveError}`);
       }
     });
     return job.then(() => ok);
@@ -310,8 +326,9 @@ export default function TodoEditor(props: Props) {
         refreshStatus();
       } catch (e) {
         ok = false;
+        s.saveError = errMsg(e);
         setStatus("error");
-        messageRef.current.error(`保存标题失败：${errMsg(e)}`);
+        if (!s.leaving) messageRef.current.error(`保存标题失败：${s.saveError}`);
       }
     });
     return job.then(() => ok);
@@ -362,9 +379,96 @@ export default function TodoEditor(props: Props) {
     return (await title) && (await content);
   };
 
-  // 加载正文；卸载（切换到别的待办、返回首页等）时把没保存的写盘，不受 auto save 开关影响，同时记下编辑位置
+  /** 换成磁盘上的正文（外部改过后重新加载） */
+  const applyDiskContent = (d: TodoDetail) => {
+    s.content = s.savedContent = d.content;
+    s.mtime = d.mtime;
+    window.clearTimeout(s.statsTimer);
+    setStats(textStats(d.content));
+    setEncoding(d.encoding);
+    refreshStatus();
+    mdRef.current?.reset(d.content);
+    refreshOutline();
+  };
+
+  /** 另存成的新待办（at 里的 newId）接着原来的地方编辑：编辑位置、撤销记录和编辑模式跟过去 */
+  const carryTo = (at: ProjectAt, newId: string, snap: UndoSnapshot | null) => {
+    const position = readEditPosition(workspace, project, id);
+    if (position) writeEditPosition(at.workspace, at.project, newId, position);
+    if (snap) keepUndo(at.workspace, at.project, newId, snap);
+    writeEditorMode(at.workspace, at.project, newId, readEditorMode(workspace, project, id));
+  };
+
+  /**
+   * 离开时存不上的修改另存为新待办（见 leave）：这里的正文连同标题（加上「（我的版本）」）存成同一项目里的
+   * 一条新待办，原来的项目也不在了时存到快速记录存到的项目；提示新待办的标题，左侧列表刷新出它。
+   * 另存也失败时提示，卸载了的把正文复制到剪贴板。返回是否另存好了
+   */
+  const rescue = async (problem: LeaveProblem): Promise<boolean> => {
+    const content = s.content;
+    const here = { workspace, project };
+    const original = displayTitle(propsRef.current.summary).text;
+    const r = await rescueAsNew(api.createTodo, here, quickTargetRef.current, myVersionTitle(s.title, content), content);
+    if (!r.ok) {
+      // 从托盘退出时还开着，内容在编辑区里（不退出）；卸载了的只能放进剪贴板
+      let leftover: Leftover = "editor";
+      if (s.left)
+        leftover = (await navigator.clipboard.writeText(content).then(() => true, () => false)) ? "clipboard" : "lost";
+      messageRef.current.error(rescueNotice(problem, original, here, r, leftover), 15);
+      return false;
+    }
+    // 卸载了的，撤销记录已经按原来的位置留下了（MarkdownEditor 销毁时），取出来给新的那条
+    let snap = mdRef.current?.snapshot() ?? null;
+    if (!snap) {
+      const history = takeUndo(workspace, project, id, content);
+      snap = history ? { doc: content, history } : null;
+    }
+    carryTo(r.at, r.todo.id, snap);
+    if (s.left || !problem.conflict) {
+      // 之后不再往这一条存：内容已经在新的那条里了，这一条（还开着时）由外层刷新后关掉
+      s.detached = true;
+    } else {
+      // 从托盘退出时还开着：这一条换成外部的版本，没退出（问用户时选了不退出）也不会再另存一份
+      try {
+        const d = await api.readTodo(workspace, project, id);
+        s.conflict = false;
+        setConflict(false);
+        applyDiskContent(d);
+        propsRef.current.onSummary(d.summary);
+      } catch {
+        s.detached = true;
+      }
+    }
+    messageRef.current.warning(rescueNotice(problem, original, here, r), 10);
+    // 编辑器可能已经卸载了，经事件让外层（工作区视图或首页）刷新，列出新的那条
+    emitAppEvent("data-changed");
+    return true;
+  };
+
+  /**
+   * 离开这条待办（卸载：切换待办、关标签、返回首页等；quitting：从托盘退出）时存盘。这时存不上的（正文在外部被
+   * 改过、正显示着冲突对话框，待办或项目在外部被删了等）没法再让用户选，自动另存为新待办，两份都保留。
+   * 排在保存后面做，连着离开两次也只另存一份。返回是否都存好了（另存好了也算）
+   */
+  const leave = async (quitting: boolean): Promise<boolean> => {
+    s.leaving = true;
+    s.saveError = "";
+    await flush();
+    let ok = true;
+    await enqueue(async () => {
+      const problem = leaveProblem({ unsaved: isDirty(), detached: s.detached, conflict: s.conflict, error: s.saveError });
+      if (problem) ok = await rescue(problem);
+    });
+    if (quitting) s.leaving = false;
+    return ok;
+  };
+
+  // 加载正文；卸载（切换到别的待办、返回首页等）时把没保存的写盘，不受 auto save 开关影响，存不上的另存为新待办，
+  // 同时记下编辑位置
   useEffect(() => {
     let cancelled = false;
+    // 开发时 StrictMode 先卸载再挂载一次，s 还是原来那个
+    s.left = s.leaving = false;
     api
       .readTodo(workspace, project, id)
       .then((d) => {
@@ -386,8 +490,9 @@ export default function TodoEditor(props: Props) {
         setLoadError(errMsg(e));
         setLoading(false);
       });
-    const unregister = registerFlusher(flush, true);
-    handleRef.current = {
+    // 从托盘退出前存盘时存不上的另存为新待办；隐藏到托盘时只是存盘
+    const unregister = registerFlusher((quitting) => (quitting ? leave(true) : flush()), true);
+    const handle: EditorHandle = {
       flush,
       detach: () => {
         const snap = mdRef.current?.snapshot();
@@ -398,15 +503,19 @@ export default function TodoEditor(props: Props) {
       find: (replace) => mdRef.current?.openFind(replace) ?? false,
       focusBody: () => mdRef.current?.focus(),
     };
+    handleRef.current = handle;
     return () => {
       cancelled = true;
+      s.left = true;
       window.clearTimeout(s.statsTimer);
       unregister();
-      flush();
+      // 卸载了的不再算右侧打开着的编辑器：之后的操作不必、也不该再经它存盘
+      if (handleRef.current === handle) handleRef.current = null;
+      leave(false);
       propsRef.current.onDirty(false);
     };
-    // 只在挂载时执行一次、卸载时 flush 一次：组件以 工作区/项目/id 为 key 挂载，workspace、project、id、handleRef
-    // 不会变；flush、stopTimer 每次渲染都是新函数，但只经由 s 和各个 ref 读写，挂载时那一份一直可用。
+    // 只在挂载时执行一次、卸载时 leave 一次：组件以 工作区/项目/id 为 key 挂载，workspace、project、id、handleRef
+    // 不会变；flush、leave、stopTimer 每次渲染都是新函数，但只经由 s 和各个 ref 读写，挂载时那一份一直可用。
     // 补上这些依赖会让每次渲染都重新读正文、注销再注册 flusher，并在清理时多存一次盘
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -441,35 +550,44 @@ export default function TodoEditor(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSave, saveDelaySecs]);
 
-  /** 换成磁盘上的正文（外部改过后重新加载） */
-  const applyDiskContent = (d: TodoDetail) => {
-    s.content = s.savedContent = d.content;
-    s.mtime = d.mtime;
-    window.clearTimeout(s.statsTimer);
-    setStats(textStats(d.content));
-    setEncoding(d.encoding);
-    refreshStatus();
-    mdRef.current?.reset(d.content);
-    refreshOutline();
-  };
+  /**
+   * 核对磁盘上的正文（窗口重新获得焦点时，文件可能在外部被改过）。外部改过时：这里没有未保存的修改就重新加载；
+   * 有的话立即弹出冲突对话框让用户选，不动正在编辑的内容（不等到存盘、离开这条待办时才发现，那时没法再问）。
+   * 外部的正文和这里打开时的一样（只是修改时间变了，如网盘同步时重写了一遍）、或者和这里改成的一样时不算冲突。
+   * 排在保存后面做：刚存完、新的修改时间还没记下时不会当成外部改的
+   */
+  const checkDisk = () =>
+    enqueue(async () => {
+      if (!s.loaded || s.detached || s.conflict) return;
+      let d: TodoDetail;
+      try {
+        d = await api.readTodo(workspace, project, id);
+      } catch {
+        return; // 文件被删等情况由外层刷新处理（之后卸载时存不上，另存为新待办）
+      }
+      if (d.mtime === s.mtime || s.detached || s.conflict) return;
+      if (s.content === s.savedContent) {
+        applyDiskContent(d);
+      } else if (d.content === s.savedContent || d.content === s.content) {
+        s.mtime = d.mtime;
+        s.savedContent = d.content;
+        refreshStatus();
+      } else {
+        s.conflict = true;
+        setConflict(true);
+        return;
+      }
+      propsRef.current.onSummary(d.summary);
+    });
 
   // auto save：窗口失焦立即保存（编辑位置总是立即记下）；重新获得焦点时检查文件是否被外部程序改过
-  useWindowFocus(async (focused) => {
+  useWindowFocus((focused) => {
     if (!focused) {
       savePosition();
       if (autoSave) flush();
       return;
     }
-    if (!s.loaded || s.detached || s.conflict || s.content !== s.savedContent) return;
-    try {
-      const d = await api.readTodo(workspace, project, id);
-      // 读取期间用户开始打字了：保留用户的输入，由保存时的冲突检测兜底
-      if (d.mtime === s.mtime || s.content !== s.savedContent) return;
-      applyDiskContent(d);
-      propsRef.current.onSummary(d.summary);
-    } catch {
-      /* 文件被删等情况由外层刷新处理 */
-    }
+    checkDisk();
   });
 
   const zoomBy = (step: number) => {
@@ -526,20 +644,24 @@ export default function TodoEditor(props: Props) {
     refreshStatus();
   };
 
+  // 冲突对话框里的选择也排在保存后面做：做的时候离开这条待办（卸载、退出），离开时看到的已经是选完的样子，
+  // 不会再另存一份
   const resolveConflict = async (keepMine: boolean) => {
     setConflict(false);
     if (keepMine) {
       await saveContent(true);
       return;
     }
-    try {
-      const d = await api.readTodo(workspace, project, id);
-      s.conflict = false;
-      applyDiskContent(d);
-      propsRef.current.onSummary(d.summary);
-    } catch (e) {
-      message.error(errMsg(e));
-    }
+    await enqueue(async () => {
+      try {
+        const d = await api.readTodo(workspace, project, id);
+        s.conflict = false;
+        applyDiskContent(d);
+        propsRef.current.onSummary(d.summary);
+      } catch (e) {
+        message.error(errMsg(e));
+      }
+    });
   };
 
   /**
@@ -552,29 +674,29 @@ export default function TodoEditor(props: Props) {
     const mine = s.content;
     const newTitle = myVersionTitle(s.title, mine);
     savePosition();
-    const position = readEditPosition(workspace, project, id);
-    const snap = mdRef.current?.snapshot();
-    let created: TodoSummary;
-    try {
-      created = await api.createTodo(workspace, project, newTitle, mine);
-    } catch (e) {
-      message.error(`另存为新待办失败：${errMsg(e)}`);
-      setConflict(true);
-      return;
-    }
-    if (position) writeEditPosition(workspace, project, created.id, position);
-    if (snap) keepUndo(workspace, project, created.id, snap);
-    writeEditorMode(workspace, project, created.id, mode);
-    try {
-      const d = await api.readTodo(workspace, project, id);
-      s.conflict = false;
-      applyDiskContent(d);
-      propsRef.current.onSummary(d.summary);
-    } catch {
-      /* 这一条在外部被删了等：由外层刷新处理。这里的内容已经在新的那条里了，冲突标记留着，不会再往这一条存 */
-    }
-    message.success(`已另存为新待办「${newTitle}」，这一条换成了外部修改后的内容`);
-    propsRef.current.onSavedAsNew(created);
+    const snap = mdRef.current?.snapshot() ?? null;
+    await enqueue(async () => {
+      let created: TodoSummary;
+      try {
+        created = await api.createTodo(workspace, project, newTitle, mine);
+      } catch (e) {
+        message.error(`另存为新待办失败：${errMsg(e)}`);
+        setConflict(true);
+        return;
+      }
+      carryTo({ workspace, project }, created.id, snap);
+      try {
+        const d = await api.readTodo(workspace, project, id);
+        s.conflict = false;
+        applyDiskContent(d);
+        propsRef.current.onSummary(d.summary);
+      } catch {
+        // 这一条在外部被删了等：由外层刷新处理。这里的内容已经在新的那条里了，不再往这一条存（离开时也不再另存）
+        s.detached = true;
+      }
+      message.success(`已另存为新待办「${newTitle}」，这一条换成了外部修改后的内容`);
+      propsRef.current.onSavedAsNew(created);
+    });
   };
 
   /** 切换这条待办的编辑模式并记下；改名、移动、删除之后（detached）不再记 */

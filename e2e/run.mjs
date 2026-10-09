@@ -28,6 +28,7 @@ const SUITES = [
   "hidedone",
   "subprojects",
   "tabs",
+  "conflict",
   "regress",
 ];
 
