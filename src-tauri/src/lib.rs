@@ -93,11 +93,21 @@ async fn load_workspace(store: State<'_, Store>, workspace: String) -> Cmd<Works
 
 // ----- 项目 -----
 
+/// 新建项目，parent 不为空时在这个顶层项目里新建子项目；返回新项目的路径（子项目是「父项目/子项目」）
 #[tauri::command]
-async fn create_project(store: State<'_, Store>, workspace: String, name: String) -> Cmd<String> {
-    store.create_project(&workspace, &name)
+async fn create_project(
+    store: State<'_, Store>,
+    workspace: String,
+    name: String,
+    parent: Option<String>,
+) -> Cmd<String> {
+    match parent {
+        Some(parent) => store.create_sub_project(&workspace, &parent, &name),
+        None => store.create_project(&workspace, &name),
+    }
 }
 
+/// 改项目（或子项目）自己的名字，返回改名后的路径
 #[tauri::command]
 async fn rename_project(
     store: State<'_, Store>,
@@ -108,7 +118,8 @@ async fn rename_project(
 ) -> Cmd<String> {
     let new_name = store.rename_project(&workspace, &name, &new_name)?;
     follow_quick_target(&settings, |t| {
-        (t.workspace == workspace && t.project == name).then(|| QuickTarget { project: new_name.clone(), ..t.clone() })
+        let project = reparent(&t.project, &name, &new_name)?;
+        (t.workspace == workspace).then(|| QuickTarget { project, ..t.clone() })
     });
     Ok(new_name)
 }
@@ -119,6 +130,7 @@ async fn delete_project(store: State<'_, Store>, workspace: String, name: String
     store.delete_project(&workspace, &name)
 }
 
+/// 项目（或子项目）移到工作区 target_workspace 的顶层，或放进它的项目 target_parent 里成为子项目；返回移过去后的路径
 #[tauri::command]
 async fn move_project(
     store: State<'_, Store>,
@@ -126,13 +138,23 @@ async fn move_project(
     workspace: String,
     name: String,
     target_workspace: String,
-) -> Cmd<()> {
-    store.move_project(&workspace, &name, &target_workspace)?;
+    target_parent: Option<String>,
+) -> Cmd<String> {
+    let moved = store.move_project(&workspace, &name, &target_workspace, target_parent.as_deref())?;
     follow_quick_target(&settings, |t| {
-        (t.workspace == workspace && t.project == name)
-            .then(|| QuickTarget { workspace: target_workspace.clone(), ..t.clone() })
+        let project = reparent(&t.project, &name, &moved)?;
+        (t.workspace == workspace).then(|| QuickTarget { workspace: target_workspace.clone(), project })
     });
-    Ok(())
+    Ok(moved)
+}
+
+/// 项目 from 改名、移动成 to 之后，路径 project 变成什么：就是它或它的子项目时跟着改，不相干时返回 None
+fn reparent(project: &str, from: &str, to: &str) -> Option<String> {
+    if project == from {
+        return Some(to.to_string());
+    }
+    let rest = project.strip_prefix(from)?.strip_prefix(store::PROJECT_SEP)?;
+    Some(format!("{to}{}{rest}", store::PROJECT_SEP))
 }
 
 /// 工作区、项目改名或移动后，快速记录存到的地方跟着改；f 返回新的目标，不相干时返回 None
@@ -493,7 +515,11 @@ async fn quick_capture(
     open: bool,
 ) -> Cmd<TodoSummary> {
     let todo = store.quick_capture(&target.workspace, &target.project, &text)?;
-    let target = QuickTarget { workspace: target.workspace.trim().into(), project: target.project.trim().into() };
+    // 存成功了，名字都合法；记下规整过（去掉首尾空白）的
+    let target = QuickTarget {
+        workspace: store::normalize_name(&target.workspace, "工作区")?,
+        project: store::normalize_project_path(&target.project)?,
+    };
     let mut next = settings.get();
     if next.quick_capture_target != target {
         next.quick_capture_target = target.clone();
@@ -1156,8 +1182,17 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_web_link, with_window_state};
+    use super::{is_web_link, reparent, with_window_state};
     use serde_json::json;
+
+    #[test]
+    fn quick_target_follows_renamed_and_moved_projects() {
+        assert_eq!(reparent("需求", "需求", "开发").as_deref(), Some("开发"));
+        assert_eq!(reparent("需求/前端", "需求", "开发").as_deref(), Some("开发/前端"));
+        assert_eq!(reparent("需求/前端", "需求/前端", "前端").as_deref(), Some("前端"));
+        assert_eq!(reparent("需求二", "需求", "开发"), None);
+        assert_eq!(reparent("日常", "需求", "开发"), None);
+    }
 
     #[test]
     fn only_web_links_can_be_opened() {

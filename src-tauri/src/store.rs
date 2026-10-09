@@ -8,11 +8,14 @@
 //!     {项目}/
 //!       .todos.json          标题、完成状态、创建/修改时间等元数据
 //!       20260926-153012.md   待办正文（Markdown 纯文本）
+//!       {子项目}/            项目文件夹里的子文件夹是子项目，里面同样是 .todos.json 和 .md（只有一层子项目）
 //!   .state.json              界面状态：上次的位置、各待办的编辑位置等，内容由前端决定
 //!   .recycle/                软件的回收站：删除的工作区、项目、待办先放在这里，可以恢复
 //!     {条目 id}/entry.json   原来在哪里、标题和完成状态等
 //!     {条目 id}/{原名}       删除的 .md 文件或目录
 //! ```
+//!
+//! 接口里的项目用路径表示：顶层项目是它的名字，子项目是「父项目/子项目」（名字里不能有 /，不会混淆）。
 //!
 //! Markdown 文件是“待办是否存在”的唯一依据：元数据里有但文件不在的条目会被清理，
 //! 文件在但元数据里没有的（例如用户手动拷进来的 .md）会被自动补登记。
@@ -121,7 +124,9 @@ pub struct TodoSummary {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectNode {
+    /// 项目路径：顶层项目是名字，子项目是「父项目/子项目」
     pub name: String,
+    /// 只是这个项目自己的待办，不含子项目的
     pub todos: Vec<TodoSummary>,
 }
 
@@ -129,10 +134,11 @@ pub struct ProjectNode {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceTree {
     pub name: String,
+    /// 全部项目：每个顶层项目后面跟着它的子项目
     pub projects: Vec<ProjectNode>,
 }
 
-/// 一个工作区里的项目名（快速记录选择存到哪里时用，不读待办）
+/// 一个工作区里的项目路径（快速记录选择存到哪里时用，不读待办），子项目跟在它的父项目后面
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceProjects {
@@ -144,7 +150,9 @@ pub struct WorkspaceProjects {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
     pub name: String,
+    /// 顶层项目的个数（子项目不另算）
     pub project_count: usize,
+    /// 待办数，包括子项目里的
     pub todo_count: usize,
     pub done_count: usize,
     pub updated_at: i64,
@@ -205,10 +213,10 @@ struct RecycleFile {
     kind: RecycleKind,
     /// 原来在哪个工作区（删除的是工作区时是它自己）
     workspace: String,
-    /// 原来在哪个项目（删除的是项目时是它自己；删除工作区时没有）
+    /// 原来在哪个项目（项目路径，子项目是「父项目/子项目」；删除的是项目时是它自己；删除工作区时没有）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     project: Option<String>,
-    /// 删除的文件 / 目录在这一项里的名字（原来的名字）
+    /// 删除的文件 / 目录在这一项里的名字（原来的名字；子项目是它自己的名字，不带父项目）
     name: String,
     deleted_at: i64,
     /// 删除的待办的标题、完成状态等，恢复时还原
@@ -324,12 +332,12 @@ impl Store {
         Ok(dir)
     }
 
+    /// 项目（或子项目，路径是「父项目/子项目」）的目录
     fn project_dir(&self, ws: &str, project: &str) -> Result<PathBuf> {
         let ws_dir = self.ws_dir(ws)?;
-        check_component(project, "项目")?;
-        let dir = ws_dir.join(project);
+        let dir = project_parts(project)?.iter().fold(ws_dir, |d, p| d.join(p));
         if !dir.is_dir() {
-            return Err(format!("项目「{project}」不存在"));
+            return Err(format!("项目「{}」不存在", project_label(project)));
         }
         Ok(dir)
     }
@@ -370,8 +378,8 @@ impl Store {
                 done_count: 0,
                 updated_at: mtime_ms(&dir).unwrap_or(0),
             };
-            for (_, pdir) in list_subdirs(&dir)? {
-                info.project_count += 1;
+            for (project, pdir) in project_dirs(&dir)? {
+                info.project_count += !project.contains(PROJECT_SEP) as usize;
                 for t in scan_project(&pdir, None)? {
                     info.todo_count += 1;
                     info.done_count += t.done as usize;
@@ -383,13 +391,13 @@ impl Store {
         Ok(out)
     }
 
-    /// 全部工作区和其中的项目名，只列目录
+    /// 全部工作区和其中的项目路径（包括子项目），只列目录
     pub fn list_projects(&self) -> Result<Vec<WorkspaceProjects>> {
         let _g = self.guard();
         list_subdirs(&self.root)?
             .into_iter()
             .map(|(name, dir)| {
-                let projects = list_subdirs(&dir)?.into_iter().map(|(p, _)| p).collect();
+                let projects = project_dirs(&dir)?.into_iter().map(|(p, _)| p).collect();
                 Ok(WorkspaceProjects { name, projects })
             })
             .collect()
@@ -416,7 +424,7 @@ impl Store {
         let mut g = self.guard();
         let dir = self.ws_dir(name)?;
         let mut count = 0;
-        for (_, pdir) in list_subdirs(&dir)? {
+        for (_, pdir) in project_dirs(&dir)? {
             count += markdown_files(&pdir)?.len();
         }
         let id = self.recycle(&dir, RecycleFile::new(RecycleKind::Workspace, name, None, name, count))?;
@@ -429,7 +437,7 @@ impl Store {
         let dir = self.ws_dir(ws)?;
         let mut projects = Vec::new();
         let mut scanned = HashSet::new();
-        for (name, pdir) in list_subdirs(&dir)? {
+        for (name, pdir) in project_dirs(&dir)? {
             projects.push(ProjectNode {
                 name,
                 todos: scan_project(&pdir, Some(&mut g))?,
@@ -454,38 +462,77 @@ impl Store {
         Ok(name)
     }
 
-    pub fn rename_project(&self, ws: &str, name: &str, new_name: &str) -> Result<String> {
+    /// 在顶层项目 parent 里新建子项目，返回子项目的路径（「父项目/子项目」）
+    pub fn create_sub_project(&self, ws: &str, parent: &str, name: &str) -> Result<String> {
         let _g = self.guard();
-        let pdir = self.project_dir(ws, name)?;
-        let new_name = normalize_name(new_name, "项目")?;
-        rename_dir(&pdir, &self.ws_dir(ws)?, name, &new_name, "项目")?;
-        Ok(new_name)
+        if parent.contains(PROJECT_SEP) {
+            return Err("子项目里不能再建子项目".into());
+        }
+        let dir = self.project_dir(ws, parent)?;
+        let name = normalize_name(name, "子项目")?;
+        create_child_dir(&dir, &name, "子项目")?;
+        Ok(format!("{parent}{PROJECT_SEP}{name}"))
     }
 
-    /// 放进软件的回收站，返回回收站里这一项的 id
-    pub fn delete_project(&self, ws: &str, name: &str) -> Result<String> {
+    /// 改项目（或子项目）自己的名字，返回改名后的路径；子项目改名后还在原来的父项目里
+    pub fn rename_project(&self, ws: &str, project: &str, new_name: &str) -> Result<String> {
+        let _g = self.guard();
+        let pdir = self.project_dir(ws, project)?;
+        let (parent, name) = split_project(project);
+        let what = if parent.is_some() { "子项目" } else { "项目" };
+        let new_name = normalize_name(new_name, what)?;
+        let parent_dir = pdir.parent().ok_or("无效的项目名称")?;
+        rename_dir(&pdir, parent_dir, name, &new_name, what)?;
+        Ok(join_project(parent, &new_name))
+    }
+
+    /// 放进软件的回收站（顶层项目连同它的子项目），返回回收站里这一项的 id
+    pub fn delete_project(&self, ws: &str, project: &str) -> Result<String> {
         let mut g = self.guard();
-        let pdir = self.project_dir(ws, name)?;
-        let count = markdown_files(&pdir)?.len();
-        let id = self.recycle(&pdir, RecycleFile::new(RecycleKind::Project, ws, Some(name), name, count))?;
+        let pdir = self.project_dir(ws, project)?;
+        let (parent, name) = split_project(project);
+        let mut count = markdown_files(&pdir)?.len();
+        if parent.is_none() {
+            for (_, sdir) in list_subdirs(&pdir)? {
+                count += markdown_files(&sdir)?.len();
+            }
+        }
+        let id = self.recycle(&pdir, RecycleFile::new(RecycleKind::Project, ws, Some(project), name, count))?;
         g.forget_under(&pdir);
         Ok(id)
     }
 
-    /// 把项目连同其中的待办移到另一个工作区，项目名不变；目标工作区里已有同名项目时不移动
-    pub fn move_project(&self, ws: &str, name: &str, target: &str) -> Result<()> {
+    /// 把项目（或子项目）连同其中的待办移到工作区 target 的顶层（parent 为 None），或者放进它的顶层项目 parent 里
+    /// 成为子项目；名字不变，返回移过去后的路径。只有一层子项目：有子项目的项目不能放进别的项目。
+    /// 那里已有同名项目时不移动
+    pub fn move_project(&self, ws: &str, project: &str, target: &str, parent: Option<&str>) -> Result<String> {
         let _g = self.guard();
-        let pdir = self.project_dir(ws, name)?;
-        let dst_ws = self.ws_dir(target)?;
-        if dst_ws == self.ws_dir(ws)? {
-            return Err("已经在该工作区中".into());
+        let pdir = self.project_dir(ws, project)?;
+        let (_, name) = split_project(project);
+        let dst_parent = match parent {
+            None => self.ws_dir(target)?,
+            Some(p) if p.contains(PROJECT_SEP) => return Err("子项目里不能再放项目".into()),
+            Some(p) => self.project_dir(target, p)?,
+        };
+        if dst_parent.starts_with(&pdir) {
+            return Err("不能移到它自己里面".into());
+        }
+        if Some(dst_parent.as_path()) == pdir.parent() {
+            return Err(if parent.is_some() { "已经在该项目中" } else { "已经在该工作区中" }.into());
+        }
+        if parent.is_some() && !list_subdirs(&pdir)?.is_empty() {
+            return Err(format!("「{name}」里有子项目，不能放进别的项目（子项目里不能再有子项目）"));
         }
         // Windows 不区分大小写，exists 也会认出只差大小写的同名项目
-        let dst = dst_ws.join(name);
+        let dst = dst_parent.join(name);
         if dst.exists() {
-            return Err(format!("工作区「{target}」中已有同名项目「{name}」"));
+            return Err(match parent {
+                Some(p) => format!("项目「{p}」中已有同名子项目「{name}」"),
+                None => format!("工作区「{target}」中已有同名项目「{name}」"),
+            });
         }
-        fs::rename(&pdir, &dst).map_err(|e| format!("移动失败，可能有文件正被其他程序占用：{e}"))
+        fs::rename(&pdir, &dst).map_err(|e| format!("移动失败，可能有文件正被其他程序占用：{e}"))?;
+        Ok(join_project(parent, name))
     }
 
     // ----- 待办 -----
@@ -525,22 +572,24 @@ impl Store {
         Ok(summary_of(&entry, now, make_preview(content)))
     }
 
-    /// 快速记录：第一行当标题、其余当正文，存成工作区 ws 的项目 project 里的一条新待办；工作区、项目不在时先建
+    /// 快速记录：第一行当标题、其余当正文，存成工作区 ws 的项目 project（可以是子项目）里的一条新待办；
+    /// 工作区、项目不在时先建
     pub fn quick_capture(&self, ws: &str, project: &str, text: &str) -> Result<TodoSummary> {
         let (title, content) = split_quick_note(text);
         if title.is_empty() && content.is_empty() {
             return Err("没有要记的内容".into());
         }
+        let ws = normalize_name(ws, "工作区")?;
+        let project = normalize_project_path(project)?;
         {
             let _g = self.guard();
-            let ws = normalize_name(ws, "工作区")?;
-            let project = normalize_name(project, "项目")?;
-            let dir = self.root.join(ws).join(&project);
+            let dir = project.split(PROJECT_SEP).fold(self.root.join(&ws), |d, p| d.join(p));
             if !dir.is_dir() {
-                fs::create_dir_all(&dir).map_err(|e| format!("创建项目「{project}」失败：{e}"))?;
+                fs::create_dir_all(&dir)
+                    .map_err(|e| format!("创建项目「{}」失败：{e}", project_label(&project)))?;
             }
         }
-        self.create_todo(ws.trim(), project.trim(), &title, &content)
+        self.create_todo(&ws, &project, &title, &content)
     }
 
     pub fn read_todo(&self, ws: &str, project: &str, id: &str) -> Result<TodoDetail> {
@@ -768,7 +817,7 @@ impl Store {
         let mut hits = Vec::new();
         // 读不了的工作区、项目（正在外部被删、被占用）跳过，不让整个搜索失败
         for (workspace, ws_dir) in list {
-            let Ok(projects) = list_subdirs(&ws_dir) else { continue };
+            let Ok(projects) = project_dirs(&ws_dir) else { continue };
             for (project, pdir) in projects {
                 let Ok(texts) = g.project_texts(&pdir) else { continue };
                 for (id, text) in texts {
@@ -901,8 +950,7 @@ impl Store {
         let restored = match f.kind {
             RecycleKind::Todo => {
                 let project = f.project.clone().ok_or_else(gone)?;
-                check_component(&project, "项目")?;
-                let pdir = self.root.join(&f.workspace).join(&project);
+                let pdir = project_parts(&project)?.iter().fold(self.root.join(&f.workspace), |d, p| d.join(p));
                 fs::create_dir_all(&pdir).map_err(|e| format!("恢复失败：{e}"))?;
                 let mut meta = read_meta(&pdir)?;
                 let stem = f.name.strip_suffix(".md").unwrap_or(&f.name).to_string();
@@ -939,12 +987,22 @@ impl Store {
                 }
             }
             RecycleKind::Project => {
-                let ws_dir = self.root.join(&f.workspace);
-                fs::create_dir_all(&ws_dir).map_err(|e| format!("恢复失败：{e}"))?;
-                let (name, renamed) = free_name(&ws_dir, &f.name);
-                fs::rename(&payload, ws_dir.join(&name)).map_err(|e| format!("恢复失败：{e}"))?;
-                g.forget_under(&ws_dir.join(&name));
-                Restored { kind: f.kind, workspace: f.workspace.clone(), project: Some(name), todo_id: None, renamed }
+                // 子项目恢复到原来的父项目里（父项目不在了重新建）；以前的版本记的项目没有父项目
+                let parent = match f.project.as_deref().map(split_project) {
+                    Some((Some(p), _)) => Some(p),
+                    _ => None,
+                };
+                let mut dir = self.root.join(&f.workspace);
+                if let Some(p) = parent {
+                    check_component(p, "项目")?;
+                    dir = dir.join(p);
+                }
+                fs::create_dir_all(&dir).map_err(|e| format!("恢复失败：{e}"))?;
+                let (name, renamed) = free_name(&dir, &f.name);
+                fs::rename(&payload, dir.join(&name)).map_err(|e| format!("恢复失败：{e}"))?;
+                g.forget_under(&dir.join(&name));
+                let project = Some(join_project(parent, &name));
+                Restored { kind: f.kind, workspace: f.workspace.clone(), project, todo_id: None, renamed }
             }
             RecycleKind::Workspace => {
                 let (name, renamed) = free_name(&self.root, &f.name);
@@ -1588,6 +1646,55 @@ pub fn normalize_name(raw: &str, what: &str) -> Result<String> {
 }
 
 // ---------------------------------------------------------------------------
+// 项目路径：顶层项目是名字，子项目是「父项目/子项目」（只有一层子项目）
+// ---------------------------------------------------------------------------
+
+/// 项目路径里父项目和子项目之间的分隔符；名字里不能有它，不会和名字混淆
+pub const PROJECT_SEP: char = '/';
+
+/// 访问已有项目时拆开路径：一级（顶层项目）或两级（子项目），每级只防路径穿越和非法字符
+fn project_parts(project: &str) -> Result<Vec<&str>> {
+    let parts: Vec<&str> = project.split(PROJECT_SEP).collect();
+    if parts.len() > 2 {
+        return Err("无效的项目名称".into());
+    }
+    for p in &parts {
+        check_component(p, "项目")?;
+    }
+    Ok(parts)
+}
+
+/// 拆成父项目（顶层项目没有）和它自己的名字；不校验
+fn split_project(project: &str) -> (Option<&str>, &str) {
+    match project.split_once(PROJECT_SEP) {
+        Some((parent, name)) => (Some(parent), name),
+        None => (None, project),
+    }
+}
+
+fn join_project(parent: Option<&str>, name: &str) -> String {
+    match parent {
+        Some(p) => format!("{p}{PROJECT_SEP}{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// 提示里的项目路径：父项目 / 子项目
+fn project_label(project: &str) -> String {
+    project.replace(PROJECT_SEP, " / ")
+}
+
+/// 新建、设置（快速记录存到哪里）时的严格校验：每一级按 normalize_name，返回规整后的路径
+pub fn normalize_project_path(raw: &str) -> Result<String> {
+    let parts: Vec<&str> = raw.split(PROJECT_SEP).collect();
+    if parts.len() > 2 {
+        return Err("子项目里不能再有子项目".into());
+    }
+    let parts = parts.into_iter().map(|p| normalize_name(p, "项目")).collect::<Result<Vec<_>>>()?;
+    Ok(parts.join(&PROJECT_SEP.to_string()))
+}
+
+// ---------------------------------------------------------------------------
 // 文件系统辅助
 // ---------------------------------------------------------------------------
 
@@ -1612,6 +1719,21 @@ fn list_subdirs(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
             continue;
         }
         out.push((name, entry.path()));
+    }
+    Ok(out)
+}
+
+/// 工作区里的全部项目（路径和目录）：每个顶层项目后面跟着它的子项目（项目文件夹里的子文件夹）。
+/// 子项目里再有文件夹不算（只有一层子项目）
+fn project_dirs(ws_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut out = Vec::new();
+    for (name, dir) in list_subdirs(ws_dir)? {
+        let subs: Vec<_> = list_subdirs(&dir)?
+            .into_iter()
+            .map(|(sub, sdir)| (format!("{name}{PROJECT_SEP}{sub}"), sdir))
+            .collect();
+        out.push((name, dir));
+        out.extend(subs);
     }
     Ok(out)
 }
@@ -2009,11 +2131,11 @@ mod tests {
         let t = s.create_todo("甲", "项目", "带着走", "").unwrap();
         s.set_todo_done("甲", "项目", &t.id, true).unwrap();
 
-        assert!(s.move_project("甲", "项目", "甲").is_err());
-        assert!(s.move_project("甲", "重名", "乙").is_err());
-        assert!(s.move_project("甲", "不存在", "乙").is_err());
-        assert!(s.move_project("甲", "项目", "丙").is_err());
-        s.move_project("甲", "项目", "乙").unwrap();
+        assert!(s.move_project("甲", "项目", "甲", None).is_err());
+        assert!(s.move_project("甲", "重名", "乙", None).is_err());
+        assert!(s.move_project("甲", "不存在", "乙", None).is_err());
+        assert!(s.move_project("甲", "项目", "丙", None).is_err());
+        assert_eq!(s.move_project("甲", "项目", "乙", None).unwrap(), "项目");
 
         let names = |ws: &str| s.load_workspace(ws).unwrap().projects.into_iter().map(|p| p.name).collect::<Vec<_>>();
         assert_eq!(names("甲"), ["重名"]);
@@ -2022,6 +2144,159 @@ mod tests {
         assert_eq!(b, ["重名", "项目"]);
         let moved = s.read_todo("乙", "项目", &t.id).unwrap();
         assert_eq!((moved.summary.title.as_str(), moved.summary.done), ("带着走", true));
+    }
+
+    fn project_names(s: &Store, ws: &str) -> Vec<String> {
+        s.load_workspace(ws).unwrap().projects.into_iter().map(|p| p.name).collect()
+    }
+
+    #[test]
+    fn sub_projects_are_folders_in_the_project() {
+        let (_tmp, s) = store("sub-projects");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "需求").unwrap();
+        s.create_project("w", "日常").unwrap();
+        assert_eq!(s.create_sub_project("w", "需求", " 前端 ").unwrap(), "需求/前端");
+        assert_eq!(s.create_sub_project("w", "需求", "后端").unwrap(), "需求/后端");
+        // 只有一层子项目；重名（不分大小写）、父项目不在的建不了
+        assert!(s.create_sub_project("w", "需求/前端", "组件").is_err());
+        assert!(s.create_sub_project("w", "需求", "前端").is_err());
+        assert!(s.create_sub_project("w", "不存在", "x").is_err());
+        assert!(s.create_sub_project("w", "需求", "a/b").is_err());
+        assert!(s.root().join("w/需求/前端").is_dir());
+
+        // 父项目自己也能放待办；子项目的待办和读写、标记完成、移动都按路径
+        let own = s.create_todo("w", "需求", "父项目自己的", "").unwrap();
+        let t = s.create_todo("w", "需求/前端", "子项目的", "正文").unwrap();
+        s.set_todo_done("w", "需求/前端", &t.id, true).unwrap();
+        assert_eq!(s.read_todo("w", "需求/前端", &t.id).unwrap().content, "正文");
+        assert!(s.root().join("w/需求/前端").join(format!("{}.md", t.id)).is_file());
+
+        // 子项目跟在父项目后面；父项目只列自己的待办
+        let mut names = project_names(&s, "w");
+        names.sort();
+        assert_eq!(names, ["日常", "需求", "需求/前端", "需求/后端"]);
+        let tree = s.load_workspace("w").unwrap();
+        let at = |n: &str| tree.projects.iter().position(|p| p.name == n).unwrap();
+        assert!(at("需求") < at("需求/前端") && at("需求") < at("需求/后端"));
+        let parent = &tree.projects[at("需求")];
+        assert_eq!(parent.todos.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), [own.id.as_str()]);
+        assert!(tree.projects[at("需求/前端")].todos[0].done);
+
+        // 首页的卡片：项目数只算顶层项目，待办数包括子项目里的
+        let info = &s.list_workspaces().unwrap()[0];
+        assert_eq!((info.project_count, info.todo_count, info.done_count), (2, 2, 1));
+        let listed = &s.list_projects().unwrap()[0].projects;
+        assert!(listed.contains(&"需求/前端".to_string()) && listed.len() == 4);
+
+        // 子项目里再有文件夹不算项目；不认的路径
+        fs::create_dir_all(s.root().join("w/需求/前端/图片")).unwrap();
+        assert_eq!(project_names(&s, "w").len(), 4);
+        assert!(s.read_todo("w", "需求/前端/图片", "x").is_err());
+        assert!(s.read_todo("w", "需求/../日常", &own.id).is_err());
+
+        // 全文搜索也查子项目
+        let hits = s.search(None, "正文").unwrap();
+        assert_eq!((hits[0].project.as_str(), hits.len()), ("需求/前端", 1));
+
+        let m = s.move_todo("w", "需求/前端", &t.id, "w", "日常").unwrap();
+        s.move_todo("w", "日常", &m.id, "w", "需求/后端").unwrap();
+        assert_eq!(s.load_workspace("w").unwrap().projects[at("需求/后端")].todos.len(), 1);
+    }
+
+    #[test]
+    fn rename_and_delete_sub_projects() {
+        let (_tmp, s) = store("sub-rename");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "需求").unwrap();
+        s.create_sub_project("w", "需求", "前端").unwrap();
+        s.create_sub_project("w", "需求", "后端").unwrap();
+        let t = s.create_todo("w", "需求/前端", "子项目的", "").unwrap();
+        s.create_todo("w", "需求", "父项目的", "").unwrap();
+
+        // 子项目改名还在原来的父项目里；和同一父项目里的别的子项目重名不行
+        assert_eq!(s.rename_project("w", "需求/前端", "界面").unwrap(), "需求/界面");
+        assert!(s.rename_project("w", "需求/界面", "后端").is_err());
+        assert!(s.read_todo("w", "需求/界面", &t.id).is_ok());
+        // 父项目改名，子项目跟着
+        assert_eq!(s.rename_project("w", "需求", "开发").unwrap(), "开发");
+        assert!(s.read_todo("w", "开发/界面", &t.id).is_ok());
+
+        // 删除子项目：回收站里记着在哪个父项目里，恢复回去
+        let rid = s.delete_project("w", "开发/界面").unwrap();
+        let e = &s.list_recycle().unwrap()[0];
+        assert_eq!((e.title.as_str(), e.project.as_deref(), e.todo_count), ("界面", Some("开发/界面"), 1));
+        assert!(!project_names(&s, "w").contains(&"开发/界面".to_string()));
+        let r = s.restore(&[rid]);
+        assert_eq!(r.restored[0].project.as_deref(), Some("开发/界面"));
+        assert!(s.read_todo("w", "开发/界面", &t.id).is_ok());
+
+        // 名字被占用了加「（恢复）」，还在父项目里
+        let rid = s.delete_project("w", "开发/界面").unwrap();
+        s.create_sub_project("w", "开发", "界面").unwrap();
+        let r = s.restore(&[rid]);
+        assert_eq!((r.restored[0].project.as_deref(), r.restored[0].renamed), (Some("开发/界面（恢复）"), true));
+
+        // 删除父项目连同子项目，待办数一起算；父项目不在了时恢复子项目的待办会重新建
+        let gone = s.create_todo("w", "开发/后端", "删掉的", "").unwrap();
+        let tid = s.delete_todo("w", "开发/后端", &gone.id).unwrap();
+        let pid = s.delete_project("w", "开发").unwrap();
+        // 父项目自己的 1 条，子项目「界面（恢复）」里的 1 条
+        assert_eq!(s.list_recycle().unwrap()[0].todo_count, 2);
+        assert!(project_names(&s, "w").is_empty());
+        let r = s.restore(&[tid]);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(project_names(&s, "w"), ["开发", "开发/后端"]);
+        let r = s.restore(&[pid]);
+        assert_eq!(r.restored[0].project.as_deref(), Some("开发（恢复）"));
+        let mut names = project_names(&s, "w");
+        names.sort();
+        assert_eq!(names, ["开发", "开发/后端", "开发（恢复）", "开发（恢复）/后端", "开发（恢复）/界面", "开发（恢复）/界面（恢复）"]);
+    }
+
+    #[test]
+    fn move_projects_in_and_out_of_projects() {
+        let (_tmp, s) = store("sub-move");
+        s.create_workspace("甲").unwrap();
+        s.create_workspace("乙").unwrap();
+        s.create_project("甲", "需求").unwrap();
+        s.create_project("甲", "日常").unwrap();
+        s.create_project("甲", "零散").unwrap();
+        s.create_sub_project("甲", "需求", "前端").unwrap();
+        s.create_project("乙", "重名").unwrap();
+        s.create_sub_project("乙", "重名", "零散").unwrap();
+        let t = s.create_todo("甲", "日常", "带着走", "").unwrap();
+
+        // 放进同一工作区的项目里，成为子项目
+        assert_eq!(s.move_project("甲", "日常", "甲", Some("需求")).unwrap(), "需求/日常");
+        assert!(s.read_todo("甲", "需求/日常", &t.id).is_ok());
+        // 子项目移出来到顶层
+        assert_eq!(s.move_project("甲", "需求/日常", "甲", None).unwrap(), "日常");
+        // 子项目移到别的工作区的项目里
+        assert_eq!(s.move_project("甲", "需求/前端", "乙", Some("重名")).unwrap(), "重名/前端");
+        // 有子项目的项目整个移到别的工作区顶层，子项目跟着
+        s.create_sub_project("甲", "需求", "后端").unwrap();
+        assert_eq!(s.move_project("甲", "需求", "乙", None).unwrap(), "需求");
+        assert!(project_names(&s, "乙").contains(&"需求/后端".to_string()));
+
+        // 不行的：有子项目的放进别的项目、放进子项目、放进自己、已经在那里、重名
+        assert!(s.move_project("乙", "需求", "乙", Some("重名")).is_err());
+        assert!(s.move_project("甲", "日常", "乙", Some("需求/后端")).is_err());
+        assert!(s.move_project("甲", "日常", "甲", Some("日常")).is_err());
+        assert!(s.move_project("乙", "重名/前端", "乙", Some("重名")).is_err());
+        assert!(s.move_project("甲", "日常", "甲", None).is_err());
+        assert!(s.move_project("甲", "零散", "乙", Some("重名")).is_err());
+        assert!(s.move_project("甲", "日常", "乙", Some("不存在")).is_err());
+        assert!(s.read_todo("甲", "日常", &t.id).is_ok());
+    }
+
+    #[test]
+    fn quick_capture_into_sub_project() {
+        let (_tmp, s) = store("sub-quick");
+        let t = s.quick_capture("收件箱", " 灵感 / 产品 ", "想法\n细节").unwrap();
+        assert_eq!(t.title, "想法");
+        assert!(s.read_todo("收件箱", "灵感/产品", &t.id).is_ok());
+        assert!(s.quick_capture("收件箱", "a/b/c", "x").is_err());
     }
 
     #[test]
@@ -2487,7 +2762,8 @@ mod tests {
         assert_ne!(t.id, t2.id);
         // 空的不建
         assert!(s.quick_capture("收件箱", "快速记录", " \n ").is_err());
-        assert!(s.quick_capture("收件箱", "a/b", "内容").is_err());
+        // 不合法的项目名（「a/b」是子项目，可以）
+        assert!(s.quick_capture("收件箱", "a\\b", "内容").is_err());
 
         let mut list = s.list_projects().unwrap();
         list.sort_by(|a, b| a.name.cmp(&b.name));
