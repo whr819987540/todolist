@@ -60,6 +60,14 @@ interface Props {
 const MIN_SIDEBAR = 240;
 const MAX_SIDEBAR = 560;
 
+/** 左侧列表（侧栏）/ 右侧 */
+type Side = "sidebar" | "main";
+/** 元素在哪一侧；都不在（body、页面最外层的弹出菜单和选择框）时是 null */
+function sideOf(el: EventTarget | null): Side | null {
+  if (!(el instanceof Element)) return null;
+  return el.closest(".sidebar") ? "sidebar" : el.closest(".main") ? "main" : null;
+}
+
 function sortTree(t: WorkspaceTree): WorkspaceTree {
   return { ...t, projects: [...t.projects].sort((a, b) => compareName(a.name, b.name)) };
 }
@@ -571,16 +579,20 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     focusMainRef.current = focusMain;
     tabsRef.current = { shownTabs, activeTodo, activateTab, closeTabs };
   });
-  // 焦点最后在哪一侧：切标签时编辑器重建的一瞬间焦点不在任何地方，Alt+方向键仍按右侧算
-  const region = useRef<"sidebar" | "main" | null>(null);
+  // 最后获得焦点或用鼠标点过的一侧。焦点不在左右任何一侧时 Alt+方向键按它算：切标签时编辑器重建的一瞬间焦点不在
+  // 任何地方，仍算右侧；点了侧栏里不能获得焦点的地方（标题、底部的统计）焦点落到 body 上，算左侧；
+  // 弹出的菜单、选择框在页面最外层，按打开它时点的那一侧算
+  const region = useRef<Side | null>(null);
   useEffect(() => {
-    const onFocus = (e: FocusEvent) => {
-      const el = e.target as Element | null;
-      if (el?.closest?.(".sidebar")) region.current = "sidebar";
-      else if (el?.closest?.(".main")) region.current = "main";
+    const track = (e: Event) => {
+      region.current = sideOf(e.target) ?? region.current;
     };
-    document.addEventListener("focusin", onFocus);
-    return () => document.removeEventListener("focusin", onFocus);
+    document.addEventListener("focusin", track);
+    document.addEventListener("pointerdown", track, true);
+    return () => {
+      document.removeEventListener("focusin", track);
+      document.removeEventListener("pointerdown", track, true);
+    };
   }, []);
   // 这次按下的 Alt+↑ 关了标签：按住不放时后面的重复事件什么都不做（同 Ctrl+W 只关一个）。
   // 不能只看还有没有标签：关掉的是最后一个时，重复事件会落到「在左侧列表里选中上一项」，按住时选中项一行行往上走
@@ -637,7 +649,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         if (heldAfterClose) return;
         const { shownTabs, activeTodo, activateTab, closeTabs } = tabsRef.current;
         const at = tabIndex(shownTabs, activeTodo);
-        if (region.current === "main" && at >= 0 && pickedItems.length < 2 && e.key !== "ArrowDown") {
+        const side = sideOf(document.activeElement) ?? region.current;
+        if (side === "main" && at >= 0 && pickedItems.length < 2 && e.key !== "ArrowDown") {
           if (e.key === "ArrowUp") {
             if (!e.repeat) {
               closeTabs([shownTabs[at]]);

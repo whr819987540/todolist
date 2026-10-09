@@ -126,6 +126,17 @@ export default async function (t) {
   check("左侧列表里 Alt+→ 焦点回到正文", await bodyFocused());
   await m.press("Alt+ArrowRight");
   await loaded("C");
+  // 点了侧栏里不能获得焦点的地方（底部的统计）：焦点落到 body 上，按点过的左侧算，Alt+← 回到左侧列表、不切标签
+  await m.click(await m.at(".sidebar-stats"));
+  await m.press("Alt+ArrowLeft");
+  await t.sleep(300);
+  check(
+    "点了侧栏底部的统计后 Alt+← 回到左侧列表，不切标签",
+    (await tabs()) === "B C*" && (await m.ev(`return !!document.activeElement?.closest(".sidebar")`)),
+    await tabs(),
+  );
+  await m.press("Alt+ArrowRight");
+  await t.sleep(300);
 
   // 关闭：Ctrl+W 关掉正显示着的，切到右边的（没有时左边的）；鼠标中键；右键「关闭其他标签」
   await m.ev(`return await openTodo("工作", "需求", "长文档")`);
