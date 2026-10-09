@@ -1,10 +1,12 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { App as AntApp } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import Home from "./components/Home";
 import type { Selection } from "./components/sidebar/tree";
 import WorkspaceView, { type WorkspaceViewHandle } from "./components/WorkspaceView";
+import { restoreDoneText, takeRestoreNotice } from "./dataBackup";
 import { flushAll, useAppEvent } from "./hooks";
 import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
@@ -25,10 +27,14 @@ type View = { name: "home" } | { name: "workspace"; workspace: string; sel: Entr
 
 const HOME: View = { name: "home" };
 
+/** 刚恢复完待办数据、整页重新加载过：恢复的结果（只在加载时取一次），回到首页并显示它 */
+const restoreNotice = takeRestoreNotice();
+let restoreNoticeShown = false;
+
 /**
  * 打开软件时显示的界面：默认首页；设置里选了「回到上次的位置」时，回到上次停留的工作区和待办
  * （侧栏选中的工作区由 WorkspaceView 恢复）。右侧显示的工作区已不在时改显示还在的选中工作区中的第一个，
- * 都不在了就回首页；项目、待办不在了由 WorkspaceView 退回上一级。
+ * 都不在了就回首页；项目、待办不在了由 WorkspaceView 退回上一级。刚恢复完待办数据时总是首页。
  * 先读出数据目录里的界面状态（上次的位置、编辑位置等），之后首页和工作区视图直接用
  */
 async function startView(): Promise<View> {
@@ -36,7 +42,7 @@ async function startView(): Promise<View> {
   try {
     const [{ settings }] = await Promise.all([api.getSettings(), loaded]);
     const last = readLastView();
-    if (settings.startupView !== "lastPosition" || !last) return HOME;
+    if (restoreNotice || settings.startupView !== "lastPosition" || !last) return HOME;
     const names = new Set((await api.listWorkspaces()).map((w) => w.name));
     const { workspace, ...sel } = last;
     if (names.has(workspace)) return { name: "workspace", workspace, sel };
@@ -57,10 +63,18 @@ export default function App() {
   const workspaceRef = useRef<WorkspaceViewHandle | null>(null);
   const { autoSave } = useSaveOptions();
   const autoSaveRef = useRef(autoSave);
+  const { modal } = AntApp.useApp();
   useEffect(() => {
     autoSaveRef.current = autoSave;
     viewRef.current = view;
   });
+
+  // 刚恢复完待办数据：显示恢复了什么（开发时 StrictMode 会把 effect 执行两次，只显示一次）
+  useEffect(() => {
+    if (!restoreNotice || restoreNoticeShown) return;
+    restoreNoticeShown = true;
+    modal.success({ title: "待办数据已恢复", content: restoreDoneText(restoreNotice), okText: "知道了" });
+  }, [modal]);
 
   useEffect(() => {
     let cancelled = false;

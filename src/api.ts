@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AutoBackupStatus,
+  DataBackupDone,
+  DataBackupInfo,
+  DataRestoreDone,
   EditorBackground,
   FontArea,
   QuickTarget,
@@ -159,6 +163,29 @@ export const api = {
   /** 弹出「打开」对话框（从数据目录打开）选择本地的备份包，返回路径；取消时返回 null */
   pickBackupFile: () => invoke<string | null>("pick_backup_file"),
   restoreFromFile: (path: string) => invoke<SettingsInfo>("restore_from_file", { path }),
+
+  // 待办数据的备份与恢复
+
+  /** 弹出「另存为」对话框（从自动备份目录打开）选择数据备份存到哪里，返回路径；取消时返回 null */
+  pickDataBackupTarget: () => invoke<string | null>("pick_data_backup_target"),
+  /** 把待办数据打包存到 path（后台做，数据多时要几秒） */
+  backupDataToFile: (path: string) => invoke<DataBackupDone>("backup_data_to_file", { path }),
+  /** 把待办数据打包上传到 WebDAV 的远程目录 */
+  backupDataToWebdav: () => invoke<DataBackupDone>("backup_data_to_webdav"),
+  /** 弹出「打开」对话框（从自动备份目录打开）选择要恢复的数据备份，返回路径；取消时返回 null */
+  pickDataBackupFile: () => invoke<string | null>("pick_data_backup_file"),
+  /** 读出本地数据备份的备份时间等；不是数据备份时 reject，说明是什么 */
+  inspectDataBackup: (path: string) => invoke<DataBackupInfo>("inspect_data_backup", { path }),
+  /** 用备份替换现在的全部待办数据（先自动备份一份现在的）；要经 dataBackup.ts 的 restoreData 调用 */
+  restoreDataFromFile: (path: string) => invoke<DataRestoreDone>("restore_data_from_file", { path }),
+  restoreDataFromWebdav: (name: string) => invoke<DataRestoreDone>("restore_data_from_webdav", { name }),
+  getAutoBackupStatus: () => invoke<AutoBackupStatus>("get_auto_backup_status"),
+  /** dir 为空串时用默认的备份目录；keep 超出范围时后端取边界值。改完马上检查一次 */
+  setAutoBackup: (options: { enabled: boolean; dir: string; keep: number; webdav: boolean }) =>
+    invoke<SettingsInfo>("set_auto_backup", options),
+  /** 选备份目录的对话框，返回选中的文件夹；取消时返回 null */
+  pickBackupDir: () => invoke<string | null>("pick_backup_dir"),
+  openBackupDir: () => invoke<void>("open_backup_dir"),
 };
 
 /** invoke 失败时 reject 的是 Rust 端返回的中文错误字符串 */

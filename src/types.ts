@@ -161,6 +161,14 @@ export interface AppSettings {
   theme: ThemeMode;
   /** 编辑快捷键里改过的：命令（editShortcuts.ts 的 EditCommandId）→ 快捷键，null 表示不使用；没改过的不在里面 */
   editShortcuts: Record<string, string | null>;
+  /** 每天自动备份待办数据 */
+  autoBackup: boolean;
+  /** 自动备份存到的目录；空串是默认的（数据目录旁边的「数据目录名-backups」） */
+  autoBackupDir: string;
+  /** 自动备份保留最近几份 */
+  autoBackupKeep: number;
+  /** 自动备份时同时上传到 WebDAV */
+  autoBackupWebdav: boolean;
 }
 
 export interface SettingsInfo {
@@ -185,10 +193,69 @@ export interface WebDavInfo {
   hasPassword: boolean;
 }
 
+/** 备份是哪一种：设置的、待办数据的 */
+export type BackupKind = "settings" | "data";
+
 export interface RemoteBackup {
-  /** 文件名，如 TodoList-settings-20260926-153012.zip */
+  /** 文件名，如 TodoList-settings-20260926-153012.zip、TodoList-data-20261009-153012.zip */
   name: string;
   size: number | null;
   /** 备份时间，从文件名解析 */
   time: number;
+  kind: BackupKind;
+}
+
+/** 备份完待办数据 */
+export interface DataBackupDone {
+  /** 本地的是完整路径，WebDAV 上的是文件名 */
+  path: string;
+  name: string;
+  workspaces: number;
+  todos: number;
+}
+
+/** 本地数据备份的说明（恢复前确认时显示） */
+export interface DataBackupInfo {
+  name: string;
+  /** 备份时间 */
+  time: number;
+  workspaces: number;
+  todos: number;
+  appVersion: string;
+}
+
+/** 恢复完待办数据 */
+export interface DataRestoreDone {
+  workspaces: number;
+  todos: number;
+  /** 备份的时间 */
+  time: number;
+  /** 恢复前的数据备份到了哪里（完整路径） */
+  before: string;
+}
+
+/** 自动备份的一次结果：备份了、数据没有变化而跳过、失败了 */
+export interface AutoBackupRun {
+  time: number;
+  outcome: "done" | "unchanged" | "failed";
+  /** 备份的文件名 */
+  name: string | null;
+  /** 失败的原因 */
+  error: string | null;
+  /** 本地备份好了、上传 WebDAV 失败的原因 */
+  webdavError: string | null;
+}
+
+export interface AutoBackupStatus {
+  /** 现在用的备份目录 */
+  dir: string;
+  defaultDir: string;
+  /** 正在自动备份 */
+  running: boolean;
+  /** 备份目录里最新的一份自动备份 */
+  latest: { name: string; time: number } | null;
+  /** 备份目录里有几份 */
+  count: number;
+  /** 这次运行期间最近一次自动备份的结果 */
+  lastRun: AutoBackupRun | null;
 }

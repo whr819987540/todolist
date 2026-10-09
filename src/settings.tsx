@@ -21,6 +21,9 @@ const FONT_AREAS = Object.keys(FONT_FIELDS) as FontArea[];
 /** 定时保存间隔的可调范围（秒），与 settings.rs 的 SAVE_DELAY_RANGE 一致 */
 export const SAVE_DELAY_LIMITS = { min: 1, max: 3600 };
 
+/** 自动备份保留几份的可调范围，与 settings.rs 的 AUTO_BACKUP_KEEP_RANGE 一致 */
+export const AUTO_BACKUP_KEEP_LIMITS = { min: 1, max: 100 };
+
 type SaveOptions = Pick<AppSettings, "autoSave" | "saveDelaySecs">;
 
 /** 设置还没读出来时用的保存方式，与 settings.rs 的默认值一致 */
