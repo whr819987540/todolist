@@ -52,8 +52,11 @@ export interface ActionContext {
   onHome: () => void;
   /** 先存盘再返回首页 */
   goHome: () => void;
-  /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
-  flushEditor: () => Promise<unknown>;
+  /**
+   * 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘；返回是否存好了（没打开着待办也算），
+   * 正文有冲突（弹出了冲突对话框）、保存失败（已提示）时为 false
+   */
+  flushEditor: () => Promise<boolean>;
   editorRef: React.RefObject<EditorHandle | null>;
   openDialog: ReturnType<typeof useNameDialog>[1];
   collapsed: PerWorkspace<Collapsed>;
@@ -143,6 +146,14 @@ export function useWorkspaceActions(ctx: ActionContext) {
     setCollapsed(toWs, (c) => ({ ...c, ...moved }));
   };
 
+  /**
+   * 右侧打开着的待办先存盘：存不上（弹出了冲突对话框、保存失败已提示）时抛出，what 这个操作不做（不 detach，
+   * 冲突对话框留着让用户先处理）；抛出的原因在重命名的对话框里显示，别的操作经 run 提示
+   */
+  const saveFirst = async (what: string) => {
+    if (!(await flushEditor())) throw new Error(`打开着的待办还没保存好，先处理好再${what}`);
+  };
+
   /** 执行操作，出错时弹出提示；返回是否成功 */
   const run = async (fn: () => Promise<void>) => {
     try {
@@ -184,7 +195,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           title: "重命名工作区",
           initial: ws,
           onSubmit: async (v) => {
-            if (inSel) await flushEditor();
+            if (inSel) await saveFirst("重命名");
             const name = await api.renameWorkspace(ws, v);
             if (inSel) editorRef.current?.detach();
             renameWorkspaceMemory(ws, name);
@@ -199,7 +210,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           `删除工作区「${ws}」？`,
           `其中的 ${tree?.projects.length ?? 0} 个项目、${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
-            if (inSel) await flushEditor();
+            if (inSel) await saveFirst("删除");
             const rid = await api.deleteWorkspace(ws);
             if (inSel) editorRef.current?.detach();
             forgetWorkspaceMemory(ws);
@@ -248,7 +259,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           initial: leafName(project),
           onSubmit: async (v) => {
             const isSel = showsProject(project);
-            if (isSel) await flushEditor();
+            if (isSel) await saveFirst("重命名");
             const name = await api.renameProject(ws, project, v);
             if (isSel) editorRef.current?.detach();
             renameProjectState(ws, project, name);
@@ -267,7 +278,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           `其中的 ${subs ? `${subs} 个子项目、` : ""}${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
             const isSel = showsProject(project);
-            if (isSel) await flushEditor();
+            if (isSel) await saveFirst("删除");
             const rid = await api.deleteProject(ws, project);
             if (isSel) {
               editorRef.current?.detach();
@@ -282,7 +293,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       moveProject: (project, targetWs, parent) =>
         run(async () => {
           const isSel = showsProject(project);
-          if (isSel) await flushEditor();
+          if (isSel) await saveFirst("移动");
           // 移过去后的路径：放进项目后是「父项目/名字」，子项目移出来后是名字
           const to = await api.moveProject(ws, project, targetWs, parent);
           if (isSel) editorRef.current?.detach();
@@ -325,7 +336,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       deleteTodo: (project, t) =>
         confirmDelete(`删除待办「${displayTitle(t).text}」？`, "将被移到回收站，可以在回收站里恢复。", async () => {
           const isSel = isSelTodo(project, t.id);
-          if (isSel) await flushEditor();
+          if (isSel) await saveFirst("删除");
           const rid = await api.deleteTodo(ws, project, t.id);
           if (isSel) {
             editorRef.current?.detach();
@@ -344,7 +355,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       moveTodo: (project, t, target, targetWs = ws) =>
         run(async () => {
           const isSel = isSelTodo(project, t.id);
-          if (isSel) await flushEditor();
+          if (isSel) await saveFirst("移动");
           const moved = await api.moveTodo(ws, project, t.id, targetWs, target);
           if (isSel) editorRef.current?.detach();
           moveTodoState(ws, project, t.id, [targetWs, target, moved.id]);
@@ -370,7 +381,8 @@ export function useWorkspaceActions(ctx: ActionContext) {
         }),
       openExternal: (project, t) =>
         run(async () => {
-          if (isSelTodo(project, t.id)) await flushEditor();
+          // 用默认程序打开的是磁盘上的文件：没存好时那边看到的是旧的内容
+          if (isSelTodo(project, t.id)) await saveFirst("用默认程序打开");
           await api.openTodoExternal(ws, project, t.id);
         }),
       revealTodo: (project, t) => run(() => api.revealTodo(ws, project, t.id)),
@@ -379,7 +391,8 @@ export function useWorkspaceActions(ctx: ActionContext) {
 
   /**
    * 逐条执行 fn，返回成功的条数；有失败的弹出提示（失败的条数和第一条的原因），成功的照常算。
-   * 多选的待办不会有打开着的（多选时右侧是批量操作，编辑器已经存好、关掉了），不用先存盘
+   * 多选的待办不会有打开着的（多选时右侧是批量操作，编辑器已经关掉了，关掉时存好了，存不上的另存成了新待办），
+   * 不用先存盘
    */
   const each = async (items: TodoAt[], fn: (x: TodoAt) => Promise<void>): Promise<number> => {
     let ok = 0;

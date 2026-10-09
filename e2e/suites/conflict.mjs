@@ -1,5 +1,6 @@
 // 外部修改冲突：有没保存的修改时窗口获得焦点、正文在外部被改过，立即弹出冲突对话框；离开这条待办（切到别的待办、
-// 正显示着冲突对话框时被切走）、从托盘退出时存不上的（外部改过、待办或项目在外部被删了），自动另存为新待办，两份都保留
+// 正显示着冲突对话框时被切走）、从托盘退出时存不上的（外部改过、待办或项目在外部被删了），自动另存为新待办，两份都保留；
+// 重命名、删除之前存不上时不做
 export const title = "外部修改冲突";
 
 export default async function (t) {
@@ -115,6 +116,48 @@ export default async function (t) {
     !!copyE && t.read(`收件箱/快速记录/${copyE.id}.md`) === mineE && (await toastHas("收件箱 / 快速记录")),
     { copyE, toast: await m.toast() },
   );
+
+  // 重命名、删除之前先存盘：存不上（外部改过）时不做，冲突对话框留着
+  const menu = async (sel, text) => {
+    await m.click(await m.at(sel), { right: true });
+    await m.ev(`await sleep(300); menuItem(${JSON.stringify(text)}).click(); await sleep(300); return 1`);
+  };
+  /** 点名称对话框的「确定」 */
+  const submitName = () =>
+    m.ev(`const input = await waitFor(() => document.querySelector(".ant-modal input"));
+      button("确定", input.closest(".ant-modal").querySelector(".ant-modal-footer")).click(); await sleep(1000); return 1`);
+  await m.ev(`return await openTodo("工作", "需求", "A")`);
+  const mineR = await append("\n改名前加的");
+  t.write("工作/需求/A.md", "# 待办 A\n\n改名前外部改的\n");
+  await menu(["工作", "需求"], "重命名");
+  await m.ev(`setInput(await waitFor(() => document.querySelector(".ant-modal input")), "需求池"); await sleep(100); return 1`);
+  await submitName();
+  const nameError = await m.ev(`return document.querySelector(".dialog-error")?.textContent ?? ""`);
+  check(
+    "打开着的待办存不上（外部改过）时不重命名它所在的项目：弹出冲突对话框，重命名的对话框留着、说明原因",
+    (await t.until(conflictShown)) && t.exists("工作/需求/A.md") && !t.exists("工作/需求池") && nameError.includes("还没保存好"),
+    nameError,
+  );
+  await resolve("用我的内容覆盖");
+  check("在冲突对话框里选了「用我的内容覆盖」", await t.until(() => t.read("工作/需求/A.md") === mineR));
+  await submitName();
+  check(
+    "处理完再点确定：照常改名，打开着的待办跟过去",
+    await t.until(async () => t.exists("工作/需求池/A.md") && !t.exists("工作/需求") && (await m.ev(`return document.querySelector(".editor-title")?.value`)) === "A"),
+  );
+
+  await m.ev(`await waitFor(() => view()?.state.doc.length > 0); await sleep(300); return 1`);
+  await append("\n删除前加的");
+  t.write("工作/需求池/A.md", "# 待办 A\n\n删除前外部改的\n");
+  await m.clearToasts();
+  await menu(["工作", "需求池", "A"], "删除");
+  await m.ev(`button("删除", await waitFor(() => document.querySelector(".ant-modal-confirm-btns"))).click(); await sleep(1000); return 1`);
+  check(
+    "打开着的待办存不上时不删除它：冲突对话框留着，提示为什么没删",
+    (await t.until(conflictShown)) && t.exists("工作/需求池/A.md") && (await toastHas("先处理好再删除")),
+    await m.toast(),
+  );
+  await resolve("放弃我的修改");
 
   // 正显示着冲突对话框时从托盘退出：另存为新待办后再退出（最后做）
   await m.ev(`return await openTodo("工作", "日常", "D")`);
