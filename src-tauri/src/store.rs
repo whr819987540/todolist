@@ -198,6 +198,16 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
+/// 完成记录里的一条：已完成的待办和它在哪里
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoneTodo {
+    pub workspace: String,
+    /// 项目路径：子项目是「父项目/子项目」
+    pub project: String,
+    pub todo: TodoSummary,
+}
+
 /// 软件回收站里一项是什么
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -846,6 +856,38 @@ impl Store {
         Ok(hits)
     }
 
+    // ----- 完成记录 -----
+
+    /// 已完成的待办（完成记录用），顺序不定。workspaces 为 None 时是全部工作区，不存在的跳过；
+    /// 给了 since 时只要完成时间不早于它的，没有完成时间的（以前的版本留下的）不算。
+    /// 和 load_workspace 一样扫描元数据，只给列出的这些读正文开头（文件没变就用缓存），不读全文；回收站里的不算
+    pub fn list_done(&self, workspaces: Option<&[String]>, since: Option<i64>) -> Result<Vec<DoneTodo>> {
+        let wanted = |done: bool, done_at: Option<i64>| {
+            done && since.is_none_or(|s| done_at.is_some_and(|t| t >= s))
+        };
+        let mut g = self.guard();
+        let list = match workspaces {
+            Some(names) => names.iter().filter_map(|ws| Some((ws.clone(), self.ws_dir(ws).ok()?))).collect(),
+            None => list_subdirs(&self.root)?,
+        };
+        let mut out = Vec::new();
+        // 读不了的工作区、项目（正在外部被删、被占用）跳过，同全文搜索
+        for (workspace, ws_dir) in list {
+            let Ok(projects) = project_dirs(&ws_dir) else { continue };
+            for (project, pdir) in projects {
+                let Ok(todos) = scan_project_for(&pdir, Some(&mut g), |m| wanted(m.done, m.done_at)) else {
+                    continue;
+                };
+                out.extend(todos.into_iter().filter(|t| wanted(t.done, t.done_at)).map(|todo| DoneTodo {
+                    workspace: workspace.clone(),
+                    project: project.clone(),
+                    todo,
+                }));
+            }
+        }
+        Ok(out)
+    }
+
     // ----- 界面状态 -----
 
     /// 读界面状态文件（内容由前端决定，这里原样读写）；还没有时返回 None
@@ -1229,6 +1271,16 @@ impl MemCache {
 /// 扫描项目目录，把元数据和实际的 .md 文件对齐，返回全部待办摘要。
 /// 给了预览缓存时带上正文开头（文件没变就用缓存的，不重新读），否则预览为空
 fn scan_project(dir: &Path, previews: Option<&mut MemCache>) -> Result<Vec<TodoSummary>> {
+    scan_project_for(dir, previews, |_| true)
+}
+
+/// 同 scan_project，但只给 want 为 true 的待办带上正文开头，别的预览为空、不读文件
+/// （缓存里还有效的照样留着，下次 load_workspace 用得上）。完成记录只要已完成的那些
+fn scan_project_for(
+    dir: &Path,
+    previews: Option<&mut MemCache>,
+    want: impl Fn(&TodoMeta) -> bool,
+) -> Result<Vec<TodoSummary>> {
     let mut meta = read_meta(dir)?;
     let files = markdown_files(dir)?;
     // id → 在 files 里的位置；待办多时逐个比对太慢
@@ -1279,26 +1331,26 @@ fn scan_project(dir: &Path, previews: Option<&mut MemCache>) -> Result<Vec<TodoS
             let mut cached = cache.dirs.remove(dir).unwrap_or_default();
             // 修改时间、大小取自列目录，在读开头之前：读的过程中文件又被改了的话，下次扫描对不上，会重新读
             let stamps: Vec<FileStamp> = entries.iter().map(|(_, _, md)| FileStamp::of(md)).collect();
-            let mut out: Vec<Option<String>> = entries
-                .iter()
-                .zip(&stamps)
-                .map(|((m, _, _), stamp)| match cached.remove(&m.id) {
-                    Some(c) if c.stamp == *stamp => Some(c.preview),
-                    _ => None,
-                })
-                .collect();
-            let missing: Vec<usize> = (0..out.len()).filter(|&i| out[i].is_none()).collect();
+            let mut fresh: HashMap<String, CachedPreview> = HashMap::with_capacity(entries.len());
+            let mut out = vec![String::new(); entries.len()];
+            let mut missing = Vec::new();
+            for (i, ((m, _, _), stamp)) in entries.iter().zip(&stamps).enumerate() {
+                match cached.remove(&m.id) {
+                    Some(c) if c.stamp == *stamp => {
+                        if want(m) {
+                            out[i] = c.preview.clone();
+                        }
+                        fresh.insert(m.id.clone(), c);
+                    }
+                    _ if want(m) => missing.push(i),
+                    _ => {}
+                }
+            }
             let paths: Vec<&Path> = missing.iter().map(|&i| entries[i].1.as_path()).collect();
             for (i, preview) in missing.into_iter().zip(read_previews(&paths)) {
-                out[i] = Some(preview);
+                fresh.insert(entries[i].0.id.clone(), CachedPreview { stamp: stamps[i], preview: preview.clone() });
+                out[i] = preview;
             }
-            let out: Vec<String> = out.into_iter().map(Option::unwrap_or_default).collect();
-            let fresh = entries
-                .iter()
-                .zip(stamps)
-                .zip(&out)
-                .map(|(((m, _, _), stamp), preview)| (m.id.clone(), CachedPreview { stamp, preview: preview.clone() }))
-                .collect();
             cache.dirs.insert(dir.to_path_buf(), fresh);
             out
         }
@@ -2717,6 +2769,9 @@ mod tests {
                 fresh.load_workspace(n).unwrap();
             }
         });
+        time("list_done（全部工作区）", &|| {
+            s.list_done(None, None).unwrap();
+        });
         let tree = s.load_workspace(&names[0]).unwrap();
         let todos: usize = tree.projects.iter().map(|p| p.todos.len()).sum();
         let json = serde_json::to_vec(&tree).unwrap();
@@ -2827,6 +2882,95 @@ mod tests {
         assert_eq!(fold("KELVIN"), "kelvin");
         let at = t.folded.find("kelvin").unwrap();
         assert_eq!(snippet(&t, at, 6), "ÀBC Kelvin \u{212A}elvin");
+    }
+
+    #[test]
+    fn list_done_lists_done_todos_and_where_they_are() {
+        let (_tmp, s) = store("done-list");
+        s.create_workspace("工作").unwrap();
+        s.create_workspace("生活").unwrap();
+        s.create_project("工作", "需求").unwrap();
+        s.create_sub_project("工作", "需求", "接口").unwrap();
+        s.create_project("生活", "杂事").unwrap();
+        let a = s.create_todo("工作", "需求", "写文档", "").unwrap();
+        let b = s.create_todo("工作", "需求/接口", "", "# 联调支付接口\n细节").unwrap();
+        let c = s.create_todo("生活", "杂事", "买菜", "").unwrap();
+        let undone = s.create_todo("工作", "需求", "还没做", "").unwrap();
+        for (ws, p, id) in [("工作", "需求", &a.id), ("工作", "需求/接口", &b.id), ("生活", "杂事", &c.id)] {
+            assert!(s.set_todo_done(ws, p, id, true).unwrap().done_at.is_some());
+        }
+        let ids = |list: &[DoneTodo]| {
+            let mut v: Vec<String> = list.iter().map(|d| format!("{}/{}/{}", d.workspace, d.project, d.todo.title)).collect();
+            v.sort();
+            v
+        };
+
+        // 全部工作区：工作区、项目路径（子项目是「父项目/子项目」）和摘要（没有标题的带正文开头），没完成的不算
+        let all = s.list_done(None, None).unwrap();
+        assert_eq!(ids(&all), ["工作/需求/写文档", "工作/需求/接口/", "生活/杂事/买菜"]);
+        // 没有标题的那条（各项目里的 id 可能相同，按标题找）
+        let sub = all.iter().find(|d| d.todo.title.is_empty()).unwrap();
+        assert_eq!(sub.todo.id, b.id);
+        assert_eq!((sub.project.as_str(), sub.todo.preview.as_str()), ("需求/接口", "联调支付接口 细节"));
+        assert!(!all.iter().any(|d| d.todo.id == undone.id && d.project == "需求"));
+
+        // 指定的工作区；不存在的跳过
+        let only = s.list_done(Some(&["生活".to_string(), "不存在".to_string()]), None).unwrap();
+        assert_eq!(ids(&only), ["生活/杂事/买菜"]);
+
+        // 按完成时间的下限：写文档是 10 天前完成的，买菜是以前的版本留下的、没有完成时间
+        let now = now_ms();
+        let edit = |ws: &str, p: &str, id: &str, done_at: Option<i64>| {
+            let dir = s.project_path(ws, p).unwrap();
+            let mut meta = read_meta(&dir).unwrap();
+            let i = meta.find(id).unwrap();
+            meta.todos[i].done_at = done_at;
+            write_meta(&dir, &meta).unwrap();
+        };
+        let ten_days_ago = now - 10 * 86_400_000;
+        edit("工作", "需求", &a.id, Some(ten_days_ago));
+        edit("生活", "杂事", &c.id, None);
+        assert_eq!(ids(&s.list_done(None, Some(now - 3 * 86_400_000)).unwrap()), ["工作/需求/接口/"]);
+        // 正好在下限上的算
+        assert_eq!(ids(&s.list_done(None, Some(ten_days_ago)).unwrap()), ["工作/需求/写文档", "工作/需求/接口/"]);
+        // 不给下限时，没有完成时间的也列出来
+        let c_done = s.list_done(None, None).unwrap().into_iter().find(|d| d.todo.id == c.id && d.workspace == "生活");
+        assert!(c_done.is_some_and(|d| d.todo.done && d.todo.done_at.is_none()));
+
+        // 标记为未完成的、删除进回收站的不再列出（回收站也不被当成工作区）
+        s.set_todo_done("工作", "需求", &a.id, false).unwrap();
+        s.delete_todo("工作", "需求/接口", &b.id).unwrap();
+        assert_eq!(ids(&s.list_done(None, None).unwrap()), ["生活/杂事/买菜"]);
+    }
+
+    #[test]
+    fn list_done_reads_previews_of_the_listed_only() {
+        let (_tmp, s) = store("done-previews");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let dir = s.project_path("w", "p").unwrap();
+        fs::write(dir.join("做完的.md"), "做完的正文").unwrap();
+        fs::write(dir.join("没做完的.md"), "没做完的正文").unwrap();
+        s.load_workspace("w").unwrap();
+        s.set_todo_done("w", "p", "做完的", true).unwrap();
+
+        // 刚启动（缓存是空的）：只读列出的那条的开头
+        let s2 = Store::new(s.root().to_path_buf()).unwrap();
+        let done = s2.list_done(None, None).unwrap();
+        assert_eq!(done.len(), 1);
+        assert_eq!((done[0].todo.title.as_str(), done[0].todo.preview.as_str()), ("做完的", "做完的正文"));
+        assert!(s2.guard().dirs[&dir].contains_key("做完的"));
+        assert!(!s2.guard().dirs[&dir].contains_key("没做完的"));
+
+        // 左侧已经读过、缓存着的开头不因为完成记录而丢掉
+        let tree = s2.load_workspace("w").unwrap();
+        assert!(tree.projects[0].todos.iter().all(|t| !t.preview.is_empty()));
+        s2.list_done(None, None).unwrap();
+        assert!(s2.guard().dirs[&dir].contains_key("没做完的"));
+
+        // 正文在外部改了，重新读
+        fs::write(dir.join("做完的.md"), "改过的正文，长度也变了").unwrap();
+        assert_eq!(s2.list_done(None, None).unwrap()[0].todo.preview, "改过的正文，长度也变了");
     }
 
     #[test]

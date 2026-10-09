@@ -18,7 +18,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use store::{
-    RecycleEntry, RestoreResult, SaveResult, SearchHit, Store, TodoDetail, TodoSummary, WorkspaceInfo,
+    DoneTodo, RecycleEntry, RestoreResult, SaveResult, SearchHit, Store, TodoDetail, TodoSummary, WorkspaceInfo,
     WorkspaceProjects, WorkspaceTree, RECYCLE_KEEP_DAYS,
 };
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -303,6 +303,18 @@ async fn search_todos(
     keyword: String,
 ) -> Cmd<Vec<SearchHit>> {
     store.search(workspaces.as_deref(), &keyword)
+}
+
+// ----- 完成记录 -----
+
+/// 已完成的待办；workspaces 为 null 时是全部工作区，给了 since（毫秒）时只要完成时间不早于它的
+#[tauri::command]
+async fn list_done_todos(
+    store: State<'_, Store>,
+    workspaces: Option<Vec<String>>,
+    since: Option<i64>,
+) -> Cmd<Vec<DoneTodo>> {
+    store.list_done(workspaces.as_deref(), since)
 }
 
 // ----- 界面状态（数据目录的 .state.json） -----
@@ -1412,6 +1424,7 @@ pub fn run() {
             empty_recycle,
             move_todo,
             search_todos,
+            list_done_todos,
             read_ui_state,
             write_ui_state,
             open_todo_external,
