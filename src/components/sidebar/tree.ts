@@ -1,4 +1,5 @@
-// 侧栏树共用的定义：右侧显示的内容（选中项）和它在行上的键、折叠状态、待办计数、隐藏全部完成的项目时藏起哪些
+// 侧栏树共用的定义：右侧显示的内容（选中项）和它在行上的键、折叠状态、待办计数、隐藏全部完成的项目时藏起哪些，
+// 「全部折叠 / 全部展开」看哪些项目
 import type { ProjectNode, WorkspaceTree } from "../../types";
 
 /** 折叠状态里工作区本身用的键（项目用项目名） */
@@ -47,6 +48,26 @@ export function hiddenDoneProjects(
     .filter((p) => p.name !== o.selProject && !o.lingering?.has(p.name) && isProjectDone(p))
     .map((p) => p.name);
   return hidden.length ? new Set(hidden) : NONE_HIDDEN;
+}
+
+/**
+ * 侧栏顶部「全部折叠 / 全部展开」显示哪个：没藏起来的项目有展开着的时是「全部折叠」，都折叠着时是「全部展开」。
+ * hiddenOf(tree) 是这个工作区里藏起来的项目（hiddenDoneProjects，和侧栏的树用同样的参数算），它们不算：默认展开着，
+ * 看不见也折叠不了，算进去的话折叠完看得见的项目后按钮还是「全部折叠」，点了界面没有变化。
+ * 只对有展开着的项目的工作区才调用 hiddenOf
+ */
+export function anyVisibleProjectOpen(
+  trees: readonly WorkspaceTree[],
+  collapsedOf: (workspace: string) => Collapsed,
+  hiddenOf: (tree: WorkspaceTree) => ReadonlySet<string>,
+): boolean {
+  return trees.some((t) => {
+    const c = collapsedOf(t.name);
+    const open = t.projects.filter((p) => !c[p.name]);
+    if (!open.length) return false;
+    const hidden = hiddenOf(t);
+    return open.some((p) => !hidden.has(p.name));
+  });
 }
 
 /**

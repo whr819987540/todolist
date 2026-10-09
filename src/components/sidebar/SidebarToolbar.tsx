@@ -16,7 +16,7 @@ import type { SortKey, WorkspaceTree } from "../../types";
 import type { ListOptions } from "../../workspaceState";
 import type { Actions } from "../menus";
 import SettingsButton from "../SettingsButton";
-import type { Collapsed, Selection } from "./tree";
+import { anyVisibleProjectOpen, type Collapsed, type Selection } from "./tree";
 import WorkspacePicker from "./WorkspacePicker";
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -48,11 +48,15 @@ export default function SidebarToolbar(props: {
   setListOptions: (workspace: string, patch: Partial<ListOptions>) => void;
   collapsedOf: (workspace: string) => Collapsed;
   setCollapsed: (workspace: string, fn: (prev: Collapsed) => Collapsed) => void;
+  /** 侧栏里这个工作区藏起来的项目（隐藏全部完成的项目时，和树里一样算），「全部折叠 / 全部展开」不看它们；用到时才算 */
+  hiddenOf: (tree: WorkspaceTree) => ReadonlySet<string>;
 }) {
   const { trees, sel, actions: a, searchRef, keyword, collapsedOf, setCollapsed } = props;
   const multi = trees.length > 1;
 
-  const anyProjectOpen = trees.some((t) => t.projects.some((p) => !collapsedOf(t.name)[p.name]));
+  // 没藏起来的项目有展开着的时是「全部折叠」。点了连藏起来的一起折叠 / 展开：关掉隐藏、其中的待办改回未完成后
+  // 再显示出来时，它们和别的项目一样折叠着 / 展开着
+  const anyProjectOpen = anyVisibleProjectOpen(trees, collapsedOf, props.hiddenOf);
   const toggleAll = () => {
     for (const t of trees)
       setCollapsed(t.name, (c) => {
@@ -169,6 +173,7 @@ export default function SidebarToolbar(props: {
           <Button
             type="text"
             size="small"
+            className="collapse-all-btn"
             icon={anyProjectOpen ? <VerticalAlignMiddleOutlined /> : <ColumnHeightOutlined />}
             onClick={toggleAll}
           />

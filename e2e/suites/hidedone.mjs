@@ -1,5 +1,5 @@
 // 隐藏全部完成的项目：侧栏「隐藏已完成」里的第二个选项；空项目不算，右侧正在显示的不藏、切走 1 秒后才藏（在它下面双击时
-// 第二下不落到别的行上），搜索时不藏，只影响侧栏
+// 第二下不落到别的行上），搜索时不藏，「全部折叠 / 全部展开」不算藏起来的，只影响侧栏
 export const title = "隐藏全部完成的项目";
 
 export default async function (t) {
@@ -120,6 +120,52 @@ export default async function (t) {
   check("里面的待办改回未完成：又显示出来，提示没了", (await visible("日常")) && (await hint()) === "", await hint());
   await setDone("日常", "D", true);
   check("再标完成：又藏起来", !(await visible("日常")));
+
+  // 侧栏顶部的「全部折叠 / 全部展开」不算藏起来的项目：藏起来的「日常」展开着，看不见也折叠不了；点了连它一起折叠 / 展开
+  const collapseBtn = () =>
+    m.ev(`return document.querySelector(".collapse-all-btn .anticon-vertical-align-middle") ? "全部折叠" : "全部展开"`);
+  const clickCollapseBtn = () => m.ev(`document.querySelector(".collapse-all-btn").click(); await sleep(300); return 1`);
+  /** 按钮、看得见的项目展开着没有，藏起来的「日常」折叠着没有（记在本机的折叠状态里） */
+  const folds = async () => ({
+    btn: await collapseBtn(),
+    ...(await m.ev(`const open = (p) => row("工作", p)?.closest("[role=treeitem]")?.getAttribute("aria-expanded") === "true";
+      return { req: open("需求"), empty: open("空项目"), dailyFolded: !!JSON.parse(localStorage.getItem("collapsed:工作") ?? "{}")["日常"] }`)),
+  });
+  await m.ev(`for (const c of document.querySelectorAll(".tree .project-row .chevron.open")) c.click(); await sleep(300); return 1`);
+  const manual = await folds();
+  check(
+    "手动折叠完看得见的项目后，按钮是「全部展开」（藏起来的展开着也不算）",
+    manual.btn === "全部展开" && !manual.req && !manual.empty && !manual.dailyFolded,
+    manual,
+  );
+  await clickCollapseBtn();
+  const expandedAll = await folds();
+  check(
+    "点「全部展开」：看得见的项目都展开，按钮变成「全部折叠」",
+    expandedAll.btn === "全部折叠" && expandedAll.req && expandedAll.empty,
+    expandedAll,
+  );
+  await clickCollapseBtn();
+  const foldedAll = await folds();
+  check(
+    "点「全部折叠」：看得见的都折叠，藏起来的也一起折叠",
+    foldedAll.btn === "全部展开" && !foldedAll.req && !foldedAll.empty && foldedAll.dailyFolded,
+    foldedAll,
+  );
+  // 右侧正显示着的、切走后还在显示的全部完成的项目看得见，算
+  const shownD = await openD();
+  check(
+    "经标签打开全部完成的项目里的待办（展开它的分支）：按钮是「全部折叠」",
+    shownD && (await collapseBtn()) === "全部折叠",
+    { ...(await viaTab()), btn: await collapseBtn() },
+  );
+  await m.ev(`row("工作").click(); return 1`);
+  const lingeringBtn = await collapseBtn();
+  check("切走后它还显示着时仍是「全部折叠」", lingeringBtn === "全部折叠", lingeringBtn);
+  check("藏起来后是「全部展开」", (await hiddenSoon()) && (await collapseBtn()) === "全部展开", await collapseBtn());
+  await clickCollapseBtn();
+  const restored = await folds();
+  check("再点「全部展开」：看得见的项目都展开", restored.btn === "全部折叠" && restored.req && restored.empty, restored);
 
   // 「显示」：关掉这一项
   await m.ev(`document.querySelector(".hidden-projects a").click(); await sleep(400); return 1`);

@@ -15,6 +15,7 @@ import {
   type Collapsed,
   countAll,
   countDone,
+  hiddenDoneProjects,
   isProjectDone,
   parseSelKey,
   type Selection,
@@ -104,6 +105,16 @@ export default function Sidebar(props: Props) {
     const p = trees.find((t) => t.name === ws)?.projects.find((x) => x.name === project);
     return !!p && isProjectDone(p);
   });
+
+  // 各工作区藏起来的项目，参数和下面传给 WorkspaceBranch 的一样：顶部的「全部折叠 / 全部展开」不看它们。
+  // 那里只对有展开着的项目的工作区才调用，没开这一项、在搜索时直接返回
+  const hiddenOf = (t: WorkspaceTree) =>
+    hiddenDoneProjects(t.projects, {
+      hide: listOptionsOf(t.name).hideDoneProjects,
+      keyword: kw,
+      selProject: sel.workspace === t.name ? sel.project : undefined,
+      lingering: lingering.get(t.name),
+    });
 
   const total = trees.reduce((n, t) => n + countAll(t), 0);
   const done = trees.reduce((n, t) => n + countDone(t), 0);
@@ -195,6 +206,7 @@ export default function Sidebar(props: Props) {
         setListOptions={props.setListOptions}
         collapsedOf={collapsedOf}
         setCollapsed={setCollapsed}
+        hiddenOf={hiddenOf}
       />
 
       <div
