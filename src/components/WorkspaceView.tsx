@@ -453,9 +453,20 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     };
   });
 
-  /** 结构性操作（重命名、移动、删除）之前、返回首页前先把编辑器里的内容落盘（分屏时两边的都存） */
-  const flushEditor = () =>
-    Promise.all([editorRefA, editorRefB].map((r) => r.current?.flush() ?? true)).then((ok) => ok.every(Boolean));
+  /**
+   * 结构性操作（重命名、移动、删除）之前、返回首页前先把编辑器里的内容落盘（分屏时两边的都存）；返回没存好的那几条
+   * 打开着的待办（有冲突、弹出了冲突对话框，保存失败、已提示），受影响的存不上时不做这个操作
+   */
+  const flushEditors = async (): Promise<TodoRef[]> => {
+    const failed: TodoRef[] = [];
+    await Promise.all(
+      [editorRefA, editorRefB].map(async (r) => {
+        const editor = r.current;
+        if (editor && !(await editor.flush())) failed.push(editor.todo);
+      }),
+    );
+    return failed;
+  };
   /** 改名、移动、删除之后，显示着其中待办的编辑器（两边都算）不再保存 */
   const detachEditors = (match: (t: TodoRef) => boolean) => {
     for (const r of [editorRefA, editorRefB]) if (r.current && match(r.current.todo)) r.current.detach();
@@ -470,7 +481,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   };
 
   const goHome = () => {
-    flushEditor();
+    flushEditors();
     onHome();
   };
 
@@ -484,7 +495,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     reload,
     onHome,
     goHome,
-    flushEditor,
+    flushEditors,
     detachEditors,
     openDialog,
     collapsed,

@@ -63,8 +63,11 @@ export interface ActionContext {
   onHome: () => void;
   /** 先存盘再返回首页 */
   goHome: () => void;
-  /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘（分屏时两边的都存） */
-  flushEditor: () => Promise<unknown>;
+  /**
+   * 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘（分屏时两边的都存）；返回没存好的那几条打开着的待办
+   * （正文有冲突、弹出了冲突对话框，保存失败、已提示），都存好了（或没打开着待办）时是空的
+   */
+  flushEditors: () => Promise<TodoRef[]>;
   /** 待办改名、移动、删除后，显示着其中待办的编辑器（分屏时两边都算）不再保存 */
   detachEditors: (match: (t: TodoRef) => boolean) => void;
   openDialog: ReturnType<typeof useNameDialog>[1];
@@ -115,7 +118,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
     reload,
     onHome,
     goHome,
-    flushEditor,
+    flushEditors,
     detachEditors,
     openDialog,
     collapsed,
@@ -153,6 +156,15 @@ export function useWorkspaceActions(ctx: ActionContext) {
       if (k !== WS_KEY && inProject(k, from)) moved[reparent(k, from, to)] = v;
     setCollapsed(fromWs, (c) => Object.fromEntries(Object.entries(c).filter(([k]) => k === WS_KEY || !inProject(k, from))));
     setCollapsed(toWs, (c) => ({ ...c, ...moved }));
+  };
+
+  /**
+   * 打开着的待办（分屏时两边的）先存盘：受影响的（match：要改名、移动、删除的工作区 / 项目 / 待办里的，分屏时两边开着的
+   * 都算）存不上（弹出了冲突对话框、保存失败已提示）时抛出，what 这个操作不做（不 detach，冲突对话框留着让用户先处理）；
+   * 抛出的原因在重命名的对话框里显示，别的操作经 run 提示
+   */
+  const saveFirst = async (what: string, match: (t: TodoRef) => boolean) => {
+    if ((await flushEditors()).some(match)) throw new Error(`打开着的待办还没保存好，先处理好再${what}`);
   };
 
   /** 执行操作，出错时弹出提示；返回是否成功 */
@@ -201,7 +213,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           title: "重命名工作区",
           initial: ws,
           onSubmit: async (v) => {
-            await flushEditor();
+            await saveFirst("重命名", (t) => t.workspace === ws);
             const name = await api.renameWorkspace(ws, v);
             detachEditors((t) => t.workspace === ws);
             renameWorkspaceMemory(ws, name);
@@ -216,7 +228,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           `删除工作区「${ws}」？`,
           `其中的 ${tree?.projects.length ?? 0} 个项目、${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
-            await flushEditor();
+            await saveFirst("删除", (t) => t.workspace === ws);
             const rid = await api.deleteWorkspace(ws);
             detachEditors((t) => t.workspace === ws);
             forgetWorkspaceMemory(ws);
@@ -265,7 +277,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           initial: leafName(project),
           onSubmit: async (v) => {
             const isSel = showsProject(project);
-            await flushEditor();
+            await saveFirst("重命名", inProjectOf(ws, project));
             const name = await api.renameProject(ws, project, v);
             detachEditors(inProjectOf(ws, project));
             renameProjectState(ws, project, name);
@@ -285,7 +297,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           `其中的 ${subs ? `${subs} 个子项目、` : ""}${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
             const isSel = showsProject(project);
-            await flushEditor();
+            await saveFirst("删除", inProjectOf(ws, project));
             const rid = await api.deleteProject(ws, project);
             detachEditors(inProjectOf(ws, project));
             // 正看着它（或它下面的）：退回往上最近的还在的父项目（它的父项目），顶层项目退回工作区概览
@@ -299,7 +311,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       moveProject: (project, targetWs, parent) =>
         run(async () => {
           const isSel = showsProject(project);
-          await flushEditor();
+          await saveFirst("移动", inProjectOf(ws, project));
           // 移过去后的路径：放进项目后是「父项目/名字」，子项目移出来后是名字
           const to = await api.moveProject(ws, project, targetWs, parent);
           detachEditors(inProjectOf(ws, project));
@@ -342,7 +354,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       deleteTodo: (project, t) =>
         confirmDelete(`删除待办「${displayTitle(t).text}」？`, "将被移到回收站，可以在回收站里恢复。", async () => {
           const isSel = isSelTodo(project, t.id);
-          await flushEditor();
+          await saveFirst("删除", isTodo(ws, project, t.id));
           const rid = await api.deleteTodo(ws, project, t.id);
           detachEditors(isTodo(ws, project, t.id));
           if (isSel) setSel({ workspace: ws, project });
@@ -359,7 +371,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       moveTodo: (project, t, target, targetWs = ws) =>
         run(async () => {
           const isSel = isSelTodo(project, t.id);
-          await flushEditor();
+          await saveFirst("移动", isTodo(ws, project, t.id));
           const moved = await api.moveTodo(ws, project, t.id, targetWs, target);
           detachEditors(isTodo(ws, project, t.id));
           moveTodoState(ws, project, t.id, [targetWs, target, moved.id]);
@@ -384,7 +396,8 @@ export function useWorkspaceActions(ctx: ActionContext) {
         }),
       openExternal: (project, t) =>
         run(async () => {
-          await flushEditor();
+          // 用默认程序打开的是磁盘上的文件：没存好时那边看到的是旧的内容
+          await saveFirst("用默认程序打开", isTodo(ws, project, t.id));
           await api.openTodoExternal(ws, project, t.id);
         }),
       revealTodo: (project, t) => run(() => api.revealTodo(ws, project, t.id)),
@@ -393,7 +406,8 @@ export function useWorkspaceActions(ctx: ActionContext) {
 
   /**
    * 逐条执行 fn，返回成功的条数；有失败的弹出提示（失败的条数和第一条的原因），成功的照常算。
-   * 多选时有焦点的一边是批量操作，那边的编辑器已经存好、关掉了；分屏的另一边可能开着其中的，移动、删除前先存盘
+   * 多选时有焦点的一边是批量操作，那边的编辑器已经关掉了（关掉时存好了，两边都关掉了的存不上时另存成了新待办）；
+   * 分屏的另一边可能开着其中的，移动、删除前先存盘，存不上的那条不动（见 unsavedCheck）
    */
   const each = async (items: TodoAt[], fn: (x: TodoAt) => Promise<void>): Promise<number> => {
     let ok = 0;
@@ -408,6 +422,14 @@ export function useWorkspaceActions(ctx: ActionContext) {
     }
     if (errors.length) message.error(`${errors.length} 条没有成功：${errors[0]}`);
     return ok;
+  };
+
+  /** 批量移动、删除前先存盘：返回检查一条待办的函数，分屏的另一边开着它、存不上时抛出（这一条不动，算没成功的） */
+  const unsavedCheck = async (what: string) => {
+    const failed = await flushEditors();
+    return (workspace: string, project: string, id: string) => {
+      if (failed.some(isTodo(workspace, project, id))) throw new Error(`打开着的待办还没保存好，先处理好再${what}`);
+    };
   };
 
   const batch: BatchActions = {
@@ -430,8 +452,9 @@ export function useWorkspaceActions(ctx: ActionContext) {
     move: async (items, target, targetWs) => {
       const todo = items.filter((x) => x.workspace !== targetWs || x.project !== target);
       let selMoved: Selection | null = null;
-      await flushEditor();
+      const check = await unsavedCheck("移动");
       const ok = await each(todo, async ({ workspace, project, todo: t }) => {
+        check(workspace, project, t.id);
         const moved = await api.moveTodo(workspace, project, t.id, targetWs, target);
         detachEditors(isTodo(workspace, project, t.id));
         moveTodoState(workspace, project, t.id, [targetWs, target, moved.id]);
@@ -454,8 +477,9 @@ export function useWorkspaceActions(ctx: ActionContext) {
         cancelText: "取消",
         onOk: async () => {
           const ids: string[] = [];
-          await flushEditor();
+          const check = await unsavedCheck("删除");
           const ok = await each(items, async ({ workspace, project, todo: t }) => {
+            check(workspace, project, t.id);
             ids.push(await api.deleteTodo(workspace, project, t.id));
             detachEditors(isTodo(workspace, project, t.id));
             forgetTodoState(workspace, project, t.id);
