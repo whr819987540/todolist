@@ -553,8 +553,8 @@ export default function TodoEditor(props: Props) {
   /**
    * 核对磁盘上的正文（窗口重新获得焦点时，文件可能在外部被改过）。外部改过时：这里没有未保存的修改就重新加载；
    * 有的话立即弹出冲突对话框让用户选，不动正在编辑的内容（不等到存盘、离开这条待办时才发现，那时没法再问）。
-   * 外部的正文和这里打开时的一样（只是修改时间变了，如网盘同步时重写了一遍）、或者和这里改成的一样时不算冲突。
-   * 排在保存后面做：刚存完、新的修改时间还没记下时不会当成外部改的
+   * 外部的正文和这里打开时的一样（只是修改时间变了，如网盘同步时重写了一遍）、或者和这里改成的一样时不算冲突，
+   * 也不重新加载（光标、撤销记录都不动）。排在保存后面做：刚存完、新的修改时间还没记下时不会当成外部改的
    */
   const checkDisk = () =>
     enqueue(async () => {
@@ -566,12 +566,13 @@ export default function TodoEditor(props: Props) {
         return; // 文件被删等情况由外层刷新处理（之后卸载时存不上，另存为新待办）
       }
       if (d.mtime === s.mtime || s.detached || s.conflict) return;
-      if (s.content === s.savedContent) {
-        applyDiskContent(d);
-      } else if (d.content === s.savedContent || d.content === s.content) {
+      if (d.content === s.savedContent || d.content === s.content) {
         s.mtime = d.mtime;
         s.savedContent = d.content;
+        setEncoding(d.encoding);
         refreshStatus();
+      } else if (s.content === s.savedContent) {
+        applyDiskContent(d);
       } else {
         s.conflict = true;
         setConflict(true);
