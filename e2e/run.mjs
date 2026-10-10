@@ -30,6 +30,7 @@ const SUITES = [
   "tabs",
   "conflict",
   "watch",
+  "images",
   "regress",
 ];
 

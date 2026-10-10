@@ -81,6 +81,36 @@ const theme = EditorView.theme({
     verticalAlign: "middle",
     borderTop: "1px solid var(--c-border-strong)",
   },
+  // 图片（images.ts 的 ImageWidget）：宽度不超过编辑区，按比例缩小
+  ".cm-md-image": { display: "inline-block", maxWidth: "100%", verticalAlign: "bottom", cursor: "text" },
+  ".cm-md-image img": {
+    display: "block",
+    maxWidth: "100%",
+    height: "auto",
+    margin: "4px 0",
+    borderRadius: "4px",
+  },
+  // 还在找图片（第一次显示）：先占一小块，不让这一行忽高忽低太多
+  ".cm-md-image-loading": {
+    width: "6em",
+    height: "3em",
+    borderRadius: "4px",
+    backgroundColor: "var(--c-hover)",
+  },
+  ".cm-md-image-error": {
+    display: "inline-block",
+    maxWidth: "100%",
+    padding: "0 10px",
+    border: "1px dashed var(--c-border-strong)",
+    borderRadius: "4px",
+    color: "var(--c-text-3)",
+    backgroundColor: "var(--c-fill)",
+    fontSize: "0.9em",
+    lineHeight: "1.9",
+    cursor: "text",
+  },
+  // 从资源管理器拖进图片时，放下的位置
+  ".cm-drop-caret": { borderLeft: "2px solid var(--c-primary)", marginLeft: "-1px" },
 });
 
 const lineDecos = new Map<string, Decoration>();

@@ -100,6 +100,24 @@ export interface SaveResult {
   mtime: number;
 }
 
+/** 存进附件目录的一张图片（粘贴、拖进来的） */
+export interface SavedImage {
+  /** 写进正文的地址：相对于 .md 文件，如 `.assets/20261010-101010/图片-20261010-101010.png` */
+  link: string;
+  /** 存成的文件名 */
+  name: string;
+  /** 字节数 */
+  size: number;
+}
+
+/** 正文里一张本地图片对应的文件 */
+export interface ImageFile {
+  /** 绝对路径，经 asset 协议（convertFileSrc）显示 */
+  path: string;
+  /** 修改时间：图片在外部被替换后据此换地址，不用 WebView 缓存里旧的 */
+  modified: number;
+}
+
 /** 排序：按创建时间（新的在前）、修改时间（新的在前）、标题，或手动排序（拖动调整） */
 export type SortKey = "created" | "updated" | "title" | "manual";
 

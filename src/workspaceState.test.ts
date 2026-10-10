@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { history, historyField } from "@codemirror/commands";
+import { EditorState } from "@codemirror/state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditPosition } from "./editor/position";
 
@@ -149,6 +151,26 @@ describe("编辑位置、编辑模式、撤销记录跟着走", () => {
     expect(state.takeUndo("公司", "需求", "a", "正文")).toEqual({ done: [] });
     state.keepUndo("公司", "需求", "a", { doc: "正文", history: { done: [] } });
     expect(state.takeUndo("公司", "需求", "a", "外部改过的正文")).toBeNull();
+  });
+
+  it("移动后换了 id、正文里图片的链接被改了：撤销记录接着用；没换 id 时正文对不上照样作废", () => {
+    const doc = "![](.assets/a/图.png)\n我打的字";
+    const relinked = "![](.assets/a-2/图.png)\n我打的字";
+    const snap = () => {
+      const s = EditorState.create({ doc: "![](.assets/a/图.png)\n", extensions: history() });
+      const next = s.update({ changes: { from: s.doc.length, insert: "我打的字" }, userEvent: "input" }).state;
+      return { doc: next.doc.toString(), history: next.toJSON({ history: historyField }).history };
+    };
+    expect(snap().doc).toBe(doc);
+    state.keepUndo("工作", "需求", "a", snap());
+    state.moveTodoState("工作", "需求", "a", ["生活", "杂事", "a-2"]);
+    expect(state.takeUndo("生活", "杂事", "a-2", relinked)).not.toBeNull();
+    state.keepUndo("工作", "需求", "a", snap());
+    state.moveTodoState("工作", "需求", "a", ["生活", "杂事", "a"]);
+    expect(state.takeUndo("生活", "杂事", "a", relinked)).toBeNull();
+    // 另存为新待办：留给新的那条的撤销记录标着 relinked
+    state.keepUndo("工作", "需求", "b", { ...snap(), relinked: true });
+    expect(state.takeUndo("工作", "需求", "b", relinked)).not.toBeNull();
   });
 });
 

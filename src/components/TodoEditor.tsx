@@ -10,6 +10,7 @@ import {
   UndoOutlined,
   UnorderedListOutlined,
 } from "@ant-design/icons";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   Alert,
   App as AntApp,
@@ -26,16 +27,26 @@ import {
 } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
+import {
+  fileName,
+  formatSize,
+  IMAGE_EXTS,
+  ImageResolver,
+  imageMarkdown,
+  isImageName,
+  LARGE_IMAGE,
+  pastedImageExt,
+} from "../editor/images";
 import { webUrl } from "../editor/links";
 import { activeIndex, type OutlineItem } from "../editor/outline";
 import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
-import { emitAppEvent, registerFlusher, useAppEvent, useWindowFocus } from "../hooks";
+import { emitAppEvent, registerFlusher, useAppEvent, useFileDrag, useWindowFocus } from "../hooks";
 import { leafName, parentOf } from "../projects";
 import { type Leftover, leaveProblem, type LeaveProblem, type ProjectAt, rescueAsNew, rescueNotice } from "../rescue";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
-import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
+import type { SavedImage, TextEncoding, TodoDetail, TodoSummary } from "../types";
 import {
   displayTitle,
   formatDuration,
@@ -172,6 +183,15 @@ export default function TodoEditor(props: Props) {
   const [initialHistory, setInitialHistory] = useState<unknown>(null);
   // 认不出编码的文件只读，免得保存时把原文件覆盖成乱码
   const readOnly = encoding === "unknown";
+  // 正文里的本地图片：经 Rust 端找到文件（相对于这条待办所在的项目文件夹，或绝对路径），用 asset 协议的地址显示，
+  // 带上修改时间（图片在外部被替换后不用 WebView 缓存里旧的）
+  const [images] = useState(
+    () =>
+      new ImageResolver(async (src) => {
+        const f = await api.imageFile(workspace, project, src);
+        return `${convertFileSrc(f.path)}?v=${f.modified}`;
+      }),
+  );
 
   const titleRef = useRef<InputRef>(null);
   const mdRef = useRef<MarkdownEditorHandle | null>(null);
@@ -396,7 +416,8 @@ export default function TodoEditor(props: Props) {
   const carryTo = (at: ProjectAt, newId: string, snap: UndoSnapshot | null) => {
     const position = readEditPosition(workspace, project, id);
     if (position) writeEditPosition(at.workspace, at.project, newId, position);
-    if (snap) keepUndo(at.workspace, at.project, newId, snap);
+    // 新的那条的正文里图片的链接改成了它自己的 id（复制了一份附件目录），撤销记录接到改过的正文上
+    if (snap) keepUndo(at.workspace, at.project, newId, { ...snap, relinked: true });
     writeEditorMode(at.workspace, at.project, newId, readEditorMode(workspace, project, id));
   };
 
@@ -409,7 +430,10 @@ export default function TodoEditor(props: Props) {
     const content = s.content;
     const here = { workspace, project };
     const original = displayTitle(propsRef.current.summary).text;
-    const r = await rescueAsNew(api.createTodo, here, quickTargetRef.current, myVersionTitle(s.title, content), content);
+    // 新的那条复制一份这条的图片（附件目录）
+    const create = (ws: string, p: string, title: string, text: string, createProject: boolean) =>
+      api.createTodo(ws, p, title, text, createProject, { workspace, project, id });
+    const r = await rescueAsNew(create, here, quickTargetRef.current, myVersionTitle(s.title, content), content);
     if (!r.ok) {
       // 从托盘退出时还开着，内容在编辑区里（不退出）；卸载了的只能放进剪贴板
       let leftover: Leftover = "editor";
@@ -684,7 +708,7 @@ export default function TodoEditor(props: Props) {
     await enqueue(async () => {
       let created: TodoSummary;
       try {
-        created = await api.createTodo(workspace, project, newTitle, mine);
+        created = await api.createTodo(workspace, project, newTitle, mine, false, { workspace, project, id });
       } catch (e) {
         message.error(`另存为新待办失败：${errMsg(e)}`);
         setConflict(true);
@@ -748,6 +772,85 @@ export default function TodoEditor(props: Props) {
     }
     api.openUrl(url).catch((e) => message.error(errMsg(e)));
   };
+
+  /** 能不能往正文里插入图片：只读的（编码认不出）不能，提示原因；正显示着冲突对话框时不插 */
+  const canInsertImages = () => {
+    if (!s.loaded || s.detached || s.conflict) return false;
+    if (readOnly) {
+      message.warning("这条待办的正文只读（认不出编码），不能插入图片");
+      return false;
+    }
+    return true;
+  };
+
+  /** 逐张存进附件目录，返回存好了的；有没存成的提示原因，太大的提示一下（照常插入） */
+  const saveImages = async (jobs: (() => Promise<SavedImage>)[]): Promise<SavedImage[]> => {
+    const saved: SavedImage[] = [];
+    const errors: string[] = [];
+    for (const job of jobs) {
+      try {
+        saved.push(await job());
+      } catch (e) {
+        errors.push(errMsg(e));
+      }
+    }
+    if (errors.length) message.error(jobs.length > 1 ? `${errors.length} 张图片没能插入：${errors[0]}` : `没能插入图片：${errors[0]}`);
+    for (const big of saved.filter((x) => x.size > LARGE_IMAGE)) {
+      message.warning(`图片「${big.name}」有 ${formatSize(big.size)}，比较大：会占用数据目录的空间，数据目录用网盘同步时也慢`, 6);
+    }
+    return saved;
+  };
+
+  /** 粘贴的图片（剪贴板里有图片、没有文字时）存进附件目录，插在光标处；files 是空的说明只有不是图片的文件 */
+  const pasteImages = async (files: File[]) => {
+    if (!files.length) {
+      message.warning("只能粘贴图片");
+      return;
+    }
+    if (!canInsertImages()) return;
+    const saved = await saveImages(
+      files.map((f) => async () =>
+        api.saveImage(workspace, project, id, pastedImageExt(f) ?? "png", new Uint8Array(await f.arrayBuffer())),
+      ),
+    );
+    mdRef.current?.insertImages(saved.map((x) => imageMarkdown(x.link, x.name)));
+  };
+
+  /** 拖进来的文件：图片复制一份到附件目录（原文件不动），插在放下的位置 at；不是图片的提示一下 */
+  const dropFiles = async (paths: string[], at: number) => {
+    const others = paths.filter((p) => !isImageName(p));
+    if (others.length) {
+      const names = others.map((p) => `「${fileName(p)}」`).join("、");
+      message.warning(`${names}不是图片，没有插入（能插入 ${IMAGE_EXTS.join("、")}）`, 6);
+    }
+    const pictures = paths.filter(isImageName);
+    if (!pictures.length || !canInsertImages()) return;
+    const saved = await saveImages(pictures.map((p) => () => api.importImage(workspace, project, id, p)));
+    mdRef.current?.insertImages(
+      saved.map((x) => imageMarkdown(x.link, x.name)),
+      at,
+    );
+  };
+
+  // 从资源管理器拖进来的文件（Tauri 接管了系统的拖放，见 hooks.ts 的 useFileDrag）：拖着图片停在正文上时画出放下的位置，
+  // 放在正文里时插入；放在正文以外的地方什么都不做
+  const draggedPaths = useRef<string[]>([]);
+  useFileDrag((e) => {
+    const md = mdRef.current;
+    if (!md) return;
+    if (e.type === "leave") {
+      md.dropCaret(null);
+      return;
+    }
+    if (e.type === "enter") draggedPaths.current = e.paths;
+    const at = md.posAt(e.x, e.y);
+    if (e.type === "drop") {
+      md.dropCaret(null);
+      if (at !== null) dropFiles(e.paths, at);
+      return;
+    }
+    md.dropCaret(draggedPaths.current.some(isImageName) && !readOnly ? at : null);
+  });
 
   const copyPath = async () => {
     try {
@@ -869,7 +972,7 @@ export default function TodoEditor(props: Props) {
                 autoFocus={props.autoFocusBody && !props.autoFocusTitle}
                 mode={mode}
                 readOnly={readOnly}
-                placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
+                placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，可以粘贴、拖进图片；Ctrl + / 切换实时渲染和源码模式"}
                 appShortcuts={[keys?.toggleDoneShortcut, keys?.openExternalShortcut]}
                 editShortcuts={editShortcuts}
                 onChange={onContentChange}
@@ -877,6 +980,8 @@ export default function TodoEditor(props: Props) {
                 onOpenLink={openLink}
                 onPosition={onPosition}
                 onReadingPos={onReadingPos}
+                images={images}
+                onPasteImages={pasteImages}
                 onDestroy={(snap) => snap && !s.detached && keepUndo(workspace, project, id, snap)}
               />
             </>

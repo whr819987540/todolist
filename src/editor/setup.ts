@@ -8,6 +8,7 @@ import { appearance } from "./appearance";
 import { codeFenceKeymap } from "./codeFences";
 import { editBindings } from "./editBindings";
 import { findExtensions } from "./find";
+import { clipboardImages, dropCaret, type ImageResolver, imageResolver } from "./images";
 import { ctrlClickLinks } from "./links";
 import { livePreview } from "./livePreview";
 import { trackReadingPos } from "./outline";
@@ -31,6 +32,10 @@ export interface EditorOptions {
   onPosition: (p: EditPosition) => void;
   /** 正在看的位置变了（光标在可见区域里时是光标处，否则是可见区域顶部），大纲据此高亮当前标题 */
   onReadingPos: (pos: number) => void;
+  /** 实时渲染时怎么找到正文里的图片（images.ts） */
+  images: ImageResolver;
+  /** 粘贴了图片（剪贴板里有图片、没有文字）：由外层存成文件、插入；files 里只有图片，空的是剪贴板里只有不是图片的文件 */
+  onPasteImages: (files: File[]) => void;
 }
 
 const modeConf = new Compartment();
@@ -120,6 +125,18 @@ export function createExtensions(o: EditorOptions): Extension[] {
     ctrlClickLinks(o.onOpenLink),
     // 查找 / 替换（Ctrl+F、Ctrl+H 由 WorkspaceView 转过来，见 find.ts）
     findExtensions(),
+    // 图片：实时渲染时据此显示，粘贴的交给外层存成文件，拖进来时画出放下的位置（images.ts）
+    imageResolver.of(o.images),
+    EditorView.domEventHandlers({
+      paste: (e) => {
+        const files = clipboardImages(e.clipboardData);
+        if (!files) return false;
+        e.preventDefault();
+        o.onPasteImages(files);
+        return true;
+      },
+    }),
+    dropCaret,
     changeReporter(o),
     trackPosition(o.onPosition),
     trackReadingPos(o.onReadingPos),

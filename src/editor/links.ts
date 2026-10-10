@@ -21,12 +21,12 @@ function findReference(state: EditorState, label: string): string | null {
   return null;
 }
 
-/** 链接指向的地址：[文字](地址)、[文字][引用]、<地址>、裸网址；找不到时返回 null */
+/** 链接（和图片）指向的地址：[文字](地址)、[文字][引用]、<地址>、裸网址，![说明](地址)、![说明][引用]；找不到时返回 null */
 export function linkTarget(state: EditorState, node: SyntaxNode): string | null {
   if (node.name === "URL") return state.sliceDoc(node.from, node.to);
   const url = node.getChild("URL");
   if (url) return state.sliceDoc(url.from, url.to);
-  if (node.name !== "Link") return null;
+  if (node.name !== "Link" && node.name !== "Image") return null;
   // [文字][引用]、[文字][]、[引用]
   const label = node.getChild("LinkLabel");
   if (label && label.to - label.from > 2) return findReference(state, state.sliceDoc(label.from + 1, label.to - 1));

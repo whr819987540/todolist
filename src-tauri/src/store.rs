@@ -8,11 +8,13 @@
 //!     {项目}/
 //!       .todos.json          标题、完成状态、创建/修改时间等元数据
 //!       20260926-153012.md   待办正文（Markdown 纯文本）
-//!       {子项目}/            项目文件夹里的子文件夹是子项目，里面同样是 .todos.json 和 .md（只有一层子项目）
+//!       .assets/{待办 id}/   这条待办的图片（附件目录），正文里写成相对地址 `.assets/{待办 id}/{文件名}`
+//!       {子项目}/            项目文件夹里的子文件夹是子项目，里面同样是 .todos.json、.md 和 .assets（只有一层子项目）
 //!   .state.json              界面状态：上次的位置、各待办的编辑位置等，内容由前端决定
 //!   .recycle/                软件的回收站：删除的工作区、项目、待办先放在这里，可以恢复
 //!     {条目 id}/entry.json   原来在哪里、标题和完成状态等
 //!     {条目 id}/{原名}       删除的 .md 文件或目录
+//!     {条目 id}/.assets/{待办 id}/   删除的待办的图片，和在项目文件夹里时的相对位置一样
 //! ```
 //!
 //! 接口里的项目用路径表示：顶层项目是它的名字，子项目是「父项目/子项目」（名字里不能有 /，不会混淆）。
@@ -29,14 +31,19 @@
 //!
 //! 运行期间监听数据目录（watch.rs），文件在外部变化时通知前端刷新；这里每次写完都记下写过的文件、文件夹现在的样子
 //! （OwnWrites），监听到的变化和记下的一样就是软件自己写的，不引起刷新。
+//!
+//! 待办的图片放在项目文件夹的附件目录 `.assets` 里（`.` 开头，不算子项目，监听时也不看），每条待办一个子目录，
+//! 跟着待办移动、进出回收站；待办换了 id（重名）时子目录跟着改名，正文里指向它的链接也改掉（relink_assets）。
 
 use chrono::Local;
 use encoding_rs::{DecoderResult, Encoding, GB18030, UTF_8};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -45,6 +52,10 @@ pub const UI_STATE_FILE: &str = ".state.json";
 const TRASH_DIR: &str = ".trash";
 pub const RECYCLE_DIR: &str = ".recycle";
 const ENTRY_FILE: &str = "entry.json";
+/// 项目文件夹里放图片的附件目录（`.` 开头，不算子项目），每条待办一个子目录：`.assets/{待办 id}/{文件名}`
+pub const ASSETS_DIR: &str = ".assets";
+/// 能插入、显示的图片的扩展名（小写）
+pub const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "avif"];
 /// 软件回收站里放了这么多天的，移到系统回收站
 pub const RECYCLE_KEEP_DAYS: i64 = 30;
 const PREVIEW_CHARS: usize = 200;
@@ -301,6 +312,37 @@ pub struct SaveResult {
     pub mtime: i64,
 }
 
+/// 存进附件目录的一张图片（粘贴、拖进来的）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedImage {
+    /// 写进正文的地址：相对于 .md 文件，用 / 分隔，如 `.assets/20261010-101010/图片-20261010-101010.png`
+    pub link: String,
+    /// 存成的文件名
+    pub name: String,
+    /// 字节数（太大时前端提示一下）
+    pub size: u64,
+}
+
+/// 正文里一张本地图片对应的文件
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageFile {
+    /// 规整过（去掉了 . 和 ..）的绝对路径，前端经 asset 协议读
+    pub path: String,
+    /// 修改时间：图片在外部被替换后，前端用的地址跟着变，不用 WebView 缓存里旧的
+    pub modified: i64,
+}
+
+/// 一条待办在哪里（另存为新待办时，从哪条复制附件目录）
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoRef {
+    pub workspace: String,
+    pub project: String,
+    pub id: String,
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -446,7 +488,7 @@ impl Store {
         for (_, pdir) in project_dirs(&dir)? {
             count += markdown_files(&pdir)?.len();
         }
-        let id = self.recycle(&dir, RecycleFile::new(RecycleKind::Workspace, name, None, name, count))?;
+        let id = self.recycle(&dir, None, RecycleFile::new(RecycleKind::Workspace, name, None, name, count))?;
         g.forget_under(&dir);
         Ok(id)
     }
@@ -516,7 +558,7 @@ impl Store {
                 count += markdown_files(&sdir)?.len();
             }
         }
-        let id = self.recycle(&pdir, RecycleFile::new(RecycleKind::Project, ws, Some(project), name, count))?;
+        let id = self.recycle(&pdir, None, RecycleFile::new(RecycleKind::Project, ws, Some(project), name, count))?;
         g.forget_under(&pdir);
         Ok(id)
     }
@@ -558,25 +600,54 @@ impl Store {
 
     // ----- 待办 -----
 
-    /// 新建待办；content 是正文（新建空白待办时为空）。正文在同一次调用里写好，
-    /// 不会出现先有一个空文件、再保存正文的中间状态（外部修改冲突时「另存为新待办」用）
+    /// 同 create_todo_from，不复制附件目录（单元测试里用）
+    #[cfg(test)]
     pub fn create_todo(&self, ws: &str, project: &str, title: &str, content: &str) -> Result<TodoSummary> {
+        self.create_todo_from(ws, project, title, content, None)
+    }
+
+    /// 新建待办；content 是正文（新建空白待办时为空）。正文在同一次调用里写好，
+    /// 不会出现先有一个空文件、再保存正文的中间状态（外部修改冲突时「另存为新待办」用）。
+    /// 给了 from（另存为新待办时原来那条）时，复制一份它的附件目录给新的这条，正文里指向原来附件目录的链接改成新的 id，
+    /// 免得以后删了原来那条图片就没了；复制失败时照常新建，链接不改
+    pub fn create_todo_from(
+        &self,
+        ws: &str,
+        project: &str,
+        title: &str,
+        content: &str,
+        from: Option<&TodoRef>,
+    ) -> Result<TodoSummary> {
         let _g = self.guard();
         let dir = self.project_dir(ws, project)?;
         let mut meta = read_meta(&dir)?;
         let id = unique_id(&dir, &meta);
+        let copied = from.filter(|f| self.copy_assets(f, &assets_dir(&dir, &id)));
+        let content = match copied.and_then(|f| rewrite_asset_links(content, &f.id, &id)) {
+            Some(relinked) => Cow::Owned(relinked),
+            None => Cow::Borrowed(content),
+        };
         let path = dir.join(format!("{id}.md"));
-        let mut file = OpenOptions::new()
+        let written = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
-            .map_err(|e| format!("创建待办文件失败：{e}"))?;
-        if let Err(e) = file.write_all(content.as_bytes()).and_then(|_| file.sync_all()) {
-            drop(file);
-            let _ = fs::remove_file(&path);
-            return Err(format!("写入待办正文失败：{e}"));
+            .map_err(|e| format!("创建待办文件失败：{e}"))
+            .and_then(|mut file| {
+                let done = file.write_all(content.as_bytes()).and_then(|_| file.sync_all());
+                drop(file);
+                done.map_err(|e| {
+                    let _ = fs::remove_file(&path);
+                    format!("写入待办正文失败：{e}")
+                })
+            });
+        if let Err(e) = written {
+            if copied.is_some() {
+                let _ = fs::remove_dir_all(assets_dir(&dir, &id));
+                remove_empty_assets(&dir);
+            }
+            return Err(e);
         }
-        drop(file);
         note_own(&path);
         let now = now_ms();
         let entry = TodoMeta {
@@ -591,7 +662,7 @@ impl Store {
         };
         meta.todos.push(entry.clone());
         write_meta(&dir, &meta)?;
-        Ok(summary_of(&entry, now, make_preview(content)))
+        Ok(summary_of(&entry, now, make_preview(&content)))
     }
 
     /// 快速记录：第一行当标题、其余当正文，存成工作区 ws 的项目 project（可以是子项目）里的一条新待办；
@@ -601,10 +672,10 @@ impl Store {
         if title.is_empty() && content.is_empty() {
             return Err("没有要记的内容".into());
         }
-        self.create_todo_creating_project(ws, project, &title, &content)
+        self.create_todo_creating_project(ws, project, &title, &content, None)
     }
 
-    /// 同 create_todo，但工作区、项目（可以是子项目）不在时先建：快速记录，和离开一条待办时存不上、
+    /// 同 create_todo_from，但工作区、项目（可以是子项目）不在时先建：快速记录，和离开一条待办时存不上、
     /// 原来的项目也不在了，另存到快速记录存到的项目里时用
     pub fn create_todo_creating_project(
         &self,
@@ -612,6 +683,7 @@ impl Store {
         project: &str,
         title: &str,
         content: &str,
+        from: Option<&TodoRef>,
     ) -> Result<TodoSummary> {
         let ws = normalize_name(ws, "工作区")?;
         let project = normalize_project_path(project)?;
@@ -621,7 +693,7 @@ impl Store {
             self.create_dirs(&dir)
                 .map_err(|e| format!("创建项目「{}」失败：{e}", project_label(&project)))?;
         }
-        self.create_todo(&ws, &project, title, content)
+        self.create_todo_from(&ws, &project, title, content, from)
     }
 
     pub fn read_todo(&self, ws: &str, project: &str, id: &str) -> Result<TodoDetail> {
@@ -774,7 +846,7 @@ impl Store {
         ))
     }
 
-    /// 放进软件的回收站（连同标题、完成状态等，恢复时还原），返回回收站里这一项的 id
+    /// 放进软件的回收站（连同标题、完成状态等，恢复时还原；图片的附件目录放在同一项里），返回回收站里这一项的 id
     pub fn delete_todo(&self, ws: &str, project: &str, id: &str) -> Result<String> {
         let mut g = self.guard();
         let dir = self.project_dir(ws, project)?;
@@ -783,14 +855,16 @@ impl Store {
         let mut file = RecycleFile::new(RecycleKind::Todo, ws, Some(project), &format!("{id}.md"), 0);
         file.todo = Some(meta.todos[idx].clone());
         file.preview = read_preview(&path);
-        let rid = self.recycle(&path, file)?;
+        let rid = self.recycle(&path, Some(&assets_dir(&dir, id)), file)?;
         meta.todos.remove(idx);
         write_meta(&dir, &meta)?;
         g.forget_todo(&dir, id);
+        remove_empty_assets(&dir);
         Ok(rid)
     }
 
-    /// 把待办移动到另一个项目（可以在别的工作区里）。目标项目里若有同名文件会换一个新 id。
+    /// 把待办移动到另一个项目（可以在别的工作区里），图片的附件目录跟着过去。目标项目里若有同名文件会换一个新 id，
+    /// 这时附件目录改成新 id，正文里指向它的链接跟着改（relink_assets）
     pub fn move_todo(
         &self,
         ws: &str,
@@ -811,14 +885,27 @@ impl Store {
 
         let mut entry = src_meta.todos.remove(idx);
         let mut new_id = entry.id.clone();
-        if dst_dir.join(format!("{new_id}.md")).exists() || dst_meta.find(&new_id).is_some() {
+        if id_taken(&dst_dir, &dst_meta, &new_id) {
             new_id = unique_id(&dst_dir, &dst_meta);
         }
         let dst_path = dst_dir.join(format!("{new_id}.md"));
-        fs::rename(&src_path, &dst_path)
-            .map_err(|e| format!("移动失败，文件可能正被其他程序占用：{e}"))?;
+        // 图片先移过去：移不动（被别的程序占用）时这条待办整个不移
+        let (src_assets, dst_assets) = (assets_dir(&src_dir, id), assets_dir(&dst_dir, &new_id));
+        let moved_assets = move_assets(&src_assets, &dst_assets)
+            .map_err(|e| format!("移动失败，图片可能正被其他程序占用：{e}"))?;
+        if let Err(e) = fs::rename(&src_path, &dst_path) {
+            if moved_assets {
+                let _ = fs::rename(&dst_assets, &src_assets);
+                remove_empty_assets(&dst_dir);
+            }
+            return Err(format!("移动失败，文件可能正被其他程序占用：{e}"));
+        }
         note_own(&src_path);
         note_own(&dst_path);
+        if new_id != id {
+            relink_assets(&dst_path, id, &new_id);
+        }
+        remove_empty_assets(&src_dir);
 
         entry.id = new_id;
         // 在目标项目里还没排过位置，手动排序时排在最前面
@@ -832,6 +919,106 @@ impl Store {
             mtime_ms(&dst_path).unwrap_or(0),
             read_preview(&dst_path),
         ))
+    }
+
+    // ----- 图片（附件目录） -----
+
+    /// 粘贴的图片（data，扩展名 ext）存进待办 id 的附件目录，名字是「图片-年月日-时分秒.扩展名」，同名时加 -2、-3…
+    pub fn save_image(&self, ws: &str, project: &str, id: &str, ext: &str, data: &[u8]) -> Result<SavedImage> {
+        let _g = self.guard();
+        let dir = self.project_dir(ws, project)?;
+        Self::todo_file(&dir, id)?;
+        let ext = ext.to_ascii_lowercase();
+        if !is_image_ext(&ext) {
+            return Err(format!("不能插入 .{ext} 格式的图片"));
+        }
+        let assets = assets_dir(&dir, id);
+        self.create_dirs(&assets).map_err(|e| format!("保存图片失败：{e}"))?;
+        let stem = format!("图片-{}", Local::now().format("%Y%m%d-%H%M%S"));
+        for name in numbered_names(&stem, &ext) {
+            let path = assets.join(&name);
+            let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(f) => f,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("保存图片失败：{e}")),
+            };
+            if let Err(e) = file.write_all(data).and_then(|_| file.sync_all()) {
+                drop(file);
+                let _ = fs::remove_file(&path);
+                return Err(format!("保存图片失败：{e}"));
+            }
+            return Ok(SavedImage { link: asset_link(id, &name), name, size: data.len() as u64 });
+        }
+        unreachable!("numbered_names 不会结束")
+    }
+
+    /// 拖进来的图片文件 source 复制一份到待办 id 的附件目录（原文件不动），保留原名（不能用在文件名里的字符换成 _）；
+    /// 附件目录里已有同名文件时，内容一样的直接用它，不一样的加 -2、-3…
+    pub fn import_image(&self, ws: &str, project: &str, id: &str, source: &Path) -> Result<SavedImage> {
+        let _g = self.guard();
+        let dir = self.project_dir(ws, project)?;
+        Self::todo_file(&dir, id)?;
+        let shown = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or_default();
+        if !is_image_ext(&ext.to_ascii_lowercase()) {
+            return Err(format!("「{shown}」不是图片"));
+        }
+        let size = match fs::metadata(source) {
+            Ok(md) if md.is_file() => md.len(),
+            _ => return Err(format!("找不到「{shown}」")),
+        };
+        let stem = clean_file_stem(&source.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default());
+        let assets = assets_dir(&dir, id);
+        self.create_dirs(&assets).map_err(|e| format!("复制图片失败：{e}"))?;
+        for name in numbered_names(&stem, ext) {
+            let path = assets.join(&name);
+            if path.exists() {
+                if same_content(source, &path) {
+                    return Ok(SavedImage { link: asset_link(id, &name), name, size });
+                }
+                continue;
+            }
+            fs::copy(source, &path).map_err(|e| format!("复制「{shown}」失败：{e}"))?;
+            return Ok(SavedImage { link: asset_link(id, &name), name, size });
+        }
+        unreachable!("numbered_names 不会结束")
+    }
+
+    /// 正文里本地图片的地址 src（已经去掉了 Markdown 的转义）指向的文件：相对地址相对于项目文件夹（.md 所在的
+    /// 文件夹），也可以是绝对路径。只认图片扩展名的、在的文件
+    pub fn image_file(&self, ws: &str, project: &str, src: &str) -> Result<ImageFile> {
+        let dir = {
+            let _g = self.guard();
+            self.project_dir(ws, project)?
+        };
+        let path = normalize_path(&dir.join(src));
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        if !is_image_ext(&ext) {
+            return Err("不是图片文件".into());
+        }
+        let md = fs::metadata(&path).ok().filter(|m| m.is_file()).ok_or("找不到图片")?;
+        Ok(ImageFile {
+            path: path.to_string_lossy().into_owned(),
+            modified: to_ms(md.modified()).unwrap_or(0),
+        })
+    }
+
+    /// 另存为新待办：待办 from 的附件目录复制一份到 to；复制成了返回 true。没有附件目录、复制失败（删掉复制了一半的）
+    /// 时返回 false，那时新的那条的正文还指向原来那条的图片
+    fn copy_assets(&self, from: &TodoRef, to: &Path) -> bool {
+        let Ok(dir) = self.project_dir(&from.workspace, &from.project) else { return false };
+        if check_component(&from.id, "待办").is_err() {
+            return false;
+        }
+        let src = assets_dir(&dir, &from.id);
+        if !src.is_dir() || to.exists() {
+            return false;
+        }
+        if copy_dir(&src, to).is_err() {
+            let _ = fs::remove_dir_all(to);
+            return false;
+        }
+        true
     }
 
     // ----- 全文搜索 -----
@@ -895,9 +1082,10 @@ impl Store {
         self.root.join(RECYCLE_DIR)
     }
 
-    /// 把 path（待办的 .md、项目或工作区的目录）连同说明放进回收站，返回这一项的 id。
+    /// 把 path（待办的 .md、项目或工作区的目录）连同说明放进回收站，返回这一项的 id；assets 是待办的附件目录（图片），
+    /// 在的话放进这一项的 `.assets` 里，和在项目文件夹里时的相对位置一样（在系统回收站里打开 .md 也看得到图片）。
     /// 先写说明再移文件，移不动（被别的程序占用）时什么都不留
-    fn recycle(&self, path: &Path, file: RecycleFile) -> Result<String> {
+    fn recycle(&self, path: &Path, assets: Option<&Path>, file: RecycleFile) -> Result<String> {
         let root = self.recycle_root();
         fs::create_dir_all(&root).map_err(|e| format!("删除失败：{e}"))?;
         let base = Local::now().format("%Y%m%d-%H%M%S-%3f").to_string();
@@ -912,8 +1100,23 @@ impl Store {
             let _ = fs::remove_dir_all(&dir);
             return Err(format!("删除失败：{e}"));
         }
+        let mut moved_assets = None;
+        if let Some(from) = assets {
+            let to = dir.join(ASSETS_DIR).join(from.file_name().unwrap_or_default());
+            match move_assets(from, &to) {
+                Ok(true) => moved_assets = Some((from, to)),
+                Ok(false) => {}
+                Err(e) => {
+                    let _ = fs::remove_dir_all(&dir);
+                    return Err(format!("删除失败，图片可能正被其他程序占用：{e}"));
+                }
+            }
+        }
         if let Err(e) = fs::rename(path, dir.join(&file.name)) {
-            let _ = fs::remove_dir_all(&dir);
+            // 图片移回去；万一移不回去，这一项留着（里面有图片），不能连同图片一起删掉
+            if moved_assets.as_ref().is_none_or(|(from, to)| fs::rename(to, from).is_ok()) {
+                let _ = fs::remove_dir_all(&dir);
+            }
             return Err(format!("删除失败，可能有文件正被其他程序占用：{e}"));
         }
         note_own(path);
@@ -1002,13 +1205,25 @@ impl Store {
                         order: None,
                     }
                 });
-                let mut new_id = stem;
-                if pdir.join(format!("{new_id}.md")).exists() || meta.find(&new_id).is_some() {
+                let mut new_id = stem.clone();
+                if id_taken(&pdir, &meta, &new_id) {
                     new_id = unique_id(&pdir, &meta);
                 }
                 let path = pdir.join(format!("{new_id}.md"));
-                fs::rename(&payload, &path).map_err(|e| format!("恢复失败：{e}"))?;
+                // 图片（这一项里的 .assets）一起回去
+                let (from_assets, to_assets) = (assets_dir(&dir, &stem), assets_dir(&pdir, &new_id));
+                let moved_assets = move_assets(&from_assets, &to_assets).map_err(|e| format!("恢复失败：{e}"))?;
+                if let Err(e) = fs::rename(&payload, &path) {
+                    if moved_assets {
+                        let _ = fs::rename(&to_assets, &from_assets);
+                        remove_empty_assets(&pdir);
+                    }
+                    return Err(format!("恢复失败：{e}"));
+                }
                 note_own(&path);
+                if new_id != stem {
+                    relink_assets(&path, &stem, &new_id);
+                }
                 todo.id = new_id.clone();
                 // 原来排的位置在别的待办调整过顺序后不一定还对，当成新来的排在最前面
                 todo.order = None;
@@ -1450,14 +1665,18 @@ fn summary_of(m: &TodoMeta, file_mtime: i64, preview: String) -> TodoSummary {
 /// 生成形如 `20260926-153012` 的 id，同一秒内重复则追加 `-2`、`-3`…
 fn unique_id(dir: &Path, meta: &MetaFile) -> String {
     let base = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let taken = |id: &str| meta.find(id).is_some() || dir.join(format!("{id}.md")).exists();
-    if !taken(&base) {
+    if !id_taken(dir, meta, &base) {
         return base;
     }
     (2..)
         .map(|n| format!("{base}-{n}"))
-        .find(|id| !taken(id))
+        .find(|id| !id_taken(dir, meta, id))
         .expect("infinite iterator")
+}
+
+/// 项目目录 dir 里 id 已经有人用了：元数据里有、有这个 .md，或者有这个附件目录（外部留下的、没有对应待办的）
+fn id_taken(dir: &Path, meta: &MetaFile, id: &str) -> bool {
+    meta.find(id).is_some() || dir.join(format!("{id}.md")).exists() || assets_dir(dir, id).exists()
 }
 
 fn is_generated_id(id: &str) -> bool {
@@ -1675,15 +1894,17 @@ pub fn normalize_name(raw: &str, what: &str) -> Result<String> {
     if name.starts_with('.') || name.ends_with('.') {
         return Err(format!("{what}名称不能以“.”开头或结尾"));
     }
-    let stem = name.split('.').next().unwrap_or(name).trim_end().to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.len() == 4
-            && stem.as_bytes()[3].is_ascii_digit());
-    if reserved {
+    if reserved_name(name) {
         return Err(format!("“{name}”是 Windows 保留名称，请换一个"));
     }
     Ok(name.to_string())
+}
+
+/// Windows 的保留名称（CON、COM1 等，带不带扩展名都算），不能用作文件名
+fn reserved_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end().to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit())
 }
 
 // ---------------------------------------------------------------------------
@@ -1817,6 +2038,171 @@ pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     }
     note_own(path);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 图片（附件目录）
+// ---------------------------------------------------------------------------
+
+/// 项目目录 dir 里待办 id 的附件目录
+fn assets_dir(dir: &Path, id: &str) -> PathBuf {
+    dir.join(ASSETS_DIR).join(id)
+}
+
+/// 附件目录里的图片写进正文的地址：相对于 .md 文件，用 /（Typora、VS Code 都认）
+fn asset_link(id: &str, name: &str) -> String {
+    format!("{ASSETS_DIR}/{id}/{name}")
+}
+
+fn is_image_ext(ext: &str) -> bool {
+    IMAGE_EXTS.contains(&ext)
+}
+
+/// 把附件目录 from 移到 to（to 的上级 `.assets` 不在时先建）；from 不在时什么都不做，返回 false
+fn move_assets(from: &Path, to: &Path) -> io::Result<bool> {
+    if !from.is_dir() {
+        return Ok(false);
+    }
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(from, to)?;
+    Ok(true)
+}
+
+/// 项目目录 dir 里的 `.assets` 空了（待办移走、删除了）时删掉，不在资源管理器里留个空文件夹；不空时什么都不做
+fn remove_empty_assets(dir: &Path) {
+    let _ = fs::remove_dir(dir.join(ASSETS_DIR));
+}
+
+/// 复制整个文件夹（另存为新待办时复制附件目录）
+fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// 两个文件的内容一样（拖进来的图片和附件目录里已有的同名文件）
+fn same_content(a: &Path, b: &Path) -> bool {
+    let len = |p: &Path| fs::metadata(p).map(|m| m.len()).ok();
+    len(a).is_some() && len(a) == len(b) && fs::read(a).ok().is_some_and(|x| fs::read(b).ok() == Some(x))
+}
+
+/// stem.ext、stem-2.ext、stem-3.ext…（ext 为空时没有扩展名）
+fn numbered_names<'a>(stem: &'a str, ext: &'a str) -> impl Iterator<Item = String> + 'a {
+    (1..).map(move |n| {
+        let stem = if n == 1 { stem.to_string() } else { format!("{stem}-{n}") };
+        if ext.is_empty() { stem } else { format!("{stem}.{ext}") }
+    })
+}
+
+/// 拖进来的文件的名字（不含扩展名）用作附件目录里的文件名：Windows 文件名里不能用的字符、控制字符和 #（Markdown
+/// 里会被当成网址的锚点）换成 _，去掉首尾的空白和点；是保留名称（CON 等）的后面加 _，空了的叫「图片」
+fn clean_file_stem(stem: &str) -> String {
+    let cleaned: String = stem
+        .chars()
+        .map(|c| if INVALID_CHARS.contains(&c) || c == '#' || c.is_control() { '_' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_matches('.').trim();
+    if cleaned.is_empty() {
+        return "图片".into();
+    }
+    if reserved_name(cleaned) {
+        return format!("{cleaned}_");
+    }
+    cleaned.to_string()
+}
+
+/// 去掉路径里的 . 和 ..（不碰磁盘，不解析快捷方式）；.. 到了根目录就不再往上
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// 百分号转义 id 时不转的字符（同网址里的 unreserved）
+const LINK_SAFE: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
+
+/// 正文 text 里地址以 `.assets/{old}/`（或 `./.assets/{old}/`）开头的改成 `.assets/{new}/`，别处不动；没有要改的返回 None。
+/// 地址的开头：前面是 `(`、`<`（`![](…)`、`![](<…>)`）、引号（HTML 的 `src="…"`）、空白（`[引用]: 地址`）或正文开头。
+/// id 里有空格、中文时别的程序可能写成 %20 之类的转义，也认；写成 \ 分隔的也认
+pub(crate) fn rewrite_asset_links(text: &str, old: &str, new: &str) -> Option<String> {
+    if old == new {
+        return None;
+    }
+    let encode = |id: &str| utf8_percent_encode(id, LINK_SAFE).to_string();
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (from, to) in [
+        (format!("{ASSETS_DIR}/{old}/"), format!("{ASSETS_DIR}/{new}/")),
+        (format!("{ASSETS_DIR}/{}/", old.replace(' ', "%20")), format!("{ASSETS_DIR}/{}/", new.replace(' ', "%20"))),
+        (format!("{ASSETS_DIR}/{}/", encode(old)), format!("{ASSETS_DIR}/{}/", encode(new))),
+        (format!("{ASSETS_DIR}\\{old}\\"), format!("{ASSETS_DIR}\\{new}\\")),
+    ] {
+        if !pairs.iter().any(|(f, _)| *f == from) {
+            pairs.push((from, to));
+        }
+    }
+    let at_link_start = |before: &str| {
+        let before = before.strip_suffix("./").or_else(|| before.strip_suffix(".\\")).unwrap_or(before);
+        before.chars().next_back().is_none_or(|c| matches!(c, '(' | '<' | '"' | '\'') || c.is_whitespace())
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (at, _) in text.match_indices(ASSETS_DIR) {
+        if at < copied || !at_link_start(&text[..at]) {
+            continue;
+        }
+        if let Some((from, to)) = pairs.iter().find(|(f, _)| text[at..].starts_with(f.as_str())) {
+            out.push_str(&text[copied..at]);
+            out.push_str(to);
+            copied = at + from.len();
+        }
+    }
+    if copied == 0 {
+        return None;
+    }
+    out.push_str(&text[copied..]);
+    Some(out)
+}
+
+/// 待办换了 id（移动、恢复时重名）后，正文 path 里指向原来附件目录的地址改成新的 id（rewrite_asset_links）。
+/// 是软件自己的写入：.md 的修改时间留着原来的（移动、恢复不算修改），记进 OwnWrites。只改 UTF-8 的正文，
+/// 换行和开头的 BOM 原样留着；读写失败时不改（图片显示不出来，正文不受影响）
+fn relink_assets(path: &Path, old: &str, new: &str) {
+    const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+    let Ok(bytes) = fs::read(path) else { return };
+    let body = bytes.strip_prefix(BOM).unwrap_or(&bytes);
+    let Ok(text) = std::str::from_utf8(body) else { return };
+    let Some(relinked) = rewrite_asset_links(text, old, new) else { return };
+    let modified = fs::metadata(path).and_then(|m| m.modified()).ok();
+    let head: &[u8] = if body.len() < bytes.len() { BOM } else { &[] };
+    if atomic_write(path, &[head, relinked.as_bytes()].concat()).is_err() {
+        return;
+    }
+    if let Some(t) = modified {
+        if let Ok(f) = File::options().write(true).open(path) {
+            let _ = f.set_modified(t);
+        }
+    }
+    note_own(path);
 }
 
 fn now_ms() -> i64 {
@@ -2515,15 +2901,15 @@ mod tests {
         // 离开待办时存不上、原来的项目也不在了：另存到快速记录存到的项目，工作区、项目不在时先建；
         // 标题、正文原样存（不像快速记录那样拆第一行）
         let mine = "第一行\n\n第二段  \n";
-        let t = s.create_todo_creating_project("收件箱", "快速记录", "周报（我的版本）", mine).unwrap();
+        let t = s.create_todo_creating_project("收件箱", "快速记录", "周报（我的版本）", mine, None).unwrap();
         assert_eq!(t.title, "周报（我的版本）");
         assert_eq!(s.read_todo("收件箱", "快速记录", &t.id).unwrap().content, mine);
         // 已经在：直接加进去；子项目也行
-        s.create_todo_creating_project("收件箱", "快速记录", "第二条", "").unwrap();
+        s.create_todo_creating_project("收件箱", "快速记录", "第二条", "", None).unwrap();
         assert_eq!(s.load_workspace("收件箱").unwrap().projects[0].todos.len(), 2);
-        let sub = s.create_todo_creating_project("收件箱", "灵感/产品", "子项目里", "x").unwrap();
+        let sub = s.create_todo_creating_project("收件箱", "灵感/产品", "子项目里", "x", None).unwrap();
         assert_eq!(s.read_todo("收件箱", "灵感/产品", &sub.id).unwrap().content, "x");
-        assert!(s.create_todo_creating_project("收件箱", "a\\b", "标题", "x").is_err());
+        assert!(s.create_todo_creating_project("收件箱", "a\\b", "标题", "x", None).is_err());
     }
 
     #[test]
@@ -2929,5 +3315,268 @@ mod tests {
         assert!(is_generated_id("20260926-153012-2"));
         assert!(!is_generated_id("20260926-153012-"));
         assert!(!is_generated_id("notes"));
+    }
+
+    // ----- 图片（附件目录） -----
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n fake png";
+
+    /// 工作区 w、项目 p（和 q）、p 里一条待办，返回它的 id
+    fn with_todo(s: &Store, content: &str) -> String {
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        s.create_project("w", "q").unwrap();
+        s.create_todo("w", "p", "有图的", content).unwrap().id
+    }
+
+    /// 在数据目录以外放一个文件（拖进来的图片），返回路径
+    fn outside(tmp: &TempRoot, name: &str, data: &[u8]) -> PathBuf {
+        let dir = tmp.0.join("桌面");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(name), data).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn pasted_images_are_saved_in_the_todos_assets_folder() {
+        let (_tmp, s) = store("img-paste");
+        let id = with_todo(&s, "");
+        let a = s.save_image("w", "p", &id, "PNG", PNG).unwrap();
+        // 相对于 .md 的地址，名字是「图片-年月日-时分秒」，扩展名按格式（小写）
+        let prefix = format!(".assets/{id}/图片-");
+        assert!(a.link.starts_with(&prefix) && a.link.ends_with(".png"), "{}", a.link);
+        assert_eq!((a.size, a.link.rsplit('/').next().unwrap()), (PNG.len() as u64, a.name.as_str()));
+        let dir = s.project_path("w", "p").unwrap();
+        assert_eq!(fs::read(dir.join(&a.link)).unwrap(), PNG);
+        // 同一秒里再粘贴一张：不覆盖，名字后面加序号
+        let b = s.save_image("w", "p", &id, "png", b"second").unwrap();
+        assert_ne!(a.name, b.name);
+        assert_eq!(fs::read(dir.join(&a.link)).unwrap(), PNG);
+        assert_eq!(fs::read(dir.join(&b.link)).unwrap(), b"second");
+        assert_eq!(numbered_names("图片-1", "png").take(3).collect::<Vec<_>>(), ["图片-1.png", "图片-1-2.png", "图片-1-3.png"]);
+        // 不是图片的格式、不在的待办
+        assert!(s.save_image("w", "p", &id, "exe", PNG).is_err());
+        assert!(s.save_image("w", "p", "不在", "png", PNG).is_err());
+        assert!(s.save_image("w", "p", "../x", "png", PNG).is_err());
+    }
+
+    #[test]
+    fn dropped_images_are_copied_with_their_names() {
+        let (tmp, s) = store("img-drop");
+        let id = with_todo(&s, "");
+        let src = outside(&tmp, "会议 截图#1.PNG", PNG);
+        let a = s.import_image("w", "p", &id, &src).unwrap();
+        // 保留原名，# 换成 _；原文件不动
+        assert_eq!(a.link, format!(".assets/{id}/会议 截图_1.PNG"));
+        assert!(src.is_file());
+        let dir = s.project_path("w", "p").unwrap();
+        assert_eq!(fs::read(dir.join(&a.link)).unwrap(), PNG);
+        // 同一个文件再拖一次：内容一样，用已有的那个
+        assert_eq!(s.import_image("w", "p", &id, &src).unwrap().link, a.link);
+        // 同名、内容不一样：加序号
+        let other = outside(&tmp, "会议 截图#1.PNG", b"different");
+        assert_eq!(s.import_image("w", "p", &id, &other).unwrap().name, "会议 截图_1-2.PNG");
+        // 不是图片、不在的
+        let txt = outside(&tmp, "说明.txt", b"x");
+        assert!(s.import_image("w", "p", &id, &txt).unwrap_err().contains("不是图片"));
+        assert!(s.import_image("w", "p", &id, &tmp.0.join("没有.png")).unwrap_err().contains("找不到"));
+        // 名字的规整
+        assert_eq!(clean_file_stem("a<b>:c\"d|e?f*g"), "a_b__c_d_e_f_g");
+        assert_eq!(clean_file_stem(" ..隐藏. "), "隐藏");
+        assert_eq!(clean_file_stem("CON"), "CON_");
+        assert_eq!(clean_file_stem("..."), "图片");
+    }
+
+    #[test]
+    fn assets_folder_is_not_a_project_or_todo() {
+        let (_tmp, s) = store("img-hidden");
+        let id = with_todo(&s, "正文");
+        s.save_image("w", "p", &id, "png", PNG).unwrap();
+        s.create_sub_project("w", "p", "子").unwrap();
+        let sub = s.create_todo("w", "p/子", "", "").unwrap();
+        s.save_image("w", "p/子", &sub.id, "png", PNG).unwrap();
+        // 附件目录里放一个 .md：不是待办，搜不到
+        let dir = s.project_path("w", "p").unwrap();
+        fs::write(dir.join(ASSETS_DIR).join(&id).join("笔记.md"), "独角兽").unwrap();
+        let mut names = project_names(&s, "w");
+        names.sort();
+        assert_eq!(names, ["p", "p/子", "q"]);
+        let tree = s.load_workspace("w").unwrap();
+        assert_eq!(tree.projects.iter().map(|p| p.todos.len()).sum::<usize>(), 2);
+        assert!(s.search(None, "独角兽").unwrap().is_empty());
+        // 有附件目录的项目照样能放进别的项目（附件目录不算子项目）
+        let in_q = s.create_todo("w", "q", "", "").unwrap();
+        s.save_image("w", "q", &in_q.id, "png", PNG).unwrap();
+        assert_eq!(s.move_project("w", "q", "w", Some("p")).unwrap(), "p/q");
+        assert!(s.project_path("w", "p/q").unwrap().join(ASSETS_DIR).join(&in_q.id).is_dir());
+        // 已经有附件目录（外部留下的）的 id 不再用
+        let meta = MetaFile::default();
+        assert!(id_taken(&dir, &meta, &id));
+        fs::create_dir_all(dir.join(ASSETS_DIR).join("留下的")).unwrap();
+        assert!(id_taken(&dir, &meta, "留下的") && !id_taken(&dir, &meta, "没有的"));
+    }
+
+    #[test]
+    fn image_file_resolves_relative_and_absolute_paths() {
+        let (tmp, s) = store("img-file");
+        let id = with_todo(&s, "");
+        let a = s.save_image("w", "p", &id, "png", PNG).unwrap();
+        let dir = s.project_path("w", "p").unwrap();
+        // 相对于项目文件夹（.md 所在的文件夹），去掉 . 和 ..
+        let f = s.image_file("w", "p", &a.link).unwrap();
+        assert_eq!(PathBuf::from(&f.path), dir.join(ASSETS_DIR).join(&id).join(&a.name));
+        assert!(f.modified > 0);
+        let messy = format!("./x/../{}", a.link);
+        assert_eq!(s.image_file("w", "p", &messy).unwrap().path, f.path);
+        // .assets 以外的：别的项目里的、数据目录以外的（绝对路径）
+        fs::write(s.project_path("w", "q").unwrap().join("图.gif"), "gif").unwrap();
+        let q = s.image_file("w", "p", "../q/图.gif").unwrap();
+        assert_eq!(PathBuf::from(&q.path), s.project_path("w", "q").unwrap().join("图.gif"));
+        let abs = outside(&tmp, "外面.JPG", b"jpg");
+        assert_eq!(PathBuf::from(s.image_file("w", "p", &abs.to_string_lossy()).unwrap().path), abs);
+        // 不在的、不是图片的
+        assert_eq!(s.image_file("w", "p", ".assets/x/没有.png").unwrap_err(), "找不到图片");
+        let txt = outside(&tmp, "说明.txt", b"x");
+        assert_eq!(s.image_file("w", "p", &txt.to_string_lossy()).unwrap_err(), "不是图片文件");
+        assert!(s.image_file("w", "没有的项目", &a.link).is_err());
+        // .. 到了根目录不再往上
+        let root = normalize_path(&tmp.0.join(format!("a/{}b.png", "../".repeat(40))));
+        assert!(root.ends_with("b.png") && !root.components().any(|c| c == Component::ParentDir));
+    }
+
+    #[test]
+    fn asset_links_are_rewritten_only_at_link_starts() {
+        let text = [
+            "![图](.assets/OLD/a.png) 和 ![有空格](<.assets/OLD/b c.png>)",
+            "<img src=\"./.assets/OLD/c.png\" style=\"zoom:50%\">",
+            "[ref]: .assets/OLD/d.png",
+            ".assets/OLD/开头.png",
+            "Windows 写法 ![](.assets\\OLD\\e.png)",
+            "不动的：x.assets/OLD/1 other/.assets/OLD/2 ![](.assets/OLDER/3.png) ![](assets/OLD/4.png)",
+        ]
+        .join("\n");
+        let out = rewrite_asset_links(&text, "OLD", "NEW").unwrap();
+        let expected = [
+            "![图](.assets/NEW/a.png) 和 ![有空格](<.assets/NEW/b c.png>)",
+            "<img src=\"./.assets/NEW/c.png\" style=\"zoom:50%\">",
+            "[ref]: .assets/NEW/d.png",
+            ".assets/NEW/开头.png",
+            "Windows 写法 ![](.assets\\NEW\\e.png)",
+            "不动的：x.assets/OLD/1 other/.assets/OLD/2 ![](.assets/OLDER/3.png) ![](assets/OLD/4.png)",
+        ]
+        .join("\n");
+        assert_eq!(out, expected);
+        // 没有要改的
+        assert_eq!(rewrite_asset_links("![](.assets/别的/a.png)", "OLD", "NEW"), None);
+        assert_eq!(rewrite_asset_links("![](.assets/OLD/a.png)", "OLD", "OLD"), None);
+        // id 里有空格、中文：别的程序写成转义的也认，换成同样写法的新 id
+        let encoded = "![](.assets/会议%20纪要/a.png) ![](.assets/%E4%BC%9A%E8%AE%AE%20%E7%BA%AA%E8%A6%81/b.png)";
+        assert_eq!(
+            rewrite_asset_links(encoded, "会议 纪要", "会议 纪要-2").unwrap(),
+            "![](.assets/会议%20纪要-2/a.png) ![](.assets/%E4%BC%9A%E8%AE%AE%20%E7%BA%AA%E8%A6%81-2/b.png)"
+        );
+    }
+
+    #[test]
+    fn assets_follow_moved_todos() {
+        let (_tmp, s) = store("img-move");
+        let id = with_todo(&s, "");
+        let a = s.save_image("w", "p", &id, "png", PNG).unwrap();
+        let content = format!("看图 ![]({})\n\r\n代码里的 `.assets/{id}/` 不是地址", a.link);
+        s.save_todo_content("w", "p", &id, &content, None, false).unwrap();
+        let p_dir = s.project_path("w", "p").unwrap();
+        let q_dir = s.project_path("w", "q").unwrap();
+
+        // 移到别的项目：附件目录一起过去，原来的 .assets 空了就删掉，正文不动
+        let moved = s.move_todo("w", "p", &id, "w", "q").unwrap();
+        assert_eq!(moved.id, id);
+        assert!(!p_dir.join(ASSETS_DIR).exists());
+        assert_eq!(fs::read(q_dir.join(&a.link)).unwrap(), PNG);
+        assert_eq!(s.read_todo("w", "q", &id).unwrap().content, content.replace("\r\n", "\n"));
+
+        // 那里重名、换了 id：附件目录改成新 id，正文里的地址跟着改（只改地址），修改时间不变
+        fs::write(p_dir.join(format!("{id}.md")), "占着这个 id").unwrap();
+        let before = fs::metadata(q_dir.join(format!("{id}.md"))).unwrap().modified().unwrap();
+        let back = s.move_todo("w", "q", &id, "w", "p").unwrap();
+        assert_ne!(back.id, id);
+        let new_link = asset_link(&back.id, &a.name);
+        assert_eq!(fs::read(p_dir.join(&new_link)).unwrap(), PNG);
+        assert!(!q_dir.join(ASSETS_DIR).exists());
+        let path = p_dir.join(format!("{}.md", back.id));
+        // 换行原样留着（不把 \r\n 换成 \n）
+        let raw = fs::read_to_string(&path).unwrap();
+        assert_eq!(raw, format!("看图 ![]({new_link})\n\r\n代码里的 `.assets/{id}/` 不是地址"));
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+        assert_eq!(s.read_todo("w", "p", &back.id).unwrap().summary.updated_at, moved.updated_at);
+        // 占着 id 的那个文件不受影响
+        assert_eq!(fs::read_to_string(p_dir.join(format!("{id}.md"))).unwrap(), "占着这个 id");
+
+        // 没有图片的待办照常移动
+        let plain = s.create_todo("w", "p", "没图的", "").unwrap();
+        s.move_todo("w", "p", &plain.id, "w", "q").unwrap();
+        assert!(!q_dir.join(ASSETS_DIR).exists());
+    }
+
+    #[test]
+    fn assets_go_to_the_recycle_bin_with_the_todo() {
+        let (_tmp, s) = store("img-recycle");
+        let id = with_todo(&s, "");
+        let a = s.save_image("w", "p", &id, "png", PNG).unwrap();
+        s.save_todo_content("w", "p", &id, &format!("![]({})", a.link), None, false).unwrap();
+        let p_dir = s.project_path("w", "p").unwrap();
+
+        // 删除：附件目录放进回收站的同一项里，和在项目文件夹里时的相对位置一样
+        let rid = s.delete_todo("w", "p", &id).unwrap();
+        assert!(!p_dir.join(ASSETS_DIR).exists());
+        let entry = s.root().join(RECYCLE_DIR).join(&rid);
+        assert!(entry.join(format!("{id}.md")).is_file());
+        assert_eq!(fs::read(entry.join(&a.link)).unwrap(), PNG);
+        // 恢复：一起回来
+        let r = s.restore(std::slice::from_ref(&rid));
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(fs::read(p_dir.join(&a.link)).unwrap(), PNG);
+
+        // 恢复时 id 被占了：附件目录改成新 id，正文里的地址跟着改
+        let rid = s.delete_todo("w", "p", &id).unwrap();
+        fs::write(p_dir.join(format!("{id}.md")), "新来的").unwrap();
+        let r = s.restore(&[rid]);
+        let new_id = r.restored[0].todo_id.clone().unwrap();
+        assert_ne!(new_id, id);
+        let new_link = asset_link(&new_id, &a.name);
+        assert_eq!(fs::read(p_dir.join(&new_link)).unwrap(), PNG);
+        assert_eq!(s.read_todo("w", "p", &new_id).unwrap().content, format!("![]({new_link})"));
+
+        // 彻底删除：连同图片一起进系统回收站（单元测试里是 .trash）
+        let rid = s.delete_todo("w", "p", &new_id).unwrap();
+        s.purge(&[rid]).unwrap();
+        let trashed = fs::read_dir(s.root().join(TRASH_DIR)).unwrap().next().unwrap().unwrap().path();
+        assert_eq!(fs::read(trashed.join(&new_link)).unwrap(), PNG);
+        assert!(trashed.join(format!("{new_id}.md")).is_file());
+    }
+
+    #[test]
+    fn save_as_new_copies_the_original_assets() {
+        let (_tmp, s) = store("img-copy");
+        let id = with_todo(&s, "");
+        let a = s.save_image("w", "p", &id, "png", PNG).unwrap();
+        let mine = format!("我的版本 ![]({})", a.link);
+        let from = TodoRef { workspace: "w".into(), project: "p".into(), id: id.clone() };
+        // 同一项目里另存：复制一份附件目录，正文里的地址改成新的 id
+        let copy = s.create_todo_from("w", "p", "有图的（我的版本）", &mine, Some(&from)).unwrap();
+        let p_dir = s.project_path("w", "p").unwrap();
+        let copied = asset_link(&copy.id, &a.name);
+        assert_eq!(fs::read(p_dir.join(&copied)).unwrap(), PNG);
+        assert_eq!(s.read_todo("w", "p", &copy.id).unwrap().content, format!("我的版本 ![]({copied})"));
+        // 原来那条的图片还在；删掉原来那条，新的那条的图片也还在
+        s.delete_todo("w", "p", &id).unwrap();
+        assert!(p_dir.join(&copied).is_file());
+        // 原来的项目不在了时存到别的项目（快速记录存到的）：复制到那里
+        let rescued = s.create_todo_creating_project("收件箱", "快速记录", "x", &mine, Some(&from)).unwrap();
+        let there = s.project_path("收件箱", "快速记录").unwrap();
+        assert!(!there.join(asset_link(&rescued.id, &a.name)).exists(), "原来那条已经删了，没有可复制的");
+        assert_eq!(s.read_todo("收件箱", "快速记录", &rescued.id).unwrap().content, mine);
+        let from_copy = TodoRef { id: copy.id.clone(), ..from };
+        let again = s.create_todo_creating_project("收件箱", "快速记录", "y", &format!("![]({copied})"), Some(&from_copy)).unwrap();
+        assert_eq!(fs::read(there.join(asset_link(&again.id, &a.name))).unwrap(), PNG);
     }
 }

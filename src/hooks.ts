@@ -1,3 +1,4 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef } from "react";
@@ -13,6 +14,45 @@ export function useWindowFocus(onChange: (focused: boolean) => void) {
     let disposed = false;
     getCurrentWindow()
       .onFocusChanged(({ payload }) => ref.current(payload))
+      .then((u) => {
+        if (disposed) u();
+        else unlisten = u;
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+}
+
+/**
+ * 从资源管理器往窗口里拖文件：enter（拖进窗口，带着文件的路径）、over（拖着移动）、drop（放下）、leave（拖出去、取消）。
+ * x、y 是视口里的位置（CSS 像素）
+ */
+export type FileDrag =
+  | { type: "enter" | "drop"; paths: string[]; x: number; y: number }
+  | { type: "over"; x: number; y: number }
+  | { type: "leave" };
+
+/**
+ * 从资源管理器拖进窗口的文件。Tauri 在 Windows 上接管了系统的拖放（网页里的 drop 事件拿不到文件），经它的事件拿到路径
+ * 和位置；侧栏里拖动待办、项目是自己用鼠标事件做的，不受影响
+ */
+export function useFileDrag(onDrag: (e: FileDrag) => void) {
+  const ref = useRef(onDrag);
+  useEffect(() => {
+    ref.current = onDrag;
+  });
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    getCurrentWebview()
+      .onDragDropEvent(({ payload: p }) => {
+        if (p.type === "leave") return ref.current({ type: "leave" });
+        // Tauri 给的是窗口里的物理像素
+        const { x, y } = p.position.toLogical(window.devicePixelRatio);
+        ref.current(p.type === "over" ? { type: "over", x, y } : { type: p.type, paths: p.paths, x, y });
+      })
       .then((u) => {
         if (disposed) u();
         else unlisten = u;

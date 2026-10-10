@@ -7,6 +7,7 @@
 
 import { api } from "./api";
 import type { Selection } from "./components/sidebar/tree";
+import { rebaseHistory } from "./editor/history";
 import type { EditPosition, TextAnchor } from "./editor/position";
 import type { EditorMode } from "./editor/setup";
 import { registerFlusher } from "./hooks";
@@ -351,6 +352,11 @@ export const writeEditorMode = (workspace: string, project: string, id: string, 
 export interface UndoSnapshot {
   doc: string;
   history: unknown;
+  /**
+   * 软件自己可能改过这条的正文：移动、另存为新待办后换了 id，正文里图片的链接跟着改了（store.rs 的 relink_assets）。
+   * 正文对不上时把撤销记录接到改过的正文上（editor/history.ts），不当成在外部被改过的作废
+   */
+  relinked?: boolean;
 }
 
 /** 最多给这么多条待办留撤销记录，超出时忘掉最久没打开的 */
@@ -366,12 +372,17 @@ export function keepUndo(workspace: string, project: string, id: string, snap: U
   for (const k of [...undos.keys()].slice(0, undos.size - MAX_UNDOS)) undos.delete(k);
 }
 
-/** 取出这条待办留着的撤销记录；正文和留下时不一样（在外部被改过）的作废，返回 null */
+/**
+ * 取出这条待办留着的撤销记录；正文和留下时不一样（在外部被改过）的作废，返回 null。
+ * 软件自己改过链接的（relinked）接到现在的正文上，接不上时同样作废
+ */
 export function takeUndo(workspace: string, project: string, id: string, doc: string): unknown {
   const key = todoKey(workspace, project, id);
   const snap = undos.get(key);
   undos.delete(key);
-  return snap?.doc === doc ? snap.history : null;
+  if (!snap) return null;
+  if (snap.doc === doc) return snap.history;
+  return snap.relinked ? rebaseHistory(snap.doc, snap.history, doc) : null;
 }
 
 /**
@@ -433,9 +444,15 @@ export const moveProjectState = (ws: string, project: string, targetWs: string, 
 export const forgetProjectState = (ws: string, project: string) =>
   mapTodoState((k) => (k[0] === ws && inProject(k[1], project) ? null : k));
 
-/** 待办移到另一个项目（可以在别的工作区里），id 可能因为重名而变 */
-export const moveTodoState = (ws: string, project: string, id: string, to: TodoKey) =>
+/**
+ * 待办移到另一个项目（可以在别的工作区里），id 可能因为重名而变；变了的话正文里图片的链接也跟着改了，
+ * 撤销记录标上 relinked，打开时接到改过的正文上
+ */
+export function moveTodoState(ws: string, project: string, id: string, to: TodoKey) {
   mapTodoState((k) => (k[0] === ws && k[1] === project && k[2] === id ? to : k));
+  const snap = to[2] !== id ? undos.get(todoKey(...to)) : undefined;
+  if (snap) snap.relinked = true;
+}
 
 export const forgetTodoState = (ws: string, project: string, id: string) =>
   mapTodoState((k) => (k[0] === ws && k[1] === project && k[2] === id ? null : k));

@@ -2,11 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   EditorBackground,
   FontArea,
+  ImageFile,
   QuickTarget,
   RecycleEntry,
   RestoreResult,
   RemoteBackup,
   SaveResult,
+  SavedImage,
   SearchHit,
   SettingsInfo,
   ShortcutAction,
@@ -52,10 +54,25 @@ export const api = {
 
   /**
    * content 是正文，不传时新建空白待办；带正文时正文和待办在同一次调用里建好。
-   * createProject 为 true 时工作区、项目不在就先建（离开待办时存不上的修改另存到快速记录存到的项目）
+   * createProject 为 true 时工作区、项目不在就先建（离开待办时存不上的修改另存到快速记录存到的项目）。
+   * assetsFrom 是外部修改冲突时「另存为新待办」的原来那条：复制一份它的图片（附件目录）给新的这条，正文里的链接改成新的
    */
-  createTodo: (workspace: string, project: string, title: string, content?: string, createProject = false) =>
-    invoke<TodoSummary>("create_todo", { workspace, project, title, content: content ?? null, createProject }),
+  createTodo: (
+    workspace: string,
+    project: string,
+    title: string,
+    content?: string,
+    createProject = false,
+    assetsFrom?: { workspace: string; project: string; id: string },
+  ) =>
+    invoke<TodoSummary>("create_todo", {
+      workspace,
+      project,
+      title,
+      content: content ?? null,
+      createProject,
+      assetsFrom: assetsFrom ?? null,
+    }),
   readTodo: (workspace: string, project: string, id: string) =>
     invoke<TodoDetail>("read_todo", { workspace, project, id }),
   saveTodoContent: (
@@ -89,6 +106,25 @@ export const api = {
   purgeRecycled: (ids: string[]) => invoke<number>("purge_recycled", { ids }),
   /** 清空软件的回收站（都移到 Windows 回收站） */
   emptyRecycle: () => invoke<number>("empty_recycle"),
+  /**
+   * 粘贴的图片（ext 是扩展名）存进待办的附件目录，返回写进正文的地址。图片的数据直接作为请求体发过去（不经 JSON），
+   * 别的放在请求头里（请求头只能是 ASCII，转义过）
+   */
+  saveImage: (workspace: string, project: string, id: string, ext: string, data: Uint8Array) =>
+    invoke<SavedImage>("save_image", data, {
+      headers: {
+        workspace: encodeURIComponent(workspace),
+        project: encodeURIComponent(project),
+        id: encodeURIComponent(id),
+        ext: encodeURIComponent(ext),
+      },
+    }),
+  /** 拖进来的图片文件（资源管理器里的路径）复制一份到待办的附件目录（原文件不动），返回写进正文的地址 */
+  importImage: (workspace: string, project: string, id: string, source: string) =>
+    invoke<SavedImage>("import_image", { workspace, project, id, source }),
+  /** 正文里本地图片的地址（相对于项目文件夹，或绝对路径）对应的文件；找不到、不是图片时 reject 原因 */
+  imageFile: (workspace: string, project: string, src: string) =>
+    invoke<ImageFile>("image_file", { workspace, project, src }),
   /** 移到另一个项目，可以在别的工作区里；返回移过去后的摘要（id 可能因为重名而变） */
   moveTodo: (workspace: string, project: string, id: string, targetWorkspace: string, targetProject: string) =>
     invoke<TodoSummary>("move_todo", { workspace, project, id, targetWorkspace, targetProject }),

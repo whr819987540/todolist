@@ -17,9 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use store::{
-    RecycleEntry, RestoreResult, SaveResult, SearchHit, Store, TodoDetail, TodoSummary, WorkspaceInfo,
-    WorkspaceProjects, WorkspaceTree, RECYCLE_KEEP_DAYS,
+    ImageFile, RecycleEntry, RestoreResult, SaveResult, SavedImage, SearchHit, Store, TodoDetail, TodoRef,
+    TodoSummary, WorkspaceInfo, WorkspaceProjects, WorkspaceTree, RECYCLE_KEEP_DAYS,
 };
+use tauri::ipc::{InvokeBody, Request};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
@@ -172,7 +173,8 @@ fn follow_quick_target(settings: &SettingsStore, f: impl FnOnce(&QuickTarget) ->
 // ----- 待办 -----
 
 /// 新建待办；content 是正文，不传时是空白待办（外部修改冲突时「另存为新待办」带着正文一起建）。
-/// create_project 为 true 时工作区、项目不在就先建（离开待办时存不上、原来的项目也不在了，另存到快速记录存到的项目）
+/// create_project 为 true 时工作区、项目不在就先建（离开待办时存不上、原来的项目也不在了，另存到快速记录存到的项目）；
+/// assets_from 是另存时原来那条待办，复制一份它的图片（附件目录）给新的这条
 #[tauri::command]
 async fn create_todo(
     store: State<'_, Store>,
@@ -181,12 +183,13 @@ async fn create_todo(
     title: String,
     content: Option<String>,
     create_project: Option<bool>,
+    assets_from: Option<TodoRef>,
 ) -> Cmd<TodoSummary> {
     let content = content.as_deref().unwrap_or_default();
     if create_project == Some(true) {
-        store.create_todo_creating_project(&workspace, &project, &title, content)
+        store.create_todo_creating_project(&workspace, &project, &title, content, assets_from.as_ref())
     } else {
-        store.create_todo(&workspace, &project, &title, content)
+        store.create_todo_from(&workspace, &project, &title, content, assets_from.as_ref())
     }
 }
 
@@ -298,6 +301,51 @@ async fn move_todo(
     target_project: String,
 ) -> Cmd<TodoSummary> {
     store.move_todo(&workspace, &project, &id, &target_workspace, &target_project)
+}
+
+// ----- 正文里的图片 -----
+
+/// 粘贴的图片存进待办的附件目录，返回写进正文的地址。图片的数据直接作为请求体发过来（不经 JSON，几 MB 的截图
+/// 也不慢），工作区、项目、待办 id 和扩展名放在请求头里（请求头只能是 ASCII，前端按 encodeURIComponent 转义过）
+#[tauri::command]
+async fn save_image(store: State<'_, Store>, request: Request<'_>) -> Cmd<SavedImage> {
+    let InvokeBody::Raw(data) = request.body() else {
+        return Err("没有收到图片的数据".into());
+    };
+    let header = |name: &str| -> Cmd<String> {
+        let value = request.headers().get(name).and_then(|v| v.to_str().ok()).ok_or_else(|| format!("缺少 {name}"))?;
+        Ok(percent_encoding::percent_decode_str(value).decode_utf8_lossy().into_owned())
+    };
+    store.save_image(&header("workspace")?, &header("project")?, &header("id")?, &header("ext")?, data)
+}
+
+/// 拖进正文的图片文件（资源管理器里的路径）复制一份到待办的附件目录，返回写进正文的地址
+#[tauri::command]
+async fn import_image(
+    store: State<'_, Store>,
+    workspace: String,
+    project: String,
+    id: String,
+    source: String,
+) -> Cmd<SavedImage> {
+    store.import_image(&workspace, &project, &id, Path::new(&source))
+}
+
+/// 正文里本地图片的地址（相对于项目文件夹，或绝对路径）对应的文件，前端经 asset 协议显示。数据目录在启动时整个放开了；
+/// 数据目录以外的，这里只放开这一个文件，而且只放开图片（image_file 只认图片扩展名），别的文件经 asset 协议读不到
+#[tauri::command]
+async fn image_file(
+    app: AppHandle,
+    store: State<'_, Store>,
+    workspace: String,
+    project: String,
+    src: String,
+) -> Cmd<ImageFile> {
+    let file = store.image_file(&workspace, &project, &src)?;
+    if !Path::new(&file.path).starts_with(store.root()) {
+        app.asset_protocol_scope().allow_file(&file.path).map_err(|e| format!("不能显示这张图片：{e}"))?;
+    }
+    Ok(file)
 }
 
 // ----- 全文搜索 -----
@@ -1130,6 +1178,11 @@ pub fn run() {
         .setup(|app| {
             let store = Store::new(data_root(app)?)?;
             let root = store.root().to_path_buf();
+            // 正文里的本地图片经 asset 协议显示：数据目录（TODOLIST_DATA_DIR 指定了别的时是它）整个放开，
+            // 数据目录以外的图片在用到时一张张放开（image_file）
+            if let Err(e) = app.asset_protocol_scope().allow_directory(&root, true) {
+                eprintln!("没能放开数据目录给 asset 协议，正文里的图片显示不出来：{e}");
+            }
             let settings = SettingsStore::load(store.root());
             let settings_hidden = settings.get().autostart_hidden;
             // 注册失败（被其他程序占用）不影响启动，设置界面里会提示
@@ -1204,6 +1257,9 @@ pub fn run() {
             purge_recycled,
             empty_recycle,
             move_todo,
+            save_image,
+            import_image,
+            image_file,
             search_todos,
             read_ui_state,
             write_ui_state,

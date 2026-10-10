@@ -8,10 +8,11 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
+import { ImageWidget } from "./images";
 import { linkTarget } from "./links";
 
 // 实时渲染（类似 Typora / Obsidian）：正文始终是原样的 Markdown 文本，只是把 **、#、> 这类标记藏起来，
-// 列表符号、任务框、分隔线换成对应的样子。光标（或选区）碰到的元素显示原文，方便修改。
+// 列表符号、任务框、分隔线、图片换成对应的样子。光标（或选区）碰到的元素显示原文，方便修改（图片按行：光标在那一行时显示原文）。
 // 只改显示，不改文本，所以切换模式、保存都不会动文件里的写法。
 
 const BULLETS = ["•", "◦", "▪"];
@@ -153,6 +154,16 @@ function buildPreview(view: EditorView, sel: readonly SelectionRange[] | null): 
               }).range(open.to, close.from),
             );
             return;
+          }
+
+          case "Image": {
+            // 光标（选区）不在这一行时显示成图片（images.ts）；在这一行时显示原文，里面的标记也不藏
+            if (touchesLines(node.from, node.to)) return false;
+            const [open, close] = node.getChildren("LinkMark");
+            const alt = open && close ? doc.sliceString(open.to, close.from) : "";
+            const widget = new ImageWidget(linkTarget(state, node) ?? "", alt);
+            out.push(Decoration.replace({ widget }).range(node.from, node.to));
+            return false;
           }
 
           case "Autolink":
