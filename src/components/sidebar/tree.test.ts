@@ -4,6 +4,9 @@ import {
   anyVisibleProjectOpen,
   type Collapsed,
   hiddenDoneProjects,
+  indentLevelsFor,
+  indentOf,
+  isHidden,
   isProjectDone,
   type Lingering,
   lingeringAfter,
@@ -14,8 +17,9 @@ import {
 // docs/requirements.md「隐藏已完成」：项目里有待办、而且全都完成了的才算全部完成，空项目不算；
 // 右侧正在显示的项目照常显示，切到别处后再显示一会儿才藏起来（这期间切回来就接着显示）；侧栏搜索时不隐藏；
 // 侧栏顶部的「全部折叠 / 全部展开」不算藏起来的项目，也不算折叠着的工作区里的项目（都看不见）。
-// 「子项目」：父项目自己和子项目里的待办合起来看，都完成了才算全部完成，连同子项目一起藏；父项目没全部完成时，
-// 全部完成的子项目单独藏；右侧显示着子项目时它的父项目也照常显示；折叠着的父项目里的子项目看不见，「全部折叠」不算它
+// 「子项目」：项目自己和各级子项目里的待办合起来看，都完成了才算全部完成，连同下面各级一起藏；没全部完成的项目里，
+// 全部完成的子项目单独藏（每一级都这样）；右侧显示着子项目时它的各级父项目也照常显示；折叠着的（哪一级）父项目里的
+// 子项目看不见，「全部折叠」不算它。层级多时：前 3 级每级缩进 16px，再往下每级 8px，侧栏窄时少缩进几级
 
 const todo = (id: string, done: boolean): TodoSummary => ({
   id,
@@ -108,6 +112,43 @@ describe("有子项目时藏起哪些", () => {
 
   it("右侧显示着父项目：父项目照常显示，其中全部完成的子项目藏", () => {
     expect(hide([project("p", true), project("p/a", true)], { selProject: "p" })).toEqual(["p/a"]);
+  });
+});
+
+describe("多级子项目时藏起哪些", () => {
+  const names = (s: ReadonlySet<string>) => [...s].sort();
+  const hide = (projects: ProjectNode[], o: { selProject?: string; lingering?: ReadonlySet<string> } = {}) =>
+    names(hiddenDoneProjects(projects, { hide: true, keyword: "", ...o }));
+
+  it("连同各级子项目都完成了：最上面那个连同下面各级一起藏，只算一个", () => {
+    expect(hide([project("p", true), project("p/a"), project("p/a/b", true), project("p/a/b/c", true)])).toEqual(["p"]);
+  });
+
+  it("没全部完成的项目里，全部完成的子项目单独藏，每一级都这样看", () => {
+    const ps = [
+      project("p", false),
+      project("p/a", true),
+      project("p/a/x", false),
+      project("p/a/y", true),
+      project("p/a/y/z", true),
+      project("p/b", true),
+    ];
+    // p/a 里有没完成的（p/a/x），不藏；它里面全部完成的 p/a/y 连同 p/a/y/z 藏，只算一个
+    expect(hide(ps)).toEqual(["p/a/y", "p/b"]);
+  });
+
+  it("右侧显示着深处的子项目：它和它的各级父项目照常显示，旁边全部完成的照样藏", () => {
+    const ps = [project("p", true), project("p/a", true), project("p/a/b", true), project("p/a/c", true), project("p/d", true)];
+    expect(hide(ps, { selProject: "p/a/b" })).toEqual(["p/a/c", "p/d"]);
+    expect(hide(ps, { lingering: new Set(["p/a/b"]) })).toEqual(["p/a/c", "p/d"]);
+  });
+
+  it("藏起来的项目下面的各级子项目都看不见", () => {
+    const hidden = new Set(["p/a"]);
+    expect(isHidden(hidden, "p/a/b/c")).toBe(true);
+    expect(isHidden(hidden, "p/a")).toBe(true);
+    expect(isHidden(hidden, "p")).toBe(false);
+    expect(isHidden(hidden, "p/ab")).toBe(false);
   });
 });
 
@@ -224,6 +265,20 @@ describe("「全部折叠 / 全部展开」看哪些项目", () => {
     expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p", "p/a"] }), hiding())).toBe(false);
   });
 
+  it("哪一级父项目折叠着，下面各级的子项目都看不见", () => {
+    const ws: WorkspaceTree = {
+      name: "工作",
+      projects: [project("p", false), project("p/a", false), project("p/a/b", false), project("p/a/b/c", false)],
+    };
+    expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p"] }), hiding())).toBe(false);
+    expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p/a", "p"] }), hiding())).toBe(false);
+    // p 展开着、p/a 折叠着：p 看得见、展开着
+    expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p/a"] }), hiding())).toBe(true);
+    // 只有最深的展开着，但它上面的 p/a 折叠着，看不见
+    expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p", "p/a"] }), hiding())).toBe(false);
+    expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p", "p/a", "p/a/b"] }), hiding())).toBe(false);
+  });
+
   it("单独藏起来的子项目展开着也不算", () => {
     const ws: WorkspaceTree = { name: "工作", projects: [project("p", false), project("p/a", true)] };
     expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p"] }), hiding())).toBe(false);
@@ -236,5 +291,27 @@ describe("「全部折叠 / 全部展开」看哪些项目", () => {
     const workAll = folded({ 工作: ["全完成", "没完成", "空的"] });
     expect(anyVisibleProjectOpen([work, life], workAll, hiding())).toBe(true);
     expect(anyVisibleProjectOpen([work, life], folded({ 工作: ["没完成", "空的"], 生活: ["杂事"] }), hiding())).toBe(false);
+  });
+});
+
+describe("层级多时的缩进", () => {
+  it("前 3 级每级 16px，再往下每级 8px", () => {
+    expect([0, 1, 2, 3, 4, 5, 6].map(indentOf)).toEqual([0, 16, 32, 48, 56, 64, 72]);
+  });
+
+  it("侧栏窄时少缩进几级：最窄 240px 时缩进到第 3 级，默认 300px 时到第 10 级，再宽也最多 10 级", () => {
+    expect(indentLevelsFor(240)).toBe(3);
+    expect(indentLevelsFor(300)).toBe(10);
+    expect(indentLevelsFor(560)).toBe(10);
+  });
+
+  it("侧栏越宽缩进的级数越多（不会变少），中间的宽度在两头之间", () => {
+    let last = 0;
+    for (let w = 240; w <= 560; w += 10) {
+      expect(indentLevelsFor(w)).toBeGreaterThanOrEqual(last);
+      last = indentLevelsFor(w);
+    }
+    expect(indentLevelsFor(260)).toBeGreaterThan(3);
+    expect(indentLevelsFor(260)).toBeLessThan(10);
   });
 });

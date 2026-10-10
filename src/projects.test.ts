@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  ancestorsOf,
   childPath,
+  deepCounts,
   deepTodos,
+  depthOf,
+  descendantsOf,
   inProject,
   leafName,
   parentOf,
@@ -13,9 +17,9 @@ import {
 } from "./projects";
 import type { ProjectNode, TodoSummary } from "./types";
 
-// docs/requirements.md「基础」：项目下可以建子项目，只有一层；子项目是项目文件夹里的子文件夹，路径写成「父项目/子项目」。
-// 「工作区界面 → 子项目」：侧栏里子项目列在父项目下面，按名字排；显示路径的地方写成「父项目 / 子项目」；
-// 父项目改名后子项目跟着；父项目的统计包括子项目里的待办
+// docs/requirements.md「基础」：项目下可以建子项目，子项目里还能再建，层数不限；子项目是项目文件夹里的子文件夹，
+// 路径写成「父项目/子项目/…」。「工作区界面 → 子项目」：侧栏里子项目列在父项目下面，同一级的按名字排；显示路径的地方
+// 写成「父项目 / 子项目 / …」；父项目改名后下面各级跟着；项目的统计包括各级子项目里的待办
 
 const todo = (id: string, done = false): TodoSummary => ({
   id,
@@ -44,11 +48,24 @@ describe("项目路径", () => {
     expect(projectLabel("需求")).toBe("需求");
   });
 
+  it("多级的：父项目是除了最后一级的整段路径，各级父项目从顶层往下", () => {
+    expect(parentOf("需求/前端/组件/按钮")).toBe("需求/前端/组件");
+    expect(leafName("需求/前端/组件/按钮")).toBe("按钮");
+    expect(ancestorsOf("需求/前端/组件/按钮")).toEqual(["需求", "需求/前端", "需求/前端/组件"]);
+    expect(ancestorsOf("需求")).toEqual([]);
+    expect([depthOf("需求"), depthOf("需求/前端"), depthOf("需求/前端/组件/按钮")]).toEqual([0, 1, 3]);
+    expect(childPath("需求/前端", "组件")).toBe("需求/前端/组件");
+    expect(projectLabel("需求/前端/组件/按钮")).toBe("需求 / 前端 / 组件 / 按钮");
+  });
+
   it("项目本身和它的子项目算在项目里，名字开头相同的别的项目不算", () => {
     expect(inProject("需求", "需求")).toBe(true);
     expect(inProject("需求/前端", "需求")).toBe(true);
     expect(inProject("需求二", "需求")).toBe(false);
     expect(inProject("需求", "需求/前端")).toBe(false);
+    expect(inProject("需求/前端/组件/按钮", "需求")).toBe(true);
+    expect(inProject("需求/前端/组件", "需求/前端")).toBe(true);
+    expect(inProject("需求/前端二/组件", "需求/前端")).toBe(false);
   });
 
   it("父项目改名、移动后，它和子项目的路径跟着变，别的项目不变", () => {
@@ -57,6 +74,10 @@ describe("项目路径", () => {
     expect(reparent("需求/前端", "需求/前端", "前端")).toBe("前端");
     expect(reparent("日常", "日常", "需求/日常")).toBe("需求/日常");
     expect(reparent("需求二", "需求", "开发")).toBe("需求二");
+    // 中间一级改名、移走，下面各级跟着
+    expect(reparent("需求/前端/组件/按钮", "需求/前端", "需求/界面")).toBe("需求/界面/组件/按钮");
+    expect(reparent("需求/前端/组件", "需求/前端", "日常/杂项/前端")).toBe("日常/杂项/前端/组件");
+    expect(reparent("需求/前端二/组件", "需求/前端", "x")).toBe("需求/前端二/组件");
   });
 });
 
@@ -76,6 +97,61 @@ describe("子项目", () => {
     const ps = [project("需求", todo("a")), project("需求/前端", todo("b"), todo("c")), project("需求二", todo("d"))];
     expect(deepTodos(ps, "需求").map((t) => t.id)).toEqual(["a", "b", "c"]);
     expect(deepTodos(ps, "需求/前端").map((t) => t.id)).toEqual(["b", "c"]);
+  });
+});
+
+describe("多级子项目", () => {
+  const list = [
+    project("需求/前端/组件"),
+    project("日常"),
+    project("需求"),
+    project("需求/后端"),
+    project("需求/前端"),
+    project("需求/前端/组件/按钮"),
+    project("需求/前端/页面"),
+    project("需求10"),
+    project("需求2"),
+  ];
+
+  it("同资源管理器的树：每个项目后面跟着它的各级子项目，列完一个项目的再列下一个，同一级的按名字排", () => {
+    expect(sortProjects(list).map((p) => p.name)).toEqual([
+      "日常",
+      "需求",
+      "需求/后端",
+      "需求/前端",
+      "需求/前端/页面",
+      "需求/前端/组件",
+      "需求/前端/组件/按钮",
+      "需求2",
+      "需求10",
+    ]);
+  });
+
+  it("下一级的子项目和各级子项目", () => {
+    expect(subProjectsOf(list, "需求").map((p) => p.name).sort()).toEqual(["需求/前端", "需求/后端"].sort());
+    expect(subProjectsOf(list, "需求/前端").map((p) => p.name).sort()).toEqual(["需求/前端/组件", "需求/前端/页面"].sort());
+    expect(descendantsOf(list, "需求/前端").map((p) => p.name).sort()).toEqual(
+      ["需求/前端/组件", "需求/前端/组件/按钮", "需求/前端/页面"].sort(),
+    );
+    expect(descendantsOf(list, "需求2")).toEqual([]);
+  });
+
+  it("项目的待办数包括各级子项目里的，名字开头相同的别的项目不算", () => {
+    const ps = [
+      project("需求", todo("a", true)),
+      project("需求/前端", todo("b")),
+      project("需求/前端/组件", todo("c", true), todo("d")),
+      project("需求/前端/组件/按钮", todo("e")),
+      project("需求二", todo("f")),
+    ];
+    expect(deepTodos(ps, "需求/前端").map((t) => t.id)).toEqual(["b", "c", "d", "e"]);
+    const counts = deepCounts(ps);
+    expect(counts.get("需求")).toEqual({ total: 5, undone: 3 });
+    expect(counts.get("需求/前端")).toEqual({ total: 4, undone: 3 });
+    expect(counts.get("需求/前端/组件")).toEqual({ total: 3, undone: 2 });
+    expect(counts.get("需求/前端/组件/按钮")).toEqual({ total: 1, undone: 1 });
+    expect(counts.get("需求二")).toEqual({ total: 1, undone: 1 });
+    expect(deepCounts([project("空的"), project("空的/子")]).get("空的")).toEqual({ total: 0, undone: 0 });
   });
 });
 

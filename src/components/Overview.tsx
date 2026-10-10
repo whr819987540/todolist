@@ -10,7 +10,7 @@ import {
 } from "@ant-design/icons";
 import { Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "antd";
 import { useState } from "react";
-import { deepTodos, isSubProject, leafName, parentOf, subProjectsOf } from "../projects";
+import { ancestorsOf, deepTodos, isSubProject, leafName, subProjectsOf } from "../projects";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime, sortTodos, useNow } from "../utils";
 import { type DragMove, isDraggingProject, isDraggingTodo, reorderMark } from "./DragMove";
@@ -24,8 +24,8 @@ function latest(todos: TodoSummary[]): number {
 }
 
 /**
- * 项目卡片（工作区概览里的顶层项目、父项目概览里的子项目）：点击进入，右键是项目的菜单，可以拖到左侧。
- * 完成进度和数目包括子项目里的待办
+ * 项目卡片（工作区概览里的顶层项目、父项目概览里的下一级子项目）：点击进入，右键是项目的菜单，可以拖到左侧。
+ * 完成进度和数目包括各级子项目里的待办，写明它下一级有几个子项目
  */
 function ProjectCard({ workspace, projects, name, actions: a, drag, moveTargets }: {
   workspace: string;
@@ -42,7 +42,7 @@ function ProjectCard({ workspace, projects, name, actions: a, drag, moveTargets 
   const todos = deepTodos(projects, name);
   const d = todos.filter((t) => t.done).length;
   const last = latest(todos);
-  const subs = isSubProject(name) ? 0 : subProjectsOf(projects, name).length;
+  const subs = subProjectsOf(projects, name).length;
   return (
     <Dropdown menu={projectMenu(a, name, moveTargets)} trigger={["contextMenu"]}>
       <div
@@ -147,8 +147,8 @@ export function WorkspaceOverview({
 }
 
 /**
- * 选中项目（未选中具体待办）时右侧显示的项目概览。父项目的完成进度和数目包括子项目里的待办，上面列出子项目的卡片，
- * 下面是它自己的待办（快速添加的也加在它自己里）
+ * 选中项目（未选中具体待办）时右侧显示的项目概览。父项目的完成进度和数目包括各级子项目里的待办，上面列出下一级子项目的
+ * 卡片，下面是它自己的待办（快速添加的也加在它自己里）。上方的路径每一级都能点
  */
 export function ProjectOverview(p: {
   workspace: string;
@@ -171,11 +171,9 @@ export function ProjectOverview(p: {
   const sorted = sortTodos(project.todos, p.sortKey);
   const undone = sorted.filter((t) => !t.done);
   const done = sorted.filter((t) => t.done);
-  const isSub = isSubProject(project.name);
-  const subs = isSub ? [] : subProjectsOf(p.projects, project.name);
+  const subs = subProjectsOf(p.projects, project.name);
   const all = deepTodos(p.projects, project.name);
   const allDone = all.filter((t) => t.done).length;
-  const parent = parentOf(project.name);
   // 有子项目时，下面的待办列表是它自己的，标题里说清楚
   const own = subs.length ? "自己的" : "";
 
@@ -235,7 +233,7 @@ export function ProjectOverview(p: {
         className="overview-crumb"
         items={[
           { title: <a onClick={a.selectWorkspace}>{p.workspace}</a> },
-          ...(parent !== undefined ? [{ title: <a onClick={() => a.selectProject(parent)}>{parent}</a> }] : []),
+          ...ancestorsOf(project.name).map((x) => ({ title: <a onClick={() => a.selectProject(x)}>{leafName(x)}</a> })),
           { title: leafName(project.name) },
         ]}
       />
@@ -248,11 +246,9 @@ export function ProjectOverview(p: {
           </div>
         </div>
         <div className="overview-actions">
-          {!isSub && (
-            <Button icon={<FolderAddOutlined />} onClick={() => a.newSubProject(project.name)}>
-              新建子项目
-            </Button>
-          )}
+          <Button icon={<FolderAddOutlined />} onClick={() => a.newSubProject(project.name)}>
+            新建子项目
+          </Button>
           <Button icon={<EditOutlined />} onClick={() => a.renameProject(project.name)}>
             重命名
           </Button>

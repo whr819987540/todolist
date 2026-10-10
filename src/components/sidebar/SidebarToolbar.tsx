@@ -12,7 +12,7 @@ import {
   VerticalAlignMiddleOutlined,
 } from "@ant-design/icons";
 import { Button, Dropdown, Input, Tooltip, type InputRef, type MenuProps } from "antd";
-import { parentOf, projectLabel } from "../../projects";
+import { projectLabel } from "../../projects";
 import { ThemeButton } from "../../theme";
 import type { SortKey, WorkspaceTree } from "../../types";
 import type { ListOptions } from "../../workspaceState";
@@ -75,8 +75,8 @@ export default function SidebarToolbar(props: {
   const currentProject = sel.project ?? (selTree?.projects.length === 1 ? selTree.projects[0].name : undefined);
   const where = (project?: string) =>
     [multi ? sel.workspace : "", project ? projectLabel(project) : ""].filter(Boolean).join(" / ");
-  // 新建子项目：在右侧显示着的项目里（显示着子项目时是在它的父项目里）
-  const subParent = sel.project === undefined ? undefined : (parentOf(sel.project) ?? sel.project);
+  // 新建子项目：在右侧显示着的项目（或其中的待办所在的项目）里，子项目里也能再建
+  const subParent = sel.project;
   const newMenu: MenuProps = {
     items: [
       {

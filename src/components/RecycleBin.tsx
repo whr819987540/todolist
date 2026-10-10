@@ -12,11 +12,11 @@ const KIND_LABELS: Record<RecycleKind, string> = { todo: "待办", project: "项
 /** 回收站列表里显示的名字：待办没有标题时用正文开头 */
 const nameOf = (e: RecycleEntry) => e.title.trim() || e.preview || "空白待办";
 
-/** 原来在哪里：工作区（子项目还有父项目）、待办所在的项目 */
+/** 原来在哪里：工作区（子项目还有它的各级父项目）、待办所在的项目 */
 function placeOf(e: RecycleEntry): string {
   if (e.kind === "workspace") return "";
   const parent = e.project ? parentOf(e.project) : undefined;
-  if (e.kind === "project") return parent === undefined ? e.workspace : `${e.workspace} / ${parent}`;
+  if (e.kind === "project") return parent === undefined ? e.workspace : `${e.workspace} / ${projectLabel(parent)}`;
   return `${e.workspace} / ${projectLabel(e.project ?? "")}`;
 }
 

@@ -5,7 +5,7 @@ import { useAppEvent, useWindowFocus } from "../hooks";
 import { rangePick, togglePick } from "../picking";
 import { useContentSearch } from "../search";
 import { type How, visit } from "../navHistory";
-import { parentOf, sortProjects } from "../projects";
+import { ancestorsOf, sortProjects } from "../projects";
 import { useSettings } from "../settings";
 import { eventShortcut, isRefreshShortcut, sameShortcut } from "../shortcuts";
 import { activeAfterClose, neighborTab, sameTodo, stepTab, tabIndex, type TodoRef } from "../tabs";
@@ -69,7 +69,7 @@ function sideOf(el: EventTarget | null): Side | null {
   return el.closest(".sidebar") ? "sidebar" : el.closest(".main") ? "main" : null;
 }
 
-/** 项目按名字排，每个顶层项目后面跟着它的子项目 */
+/** 项目按名字排，每个项目后面跟着它的各级子项目 */
 function sortTree(t: WorkspaceTree): WorkspaceTree {
   return { ...t, projects: sortProjects(t.projects) };
 }
@@ -294,8 +294,10 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     }
     if (!sel.project) return;
     const p = t.projects.find((x) => x.name === sel.project);
-    // 子项目不在了退回它的父项目（父项目也不在了时下一次再退回工作区）
-    const parent = parentOf(sel.project);
+    // 子项目不在了退回往上最近的还在的父项目，都不在了退回工作区
+    const parent = ancestorsOf(sel.project)
+      .reverse()
+      .find((a) => t.projects.some((x) => x.name === a));
     if (!p) setSel({ workspace: sel.workspace, project: parent }, "replace");
     else if (sel.todoId && !p.todos.some((x) => x.id === sel.todoId))
       setSel({ workspace: sel.workspace, project: sel.project }, "replace");
@@ -363,11 +365,11 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
 
   const expand = (ws: string, key: string) => setCollapsed(ws, (c) => (c[key] ? { ...c, [key]: false } : c));
 
-  /** 展开项目所在的分支（工作区、父项目和它自己），左侧能看到它和其中的待办 */
+  /** 展开项目所在的分支（工作区、各级父项目和它自己），左侧能看到它和其中的待办 */
   const reveal = useCallback(
     (ws: string, project?: string) => {
       if (!project) return;
-      const keys = [WS_KEY, parentOf(project), project].filter((k) => k !== undefined);
+      const keys = [WS_KEY, ...ancestorsOf(project), project];
       setCollapsed(ws, (c) => (keys.some((k) => c[k]) ? { ...c, ...Object.fromEntries(keys.map((k) => [k, false])) } : c));
     },
     [setCollapsed],

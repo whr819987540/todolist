@@ -1,6 +1,6 @@
 import { FileTextOutlined, FolderFilled } from "@ant-design/icons";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { inProject, parentOf, projectLabel, projectMoveProblem } from "../projects";
+import { ancestorsOf, inProject, projectLabel, projectMoveProblem } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { displayTitle } from "../utils";
 import { parseSelKey } from "./sidebar/tree";
@@ -123,9 +123,9 @@ function hitTest(x: number, y: number, item: DragItem): { target: DropTarget | n
   const workspace = wsEl.dataset.dropWs!;
   const collapsed = wsEl.getAttribute("aria-expanded") === "false" ? workspace : undefined;
   const project = el.closest<HTMLElement>("[data-drop-project]")?.dataset.dropProject;
-  // 项目：在某个项目（连同它的子项目、待办）上是放进这个顶层项目，在工作区那一行等项目以外的地方是移到顶层
+  // 项目：在某个项目（连同它的各级子项目、待办）上是放进这个顶层项目，在工作区那一行等项目以外的地方是移到顶层
   if (item.kind === "project")
-    return { target: project === undefined ? { workspace } : { workspace, project: parentOf(project) ?? project }, collapsed };
+    return { target: project === undefined ? { workspace } : { workspace, project: ancestorsOf(project)[0] ?? project }, collapsed };
   return { target: project ? { workspace, project } : null, collapsed };
 }
 
@@ -171,7 +171,8 @@ function judge(
         status: problem.code === "taken" || problem.code === "hasSubs" ? "refused" : "none",
         hint: problem.code === "taken" && !target.project ? `「${target.workspace}」里已有同名项目` : problem.reason,
       };
-    if (target.project) return { status: "ok", hint: `放进「${same ? "" : `${target.workspace} / `}${target.project}」，成为子项目` };
+    if (target.project)
+      return { status: "ok", hint: `放进「${same ? "" : `${target.workspace} / `}${projectLabel(target.project)}」，成为子项目` };
     return { status: "ok", hint: same ? "移出来，放在顶层" : `移动到工作区「${target.workspace}」` };
   }
   if (item.kind === "todos") {

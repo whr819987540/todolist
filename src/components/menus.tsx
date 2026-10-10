@@ -31,7 +31,7 @@ export interface Actions {
   openWorkspaceFolder(): void;
 
   newProject(): void;
-  /** 在顶层项目 parent 里新建子项目 */
+  /** 在项目 parent（可以是子项目）里新建子项目 */
   newSubProject(parent: string): void;
   renameProject(project: string): void;
   deleteProject(project: string): void;
@@ -91,8 +91,8 @@ export function projectMenu(a: Actions, project: string, targets: readonly MoveT
   return {
     items: [
       { key: "new-todo", icon: <PlusOutlined />, label: "新建待办" },
-      // 只有一层子项目：子项目里不能再建
-      ...(isSubProject(project) ? [] : [{ key: "new-sub", icon: <FolderAddOutlined />, label: "新建子项目" }]),
+      // 子项目里也能再建，层数不限
+      { key: "new-sub", icon: <FolderAddOutlined />, label: "新建子项目" },
       { key: "rename", icon: <EditOutlined />, label: "重命名" },
       {
         key: "move",

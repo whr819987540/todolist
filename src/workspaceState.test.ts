@@ -88,6 +88,31 @@ describe("后退 / 前进的记录跟着走", () => {
     ]);
   });
 
+  it("中间一级改名：下面各级的跟着，名字开头相同的旁边的不动", () => {
+    nav.visit({ workspace: "工作", project: "需求/前端/组件/按钮", todoId: "c" });
+    nav.visit({ workspace: "工作", project: "需求/前端二/组件" });
+    state.renameProjectState("工作", "需求/前端", "需求/界面");
+    expect(backAll().slice(0, 2)).toEqual([
+      { workspace: "工作", project: "需求/界面/组件/按钮", todoId: "c" },
+      { workspace: "生活" },
+    ]);
+  });
+
+  it("删除中间一级：下面各级的都不再回去", () => {
+    nav.visit({ workspace: "工作", project: "需求/前端/组件/按钮", todoId: "c" });
+    nav.visit({ workspace: "工作", project: "需求/前端二/组件" });
+    nav.visit({ workspace: "工作", project: "需求/前端/组件" });
+    state.forgetProjectState("工作", "需求/前端");
+    // 正看着的删了，退到前一处「需求/前端二/组件」；再往后没有「需求/前端」下面的
+    expect(backAll()).toEqual([
+      { workspace: "生活" },
+      { workspace: "工作", project: "需求", todoId: "a" },
+      { workspace: "工作", project: "需求" },
+      { workspace: "工作" },
+      null,
+    ]);
+  });
+
   it("项目放进别的项目成为子项目、子项目移出来", () => {
     state.moveProjectState("工作", "需求", "工作", "日常/需求");
     expect(backAll()).toEqual([

@@ -602,6 +602,28 @@ mark {
 .tree .project-icon {
   font-size: calc(var(--fs-sidebar) + 1px); /* 15px */
 }
+/* 侧栏窄、没有再往右缩进的深层子项目：文件夹图标右下角标出是第几级 */
+.tree .project-icon[data-level] {
+  position: relative;
+  margin-right: 5px;
+}
+.tree .project-icon[data-level]::after {
+  content: attr(data-level);
+  position: absolute;
+  right: -7px;
+  top: -5px;
+  min-width: 11px;
+  height: 11px;
+  padding: 0 2px;
+  border-radius: 6px;
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 11px;
+  text-align: center;
+  color: var(--c-bg-sidebar);
+  background: var(--c-text-3);
+  box-shadow: 0 0 0 1px var(--c-bg-sidebar);
+}
 
 .tree-row {
   position: relative;
@@ -714,6 +736,28 @@ mark {
    加在项目这一级而不是每一行上：每一行都加的话，浏览器每一帧都要逐行判断是否可见，几千行时打字都会变卡 */
 .todo-group {
   content-visibility: auto;
+}
+
+/* 展开着的项目下面（子项目和它自己的待办）左边的竖线，对着项目行的折叠箭头（--guide-x，见 TreeRows 的 ProjectBranch），
+   层级多时看得出哪些是它下面的；右侧正看着的待办所在的那一层颜色深一点。盖在行的悬停、选中底色上面，不挡鼠标 */
+.project-children {
+  position: relative;
+}
+.project-children.guided::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: calc(var(--guide-x) - 1px);
+  top: 0;
+  bottom: 2px;
+  width: 1px;
+  background: var(--c-border-strong);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.project-children.guide-active::before {
+  background: var(--c-text-3);
+  opacity: 1;
 }
 
 /* 待办条目：两行，第一行标题，第二行创建/修改时间 */
@@ -959,13 +1003,15 @@ body.drag-moving .tree-row:hover .row-count {
   margin-bottom: 16px;
 }
 
+/* 右侧窄（最小窗口宽度、侧栏拉宽）时按钮换到下一行，标题不会被挤得只剩一个字 */
 .overview-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  gap: 12px 16px;
 }
 .overview-title {
-  flex: 1;
+  flex: 1 1 180px;
   min-width: 0;
 }
 .overview-title h2 {

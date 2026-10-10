@@ -2,7 +2,7 @@ import { App as AntApp } from "antd";
 import { useEffect, useMemo, useRef } from "react";
 import { api, errMsg } from "../api";
 import type { How } from "../navHistory";
-import { deepTodos, inProject, isSubProject, leafName, projectLabel, reparent, subProjectsOf } from "../projects";
+import { deepTodos, descendantsOf, inProject, isSubProject, leafName, parentOf, projectLabel, reparent } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
@@ -60,7 +60,7 @@ export interface ActionContext {
   listOptions: PerWorkspace<ListOptions>;
   /** 展开工作区（WS_KEY）或项目 */
   expand: (ws: string, key: string) => void;
-  /** 展开项目所在的分支（工作区、父项目和它自己） */
+  /** 展开项目所在的分支（工作区、各级父项目和它自己） */
   reveal: (ws: string, project?: string) => void;
   updateTodos: (ws: string, project: string, fn: (todos: TodoSummary[]) => TodoSummary[]) => void;
   patchTodo: (ws: string, project: string, s: TodoSummary) => void;
@@ -132,7 +132,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
   };
 
   /**
-   * 项目改名、移动后，它和子项目的折叠状态跟过去：fromWs 里的 from（路径）→ toWs 里的 to。
+   * 项目改名、移动后，它和各级子项目的折叠状态跟过去：fromWs 里的 from（路径）→ toWs 里的 to。
    * 先按现在的状态算好要搬的，再分别改两个工作区（可以是同一个）
    */
   const moveCollapsed = (fromWs: string, from: string, toWs: string, to: string) => {
@@ -169,7 +169,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
     const tree = treeOf(ws);
     const inSel = sel.workspace === ws;
     const isSelProject = (project: string) => inSel && sel.project === project;
-    /** 右侧显示的是这个项目或它的子项目（概览或其中的待办）：改名、移动、删除它时要先存盘、跟过去 */
+    /** 右侧显示的是这个项目或它的各级子项目（概览或其中的待办）：改名、移动、删除它时要先存盘、跟过去 */
     const showsProject = (project: string) => inSel && sel.project !== undefined && inProject(sel.project, project);
     const isSelTodo = (project: string, id: string) => isSelProject(project) && sel.todoId === id;
 
@@ -232,7 +232,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       newSubProject: (parent) =>
         openDialog({
           title: "新建子项目",
-          label: `在项目「${workspaces.length > 1 ? `${ws} / ` : ""}${parent}」中新建子项目`,
+          label: `在项目「${workspaces.length > 1 ? `${ws} / ` : ""}${projectLabel(parent)}」中新建子项目`,
           placeholder: "例如：前端、后端",
           okText: "创建",
           onSubmit: async (v) => {
@@ -261,7 +261,8 @@ export function useWorkspaceActions(ctx: ActionContext) {
       deleteProject: (project) => {
         const projects = tree?.projects ?? [];
         const count = deepTodos(projects, project).length;
-        const subs = subProjectsOf(projects, project).length;
+        // 各级子项目都算
+        const subs = descendantsOf(projects, project).length;
         confirmDelete(
           `删除${isSubProject(project) ? "子项目" : "项目"}「${projectLabel(project)}」？`,
           `其中的 ${subs ? `${subs} 个子项目、` : ""}${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
@@ -269,9 +270,10 @@ export function useWorkspaceActions(ctx: ActionContext) {
             const isSel = showsProject(project);
             if (isSel) await flushEditor();
             const rid = await api.deleteProject(ws, project);
+            // 正看着它（或它下面的）：退回往上最近的还在的父项目（它的父项目），顶层项目退回工作区概览
             if (isSel) {
               editorRef.current?.detach();
-              setSel({ workspace: ws });
+              setSel({ workspace: ws, project: parentOf(project) });
             }
             forgetProjectState(ws, project);
             await reload();
@@ -294,7 +296,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           if (isSel && sel.project)
             setSel({ ...sel, workspace: targetWs, project: reparent(sel.project, project, to) }, "replace");
           const there = targetWs === ws ? "" : `${targetWs} / `;
-          if (parent !== undefined) message.success(`已放进「${there}${parent}」`);
+          if (parent !== undefined) message.success(`已放进「${there}${projectLabel(parent)}」`);
           else if (targetWs === ws) message.success("已移出来，放在顶层");
           else message.success(`已移动到工作区「${targetWs}」`);
         }),

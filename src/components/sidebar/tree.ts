@@ -1,9 +1,9 @@
 // 侧栏树共用的定义：右侧显示的内容（选中项）和它在行上的键、折叠状态、待办计数、隐藏全部完成的项目时藏起哪些，
 // 「全部折叠 / 全部展开」看哪些项目
-import { deepTodos, inProject, parentOf } from "../../projects";
+import { ancestorsOf, deepCounts, deepTodos, depthOf, inProject } from "../../projects";
 import type { ProjectNode, WorkspaceTree } from "../../types";
 
-/** 折叠状态里工作区本身用的键（项目用项目路径，子项目是「父项目/子项目」） */
+/** 折叠状态里工作区本身用的键（项目用项目路径，子项目是「父项目/子项目」，再往下一样） */
 export const WS_KEY = "\u0000workspace";
 
 /** 右侧显示的内容：只有 workspace 时是工作区概览，有 project（项目路径）时是项目概览，再有 todoId 时是这条待办 */
@@ -24,12 +24,36 @@ export function parseSelKey(key: string): Selection {
 }
 
 /**
- * 全部完成的项目：里面有待办，而且全都完成了；有子项目的父项目连同子项目里的待办一起看。没有待办的（刚建的）不算。
+ * 全部完成的项目：里面有待办，而且全都完成了；有子项目的连同各级子项目里的待办一起看。没有待办的（刚建的）不算。
  * projects 是这个工作区的全部项目
  */
 export function isProjectDone(projects: readonly ProjectNode[], project: string): boolean {
   const todos = deepTodos(projects, project);
   return todos.length > 0 && todos.every((t) => t.done);
+}
+
+/**
+ * 第 depth 级的项目（顶层是 0）在侧栏里缩进多少（px）：前 3 级每级 16，再往下每级 8，层级多时名字不会很快被挤没
+ */
+export function indentOf(depth: number): number {
+  return Math.min(depth, 3) * 16 + Math.max(0, depth - 3) * 8;
+}
+
+/** 缩进最多到第几级（侧栏再宽也不再往下缩进） */
+const MAX_INDENT_LEVELS = 10;
+/** 项目行上除了缩进和名字的宽度（px，默认字号时）：左右边距、折叠箭头、文件夹图标、未完成数和间距 */
+const ROW_CHROME = 110;
+/** 缩进再多也要给名字留下的宽度（px）：六七个字 */
+const MIN_LABEL = 80;
+
+/**
+ * 侧栏宽 width（px）时最多缩进到第几级：更深的项目和这一级缩进得一样多，不再往右挪，名字不会被挤没
+ * （侧栏最窄 240 时 3 级，默认宽 300 时 10 级）
+ */
+export function indentLevelsFor(width: number): number {
+  let levels = 0;
+  while (levels < MAX_INDENT_LEVELS && indentOf(levels + 1) <= width - ROW_CHROME - MIN_LABEL) levels++;
+  return levels;
 }
 
 /** 没有藏起来的项目时都用这一个，侧栏的行不必重新渲染 */
@@ -38,8 +62,8 @@ const NONE_HIDDEN: ReadonlySet<string> = new Set();
 /**
  * 「隐藏全部完成的项目」开着时，侧栏里藏起来的项目（路径）：全部完成的，除了右侧正在显示的那个（项目概览，或打开着其中的
  * 待办），免得正看着的东西从左边消失，和刚切走、还要再显示一会儿的（lingering，见 lingeringAfter）；显示的、刚切走的是
- * 子项目时，它的父项目也不藏。藏起来的父项目连同子项目一起不显示，这时子项目不再单独列进来；父项目没藏时，全部完成的
- * 子项目单独藏。侧栏搜索时什么都不藏，名字或待办命中的照常列出
+ * 子项目时，它的各级父项目也不藏。藏起来的项目连同各级子项目一起不显示，这时它下面的不再单独列进来；父项目没藏时，
+ * 全部完成的子项目单独藏（每一级都这样看）。侧栏搜索时什么都不藏，名字或待办命中的照常列出
  */
 export function hiddenDoneProjects(
   projects: readonly ProjectNode[],
@@ -53,28 +77,25 @@ export function hiddenDoneProjects(
 ): ReadonlySet<string> {
   if (!o.hide || o.keyword) return NONE_HIDDEN;
   const showing = [o.selProject, ...(o.lingering ?? [])].filter((x) => x !== undefined);
+  const counts = deepCounts(projects);
   const hidden = new Set<string>();
-  const hide = (name: string) => {
-    if (!showing.some((x) => inProject(x, name)) && isProjectDone(projects, name)) hidden.add(name);
-  };
-  // 先看顶层项目，再看没藏起来的父项目里的子项目
-  for (const p of projects) if (parentOf(p.name) === undefined) hide(p.name);
-  for (const p of projects) {
-    const parent = parentOf(p.name);
-    if (parent !== undefined && !hidden.has(parent)) hide(p.name);
+  // 从上往下一级一级看：父项目藏起来了，下面的跟着藏，不再单独算
+  const byDepth = [...projects].sort((a, b) => depthOf(a.name) - depthOf(b.name));
+  for (const { name } of byDepth) {
+    if (ancestorsOf(name).some((a) => hidden.has(a))) continue;
+    const c = counts.get(name);
+    if (c && c.total > 0 && c.undone === 0 && !showing.some((x) => inProject(x, name))) hidden.add(name);
   }
   return hidden.size ? hidden : NONE_HIDDEN;
 }
 
-/** 藏起来的项目（hiddenDoneProjects）里有它或它的父项目：侧栏里看不见 */
-export const isHidden = (hidden: ReadonlySet<string>, project: string) => {
-  const parent = parentOf(project);
-  return hidden.has(project) || (parent !== undefined && hidden.has(parent));
-};
+/** 藏起来的项目（hiddenDoneProjects）里有它或它的哪一级父项目：侧栏里看不见 */
+export const isHidden = (hidden: ReadonlySet<string>, project: string) =>
+  hidden.size > 0 && (hidden.has(project) || ancestorsOf(project).some((a) => hidden.has(a)));
 
 /**
  * 侧栏顶部「全部折叠 / 全部展开」显示哪个：看得见的项目有展开着的时是「全部折叠」，都折叠着时是「全部展开」。
- * 看不见的不算：折叠着的工作区里的项目、折叠着的父项目里的子项目；hiddenOf(tree) 是这个工作区里藏起来的项目
+ * 看不见的不算：折叠着的工作区里的项目、折叠着的（哪一级）父项目里的子项目；hiddenOf(tree) 是这个工作区里藏起来的项目
  * （hiddenDoneProjects，和侧栏的树用同样的参数算），它们默认展开着，看不见也折叠不了。算进去的话折叠完看得见的项目后
  * 按钮还是「全部折叠」，点了界面没有变化。只对展开着、有展开着的项目的工作区才调用 hiddenOf
  */
@@ -86,10 +107,7 @@ export function anyVisibleProjectOpen(
   return trees.some((t) => {
     const c = collapsedOf(t.name);
     if (c[WS_KEY]) return false;
-    const isOpen = (name: string) => {
-      const parent = parentOf(name);
-      return !c[name] && (parent === undefined || !c[parent]);
-    };
+    const isOpen = (name: string) => !c[name] && !ancestorsOf(name).some((a) => c[a]);
     const open = t.projects.filter((p) => isOpen(p.name));
     if (!open.length) return false;
     const hidden = hiddenOf(t);

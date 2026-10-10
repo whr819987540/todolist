@@ -26,7 +26,7 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
   const k = kw.toLowerCase();
 
   const { projects, todos } = useMemo(() => {
-    // 项目按自己的名字匹配（子项目不看父项目的名字），数目包括子项目里的待办
+    // 项目按自己的名字匹配（子项目不看父项目的名字），数目包括各级子项目里的待办
     const projects: { workspace: string; project: ProjectNode; todos: TodoSummary[] }[] = [];
     const todos: { workspace: string; project: string; todo: TodoSummary; snippet: string | null }[] = [];
     for (const tree of trees ?? []) {
@@ -78,7 +78,7 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
                 {projects.map(({ workspace, project, todos: all }) => {
                   const undone = all.filter((t) => !t.done).length;
                   const parent = parentOf(project.name);
-                  const where = parent === undefined ? workspace : `${workspace} / ${parent}`;
+                  const where = parent === undefined ? workspace : `${workspace} / ${projectLabel(parent)}`;
                   return (
                     <div
                       key={`${workspace}/${project.name}`}

@@ -10,33 +10,41 @@ import {
 import { Dropdown, Tooltip, type MenuProps } from "antd";
 import type { OpenMenu } from "./RowPopups";
 import { memo, useCallback, useMemo, useState } from "react";
-import { deepTodos, inProject, isSubProject, leafName, projectLabel, subProjectsOf } from "../../projects";
+import { deepCounts, inProject, leafName, parentOf, projectLabel } from "../../projects";
 import { hitKey, searchSnippet } from "../../search";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../../types";
 import { avatarColor, compactTime, displayTitle, firstChar, matchTodo, relativeTime, sortTodos } from "../../utils";
 import { type DragItem, type DragState, dragConcerns, dropClass, isDraggingProject, reorderMark } from "../DragMove";
 import Highlight from "../Highlight";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "../menus";
-import { type Collapsed, countAll, countDone, hiddenDoneProjects, type Selection, selKey, WS_KEY } from "./tree";
+import {
+  type Collapsed,
+  countAll,
+  countDone,
+  hiddenDoneProjects,
+  indentOf,
+  type Selection,
+  selKey,
+  WS_KEY,
+} from "./tree";
 
-/** 子项目比父项目多缩进这么多（px） */
-const SUB_INDENT = 16;
-
-/** 侧栏里列出的一个项目：排好序、筛过的待办；顶层项目带着列出的子项目 */
+/** 侧栏里列出的一个项目：排好序、筛过的待办，和列出的子项目（再往下一样） */
 interface Listed {
   project: ProjectNode;
   todos: TodoSummary[];
   /** 搜索时项目自己的名字里有关键字 */
   nameMatch: boolean;
   subs: readonly Listed[];
-  /** 行上的未完成数和总数：父项目包括子项目里的，不管筛没筛 */
+  /** 有没有子项目（不管筛没筛） */
+  hasSubs: boolean;
+  /** 行上的未完成数和总数：包括各级子项目里的，不管筛没筛 */
   undone: number;
   total: number;
 }
 
 const NO_SUBS: readonly Listed[] = [];
 
-/** 右侧显示的内容在 project（或它的子项目）里时是 sel，否则 undefined：传给项目的行，别的项目不必重新渲染 */
+/** 右侧显示的内容在 project（或它的各级子项目）里时是 sel，否则 undefined：传给项目的行，别的项目不必重新渲染 */
 const selIn = (sel: Selection | undefined, project: string) =>
   sel?.project !== undefined && inProject(sel.project, project) ? sel : undefined;
 
@@ -79,6 +87,8 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   picked: ReadonlySet<string>;
   onTodoClick: TodoClick;
   pickedMenu: () => MenuProps | null;
+  /** 子项目最多缩进到第几级（跟着侧栏宽度，见 indentLevelsFor） */
+  indentLevels: number;
 }) {
   const { tree, sel, actions: a, collapsed, keyword: kw, hits, hideDone, hideDoneProjects, lingering, sortKey, setCollapsed } =
     p;
@@ -91,38 +101,61 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   );
 
   // 各项目里列出的待办，排好序；搜索时：标题、正文开头（前端匹配）或正文全文（hits）里有关键字的待办，和名字里有关键字的项目，
-  // 子项目列出来时它的父项目也列出来。
+  // 子项目列出来时它的各级父项目也列出来。
   // 这里不管哪些项目藏起来：藏起哪些跟着右侧显示的、刚切走的项目变，变了时不必把全部待办重新排序，各项目拿到的
   // 还是原来的对象，项目不必重新渲染
   const listed = useMemo(() => {
     const k = kw.toLowerCase();
-    const kept = (x: Listed) => !kw || x.todos.length > 0 || x.nameMatch || x.subs.length > 0;
-    const one = (project: ProjectNode, subs: readonly Listed[], all: readonly TodoSummary[]): Listed => {
+    const counts = deepCounts(tree.projects);
+    // 各项目的下一级子项目（顶层项目的键是 undefined）；tree.projects 排好了序，同一级的按名字排
+    const children = new Map<string | undefined, ProjectNode[]>();
+    for (const p of tree.projects) {
+      const parent = parentOf(p.name);
+      const list = children.get(parent);
+      if (list) list.push(p);
+      else children.set(parent, [p]);
+    }
+    const build = (project: ProjectNode): Listed | null => {
+      const subs = (children.get(project.name) ?? []).map(build).filter((x) => x !== null);
       let todos = sortTodos(project.todos, sortKey);
       if (hideDone) todos = todos.filter((t) => !t.done);
       if (kw) todos = todos.filter((t) => matchTodo(t, kw) || !!hits?.has(hitKey(project.name, t.id)));
       const nameMatch = !!k && leafName(project.name).toLowerCase().includes(k);
-      return { project, todos, nameMatch, subs, undone: all.filter((t) => !t.done).length, total: all.length };
+      if (kw && !todos.length && !nameMatch && !subs.length) return null;
+      const c = counts.get(project.name) ?? { total: 0, undone: 0 };
+      return {
+        project,
+        todos,
+        nameMatch,
+        subs: subs.length ? subs : NO_SUBS,
+        hasSubs: children.has(project.name),
+        undone: c.undone,
+        total: c.total,
+      };
     };
-    return tree.projects
-      .filter((p) => !isSubProject(p.name))
-      .map((top) => {
-        const subs = subProjectsOf(tree.projects, top.name)
-          .map((sub) => one(sub, NO_SUBS, sub.todos))
-          .filter(kept);
-        return one(top, subs.length ? subs : NO_SUBS, deepTodos(tree.projects, top.name));
-      })
-      .filter(kept);
+    return (children.get(undefined) ?? []).map(build).filter((x) => x !== null);
   }, [tree, kw, hits, hideDone, sortKey]);
+  // 藏起来的项目（连同下面各级）筛掉；没有变的项目还是原来的对象，不必重新渲染
   const visible = useMemo(() => {
     if (!hidden.size) return listed;
-    return listed
-      .filter((x) => !hidden.has(x.project.name))
-      .map((x) => {
-        if (!x.subs.some((s) => hidden.has(s.project.name))) return x;
-        const subs = x.subs.filter((s) => !hidden.has(s.project.name));
-        return { ...x, subs: subs.length ? subs : NO_SUBS };
-      });
+    const prune = (list: readonly Listed[]): readonly Listed[] => {
+      let changed = false;
+      const out: Listed[] = [];
+      for (const x of list) {
+        if (hidden.has(x.project.name)) {
+          changed = true;
+          continue;
+        }
+        const subs = prune(x.subs);
+        if (subs === x.subs) out.push(x);
+        else {
+          changed = true;
+          out.push({ ...x, subs: subs.length ? subs : NO_SUBS });
+        }
+      }
+      return changed ? out : list;
+    };
+    return prune(listed);
   }, [listed, hidden]);
 
   const total = countAll(tree);
@@ -197,6 +230,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
               picked={p.picked}
               onTodoClick={p.onTodoClick}
               pickedMenu={p.pickedMenu}
+              indentLevels={p.indentLevels}
             />
           ))}
           {tree.projects.length === 0 && (
@@ -223,14 +257,16 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
 });
 
 /**
- * 一个项目：项目行，展开时下面是子项目（顶层项目才有，排在前面，同资源管理器里文件夹排在文件前面）和项目自己的待办。
- * 子项目也用它显示（depth 1）
+ * 一个项目：项目行，展开时下面是子项目（排在前面，同资源管理器里文件夹排在文件前面）和项目自己的待办，
+ * 左边一条竖线（对着项目行的折叠箭头）连起它下面的这些。各级子项目也用它显示
  */
 const ProjectBranch = memo(function ProjectBranch(p: {
   workspace: string;
   item: Listed;
-  /** 缩进几级：顶层项目 0，子项目 1 */
+  /** 第几级：顶层项目 0，子项目 1，再往下 2、3… */
   depth: number;
+  /** 最多缩进到第几级：更深的和这一级缩进得一样多（见 indentLevelsFor） */
+  indentLevels: number;
   /** 这个工作区的折叠状态（项目和子项目都按路径记）；搜索时忽略，全部展开 */
   collapsed: Collapsed;
   searching: boolean;
@@ -267,8 +303,15 @@ const ProjectBranch = memo(function ProjectBranch(p: {
       : undefined;
   const mark = reorderMark(drag, p.workspace, name);
   const toggle = () => p.onToggle(name);
-  const indent = p.depth * SUB_INDENT;
+  const indent = indentOf(Math.min(p.depth, p.indentLevels));
+  // 比最多缩进到的那一级还深的：和它缩进得一样多，文件夹图标上标出是第几级，看得出比上一行深
+  const flat = p.depth > p.indentLevels;
   const hasSubs = item.subs.length > 0;
+  // 下面的竖线：子项目还会往右缩进时才画（再深的和它缩进一样多，画了会穿过子项目的折叠箭头）；
+  // 右侧显示的待办就在这个项目里、或显示的是它的子项目时深一点，看得出正看着的在哪一层
+  const guided = p.depth < p.indentLevels;
+  const guideActive =
+    guided && p.sel?.project !== undefined && (p.sel.todoId ? p.sel.project === name : parentOf(p.sel.project) === name);
   // 右键、「…」的菜单打开时才算：「移动到」要列出侧栏里各工作区的项目
   const projectMenuOf = () => projectMenu(a, name, p.moveTargets(p.workspace));
 
@@ -296,14 +339,17 @@ const ProjectBranch = memo(function ProjectBranch(p: {
           onDoubleClick={toggle}
         >
           <Chevron open={open} onClick={toggle} />
-          <span className="project-icon">{open ? <FolderOpenFilled /> : <FolderFilled />}</span>
+          <span
+            className="project-icon"
+            data-level={flat ? p.depth + 1 : undefined}
+            title={flat ? `第 ${p.depth + 1} 级（侧栏窄，没有再往右缩进；拉宽侧栏可以看到层级）` : undefined}
+          >
+            {open ? <FolderOpenFilled /> : <FolderFilled />}
+          </span>
           <span className="row-label" title={projectLabel(name)}>
             <Highlight text={leafName(name)} kw={p.keyword} />
           </span>
-          <span
-            className="row-count"
-            title={`未完成 ${item.undone} / 共 ${item.total}${isSubProject(name) ? "" : "（含子项目）"}`}
-          >
+          <span className="row-count" title={`未完成 ${item.undone} / 共 ${item.total}${item.hasSubs ? "（含子项目）" : ""}`}>
             {item.undone || ""}
           </span>
           <span className="row-actions">
@@ -313,62 +359,67 @@ const ProjectBranch = memo(function ProjectBranch(p: {
         </div>
       </LazyDropdown>
 
-      {open && hasSubs && (
-        <div role="group">
-          {item.subs.map((sub) => (
-            <ProjectBranch
-              key={sub.project.name}
-              {...p}
-              item={sub}
-              depth={p.depth + 1}
-              sel={selIn(p.sel, sub.project.name)}
-              drag={dragConcerns(drag, p.workspace, sub.project.name) ? drag : null}
-            />
-          ))}
-        </div>
-      )}
-
       {open && (
         <div
-          role="group"
-          className="todo-group"
-          // 不在可见区域时的占位高度：每行两行文字加上下内边距和间距（14px 字号时约 51px）
-          style={{ containIntrinsicBlockSize: `auto calc(${todos.length} * (2 * var(--fs-sidebar) + 23px))` }}
+          className={`project-children${guided ? " guided" : ""}${guideActive ? " guide-active" : ""}`}
+          // 竖线对着项目行折叠箭头的中间：行的左边距 8 + 内边距 22 + 缩进 + 箭头宽度的一半 8
+          style={guided ? ({ "--guide-x": `${38 + indent}px` } as React.CSSProperties) : undefined}
         >
-          {todos.map((t) => (
-            <TodoRow
-              key={t.id}
-              picked={p.picked.has(selKey({ workspace: p.workspace, project: name, todoId: t.id }))}
-              onTodoClick={p.onTodoClick}
-              pickedMenu={p.pickedMenu}
-              workspace={p.workspace}
-              project={name}
-              indent={indent}
-              todo={t}
-              selected={selTodoId === t.id}
-              actions={a}
-              moveTargets={p.moveTargets}
-              keyword={p.keyword}
-              snippet={p.keyword ? searchSnippet(t, p.keyword, p.hits?.get(hitKey(name, t.id))) : null}
-              now={p.now}
-              today={p.today}
-              dragged={draggingTodoId === t.id}
-              dropMark={mark?.id === t.id ? mark.place : undefined}
-              dragStart={p.dragStart}
-              onContextMenu={p.onContextMenu}
-            />
-          ))}
-          {todos.length === 0 && !p.keyword && !hasSubs && (
-            <div className="tree-empty" style={{ paddingLeft: 48 + indent }}>
-              {hiddenDone > 0 ? (
-                `已隐藏 ${hiddenDone} 条已完成的待办`
-              ) : (
-                <>
-                  暂无待办，<a onClick={() => a.newTodo(name, "", true)}>新建一条</a>
-                </>
-              )}
+          {hasSubs && (
+            <div role="group">
+              {item.subs.map((sub) => (
+                <ProjectBranch
+                  key={sub.project.name}
+                  {...p}
+                  item={sub}
+                  depth={p.depth + 1}
+                  sel={selIn(p.sel, sub.project.name)}
+                  drag={dragConcerns(drag, p.workspace, sub.project.name) ? drag : null}
+                />
+              ))}
             </div>
           )}
+          <div
+            role="group"
+            className="todo-group"
+            // 不在可见区域时的占位高度：每行两行文字加上下内边距和间距（14px 字号时约 51px）
+            style={{ containIntrinsicBlockSize: `auto calc(${todos.length} * (2 * var(--fs-sidebar) + 23px))` }}
+          >
+            {todos.map((t) => (
+              <TodoRow
+                key={t.id}
+                picked={p.picked.has(selKey({ workspace: p.workspace, project: name, todoId: t.id }))}
+                onTodoClick={p.onTodoClick}
+                pickedMenu={p.pickedMenu}
+                workspace={p.workspace}
+                project={name}
+                indent={indent}
+                todo={t}
+                selected={selTodoId === t.id}
+                actions={a}
+                moveTargets={p.moveTargets}
+                keyword={p.keyword}
+                snippet={p.keyword ? searchSnippet(t, p.keyword, p.hits?.get(hitKey(name, t.id))) : null}
+                now={p.now}
+                today={p.today}
+                dragged={draggingTodoId === t.id}
+                dropMark={mark?.id === t.id ? mark.place : undefined}
+                dragStart={p.dragStart}
+                onContextMenu={p.onContextMenu}
+              />
+            ))}
+            {todos.length === 0 && !p.keyword && !hasSubs && (
+              <div className="tree-empty" style={{ paddingLeft: 48 + indent }}>
+                {hiddenDone > 0 ? (
+                  `已隐藏 ${hiddenDone} 条已完成的待办`
+                ) : (
+                  <>
+                    暂无待办，<a onClick={() => a.newTodo(name, "", true)}>新建一条</a>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

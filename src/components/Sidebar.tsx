@@ -1,6 +1,6 @@
 import type { InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { parentOf } from "../projects";
+import { ancestorsOf, parentOf } from "../projects";
 import { type ContentHits, NO_HITS } from "../search";
 import type { MenuProps } from "antd";
 import type { WorkspaceTree } from "../types";
@@ -17,6 +17,7 @@ import {
   countAll,
   countDone,
   hiddenDoneProjects,
+  indentLevelsFor,
   isProjectDone,
   parseSelKey,
   type Selection,
@@ -100,7 +101,7 @@ export default function Sidebar(props: Props) {
   );
 
   // 「隐藏全部完成的项目」开着时，右侧显示的内容离开一个全部完成的项目后，它再显示一会儿才藏起来（sidebar/lingering.ts）；
-  // 搜索时本来就不藏，不必留。离开的是子项目时，它全部完成了，它或者它的父项目（也全部完成了时）会被藏起来
+  // 搜索时本来就不藏，不必留。离开的是子项目时，它全部完成了，它或者它的哪一级父项目（也全部完成了时）会被藏起来
   const lingering = useLingeringProjects(sel, (ws, project) => {
     if (kw || !listOptionsOf(ws).hideDoneProjects) return false;
     const projects = trees.find((t) => t.name === ws)?.projects ?? [];
@@ -116,6 +117,9 @@ export default function Sidebar(props: Props) {
       selProject: sel.workspace === t.name ? sel.project : undefined,
       lingering: lingering.get(t.name),
     });
+
+  // 子项目最多缩进到第几级：侧栏窄时少缩进几级，名字不会被挤没；侧栏宽度变了、跨过某一级时行才重新渲染
+  const indentLevels = indentLevelsFor(props.width);
 
   const total = trees.reduce((n, t) => n + countAll(t), 0);
   const done = trees.reduce((n, t) => n + countDone(t), 0);
@@ -143,9 +147,12 @@ export default function Sidebar(props: Props) {
     const keys = rows().map((r) => r.dataset.sel!);
     if (!keys.length) return;
     let at = keys.indexOf(current);
-    // 选中项被折叠或筛选掉了：从它所在的项目、父项目、工作区开始
-    for (const project of [sel.project, sel.project && parentOf(sel.project)])
-      if (at < 0 && project) at = keys.indexOf(selKey({ workspace: sel.workspace, project }));
+    // 选中项被折叠或筛选掉了：从它所在的项目、往上最近的看得见的父项目、工作区开始
+    if (sel.project)
+      for (const project of [sel.project, ...ancestorsOf(sel.project).reverse()]) {
+        if (at >= 0) break;
+        at = keys.indexOf(selKey({ workspace: sel.workspace, project }));
+      }
     if (at < 0) at = keys.indexOf(selKey({ workspace: sel.workspace }));
     const next = at < 0 ? 0 : at + step;
     if (next >= 0 && next < keys.length && next !== at) props.onSelect(parseSelKey(keys[next]));
@@ -153,7 +160,7 @@ export default function Sidebar(props: Props) {
 
   useImperativeHandle(handleRef, () => ({ focus: focusTree, move }));
 
-  // 列表获得焦点时：↑↓ 移动，← → 折叠 / 展开（或回到上一级：待办 → 所在的项目，子项目 → 父项目，项目 → 工作区），
+  // 列表获得焦点时：↑↓ 移动，← → 折叠 / 展开（或回到上一级：待办 → 所在的项目，子项目 → 上一级的父项目，项目 → 工作区），
   // Enter 打开待办或折叠 / 展开
   const onTreeKey = (e: React.KeyboardEvent) => {
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
@@ -253,6 +260,7 @@ export default function Sidebar(props: Props) {
             onContextMenu={popups.openMenu}
             moveTargets={moveTargetsOf}
             onShowDoneProjects={showDoneProjects}
+            indentLevels={indentLevels}
           />
         ))}
       </div>

@@ -54,6 +54,21 @@ describe("存到哪个项目", () => {
     expect(targetExists(withSubs, sub)).toBe(true);
   });
 
+  it("多级的子项目：各级跟在父项目后面，列完一个项目的再列下一个；可以存到深处的子项目里", () => {
+    const deep = [{ name: "工作", projects: ["需求开发/前端/组件", "日常事务", "需求开发", "需求开发/前端", "需求开发/后端"] }];
+    const target = { workspace: "工作", project: "需求开发/前端/组件" };
+    const [group] = targetOptions(deep, target);
+    expect(group.options.map((o) => o.title)).toEqual([
+      "工作 / 日常事务",
+      "工作 / 需求开发",
+      "工作 / 需求开发 / 后端",
+      "工作 / 需求开发 / 前端",
+      "工作 / 需求开发 / 前端 / 组件",
+    ]);
+    expect(parseTargetKey(group.options[4].value)).toEqual(target);
+    expect(targetExists(deep, target)).toBe(true);
+  });
+
   it("名字里有斜杠、引号也能对回去", () => {
     const t = { workspace: 'A "B"', project: "C / D" };
     expect(parseTargetKey(targetKey(t))).toEqual(t);
