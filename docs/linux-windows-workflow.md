@@ -125,6 +125,8 @@ exit 0
   PAGE=quick-harness VIEWPORT=600x248 node shot.mjs s-quick.mjs
   ```
 
+- `e2e-harness.mjs`：在模拟后端里近似地跑一个端到端套件（`node e2e-harness.mjs split`），推送之前先核对套件里写的期望值、找出套件本身的错。照 `e2e/lib/cdp.mjs` 的样子给套件一个 `t.main`（`ev` 前面加上 `e2e/lib/page.mjs` 的工具函数，`press` / `type` / `click` / `drag` / `mouse` 换成 Playwright 的键盘鼠标，`enter`、`expandAll`、`openSettings` 照抄），测试数据照 `e2e/lib/fixtures.mjs` 放进 `window.__mock.db`；`t.read` 读的正文、`.state.json` 在模拟后端存盘时经 `exposeBinding` 同步回 Node；`t.write` 同时改模拟后端里的正文和修改时间，存盘时按修改时间判断外部修改冲突（同 Rust 端）；`t.restart`、`m.reload` 是刷新页面、重新放进测试数据（`mock.ts` 把 `.state.json` 的内容和设置记在 sessionStorage 里，刷新后还在）。窗口、全局快捷键、注册表、回收站、CDP 特有的（输入法组合 `m.send`）都跑不了，用到它们的套件会报错，只看用得上的那些检查
+
 加了 Tauri 命令要在 `mock.ts` 里加上模拟。看截图时浅色、深色都看，最小窗口宽度（860）下看会不会挤。
 
 ## 推送之后
@@ -170,7 +172,7 @@ Linux 上：
 - [ ] 改 `docs/requirements.md` 和 `README.md`
 - [ ] 新的 Tauri 命令在 `mock.ts` 里加上模拟；新的、不依赖 Tauri 的 Rust 模块加进测试壳的 `lib.rs`
 - [ ] `npm run lint; npm test; npm run build`，测试壳的 `cargo test` 和 `check-windows.sh`
-- [ ] 在模拟后端里把功能点一遍，浅色、深色都截图看
+- [ ] 在模拟后端里把功能点一遍，浅色、深色都截图看；新写的端到端套件先用 `e2e-harness.mjs` 跑一遍核对期望值
 - [ ] 要在 Windows 上才能确认的，写进 `e2e/suites/`（Linux 上跑不了，`npm run lint` 会检查脚本；推送后在 E2E 里跑），端到端测试也测不到的写进 `docs/windows-test-checklist.md` 的「要手动试的」
 - [ ] 一个功能一个提交，推到功能分支后看 CI 和 E2E 都通过，没通过的修了再推
 
