@@ -13,7 +13,13 @@ import { checkShortcut, sameShortcut, shortcutLabel, type TakenShortcut } from "
 import type { SettingsInfo, ShortcutAction } from "../../types";
 import ShortcutRow, { Keys, type ShortcutRowProps } from "./ShortcutRow";
 
-type ShortcutField = "toggleShortcut" | "quickCaptureShortcut" | "toggleDoneShortcut" | "openExternalShortcut";
+type ShortcutField =
+  | "toggleShortcut"
+  | "quickCaptureShortcut"
+  | "toggleDoneShortcut"
+  | "openExternalShortcut"
+  | "splitRightShortcut"
+  | "splitDownShortcut";
 
 const ITEMS: { action: ShortcutAction; field: ShortcutField; label: string; desc: string }[] = [
   {
@@ -39,6 +45,18 @@ const ITEMS: { action: ShortcutAction; field: ShortcutField; label: string; desc
     field: "openExternalShortcut",
     label: "用默认程序打开",
     desc: "软件在前台且选中了某条待办时，用系统默认的 Markdown 程序打开它。",
+  },
+  {
+    action: "splitRight",
+    field: "splitRightShortcut",
+    label: "左右分屏",
+    desc: "右侧编辑区分成左右两边，新的一边先显示正在编辑的待办；已经左右分着时合并回一边。默认是 Alt + Shift 加 + / = 键。",
+  },
+  {
+    action: "splitDown",
+    field: "splitDownShortcut",
+    label: "上下分屏",
+    desc: "右侧编辑区分成上下两边；已经上下分着时合并回一边。",
   },
 ];
 

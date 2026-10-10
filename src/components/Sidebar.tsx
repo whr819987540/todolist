@@ -1,5 +1,5 @@
 import type { InputRef } from "antd";
-import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { ancestorsOf, parentOf } from "../projects";
 import { type ContentHits, NO_HITS } from "../search";
 import type { MenuProps } from "antd";
@@ -44,6 +44,8 @@ interface Props {
   workspaces: string[];
   onWorkspacesChange: (list: string[]) => void;
   sel: Selection;
+  /** 分屏时另一边正显示着的待办：它所在的项目同样算右侧正在显示的，隐藏全部完成的项目时照常显示 */
+  alsoShown: Selection | null;
   onSelect: (s: Selection) => void;
   actionsFor: (workspace: string) => Actions;
   onHome: () => void;
@@ -102,11 +104,18 @@ export default function Sidebar(props: Props) {
 
   // 「隐藏全部完成的项目」开着时，右侧显示的内容离开一个全部完成的项目后，它再显示一会儿才藏起来（sidebar/lingering.ts）；
   // 搜索时本来就不藏，不必留。离开的是子项目时，它全部完成了，它或者它的哪一级父项目（也全部完成了时）会被藏起来
-  const lingering = useLingeringProjects(sel, (ws, project) => {
+  const lingered = useLingeringProjects(sel, (ws, project) => {
     if (kw || !listOptionsOf(ws).hideDoneProjects) return false;
     const projects = trees.find((t) => t.name === ws)?.projects ?? [];
     return isProjectDone(projects, project);
   });
+  // 分屏时另一边正显示着的项目也照常显示：和刚切走的一起算（没有时沿用原来的，侧栏的行不必重新渲染）
+  const alsoWs = props.alsoShown?.workspace;
+  const alsoProject = props.alsoShown?.project;
+  const lingering = useMemo(() => {
+    if (!alsoWs || !alsoProject || lingered.get(alsoWs)?.has(alsoProject)) return lingered;
+    return new Map(lingered).set(alsoWs, new Set([...(lingered.get(alsoWs) ?? []), alsoProject]));
+  }, [lingered, alsoWs, alsoProject]);
 
   // 各工作区藏起来的项目，参数和下面传给 WorkspaceBranch 的一样：顶部的「全部折叠 / 全部展开」不看它们。
   // 那里只对有展开着的项目的工作区才调用，没开这一项、在搜索时直接返回

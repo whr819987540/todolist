@@ -1,7 +1,14 @@
-import { CloseOutlined, PushpinFilled } from "@ant-design/icons";
+import {
+  BorderHorizontalOutlined,
+  BorderVerticleOutlined,
+  CloseOutlined,
+  MergeCellsOutlined,
+  PushpinFilled,
+} from "@ant-design/icons";
 import { Dropdown, type MenuProps } from "antd";
 import { useEffect, useRef, useState } from "react";
-import { type OpenTodo, sameTodo, type TodoRef } from "../tabs";
+import { shortcutLabel } from "../shortcuts";
+import { type OpenTodo, sameTodo, type SplitDirection, type TodoRef } from "../tabs";
 import type { TodoSummary } from "../types";
 import { projectLabel } from "../projects";
 import { displayTitle } from "../utils";
@@ -16,10 +23,18 @@ export interface ShownTab extends OpenTodo {
 interface Props {
   /** 侧栏里显示着的工作区的标签，按顺序 */
   tabs: readonly ShownTab[];
-  /** 右侧正显示着的待办；显示概览等时是 null */
+  /** 这一组正显示着的待办；显示概览等时是 null */
   active: TodoRef | null;
   /** 正显示着的待办有没存好的修改：标签上 × 的位置显示圆点 */
   activeDirty: boolean;
+  /** 分屏时没有焦点的一边：正显示着的标签不用蓝色标出 */
+  dim: boolean;
+  /** 分屏的方向；不分屏时为 null */
+  split: SplitDirection | null;
+  /** 左右 / 上下分屏的快捷键（菜单里写出来） */
+  splitKeys: Record<SplitDirection, string | null | undefined>;
+  /** 分屏菜单、右键标签的分屏：不分屏时在新的一边打开 todo（默认是正显示着的），已经分屏时换方向或合并回一边 */
+  onSplit: (direction: SplitDirection, todo?: TodoRef) => void;
   onActivate: (t: ShownTab) => void;
   onClose: (closing: readonly ShownTab[]) => void;
   /** 预览标签固定下来 */
@@ -45,10 +60,11 @@ const SCROLL_ZONE = 32;
 const SCROLL_STEP = 8;
 
 /**
- * 右侧编辑区上方的标签：每个是一条打开着的待办，点击切过去（光标、滚动回到上次的地方），× / 鼠标中键 / Ctrl+W 关掉，
- * 右键关掉其他的、右侧的、全部，按住拖动调整顺序。预览标签的标题是斜体
+ * 右侧编辑区上方的标签（分屏时每一边一排）：每个是一条打开着的待办，点击切过去（光标、滚动回到上次的地方），× / 鼠标中键 /
+ * Ctrl+W 关掉，右键关掉其他的、右侧的、全部，按住拖动调整顺序。预览标签的标题是斜体。最右边是分屏的菜单
  */
-export default function EditorTabs({ tabs, active, activeDirty, onActivate, onClose, onKeep, onMove }: Props) {
+export default function EditorTabs(props: Props) {
+  const { tabs, active, activeDirty, dim, split, splitKeys, onSplit, onActivate, onClose, onKeep, onMove } = props;
   const barRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<TabDrag | null>(null);
   const stopDrag = useRef<(() => void) | null>(null);
@@ -163,6 +179,7 @@ export default function EditorTabs({ tabs, active, activeDirty, onActivate, onCl
     window.addEventListener("blur", stop);
   };
 
+  const keyHint = (d: SplitDirection) => (splitKeys[d] ? shortcutLabel(splitKeys[d]) : undefined);
   const menu = (t: ShownTab, i: number): MenuProps => ({
     items: [
       { key: "close", label: "关闭", extra: "Ctrl+W" },
@@ -170,6 +187,13 @@ export default function EditorTabs({ tabs, active, activeDirty, onActivate, onCl
       { key: "right", label: "关闭右侧标签", disabled: i === tabs.length - 1 },
       { key: "all", label: "关闭全部标签" },
       ...(t.preview ? [{ type: "divider" as const }, { key: "keep", label: "保持打开" }] : []),
+      ...(split
+        ? []
+        : [
+            { type: "divider" as const },
+            { key: "split-row", label: "在右边分屏打开", icon: <BorderVerticleOutlined /> },
+            { key: "split-column", label: "在下面分屏打开", icon: <BorderHorizontalOutlined /> },
+          ]),
     ],
     onClick: ({ key, domEvent }) => {
       // 菜单挂在标签上：点击菜单项的事件会沿 React 树冒泡到标签的 onClick
@@ -179,72 +203,101 @@ export default function EditorTabs({ tabs, active, activeDirty, onActivate, onCl
       else if (key === "right") onClose(tabs.slice(i + 1));
       else if (key === "all") onClose(tabs);
       else if (key === "keep") onKeep(t);
+      else if (key === "split-row" || key === "split-column") onSplit(key === "split-row" ? "row" : "column", t);
     },
   });
 
+  /** 标签栏右边的分屏菜单：不分屏时左右 / 上下分屏，分屏时换方向、合并回一边 */
+  const splitMenu: MenuProps = {
+    items: split
+      ? [
+          split === "row"
+            ? { key: "column", label: "改成上下分屏", icon: <BorderHorizontalOutlined />, extra: keyHint("column") }
+            : { key: "row", label: "改成左右分屏", icon: <BorderVerticleOutlined />, extra: keyHint("row") },
+          { key: split, label: "合并回一边", icon: <MergeCellsOutlined />, extra: keyHint(split) },
+        ]
+      : [
+          { key: "row", label: "左右分屏", icon: <BorderVerticleOutlined />, extra: keyHint("row") },
+          { key: "column", label: "上下分屏", icon: <BorderHorizontalOutlined />, extra: keyHint("column") },
+        ],
+    onClick: ({ key }) => onSplit(key as SplitDirection),
+  };
+
   return (
-    <div
-      className="editor-tabs"
-      role="tablist"
-      ref={barRef}
-      // 竖着滚滚轮时横着滚动标签
-      onWheel={(e) => {
-        if (barRef.current && !e.deltaX) barRef.current.scrollLeft += e.deltaY;
-      }}
-    >
-      {tabs.map((t, i) => {
-        const key = selKey(t);
-        const { text, fromContent } = displayTitle(t.todo);
-        const isActive = !!active && sameTodo(t, active);
-        const dirty = isActive && activeDirty;
-        const cls = [
-          "editor-tab",
-          isActive && "active",
-          t.preview && "preview",
-          t.todo.done && "done",
-          dirty && "dirty",
-          drag?.key === key && "drag-source",
-          drag?.target === key && `drop-${drag.place}`,
-        ];
-        return (
-          <Dropdown key={key} menu={menu(t, i)} trigger={["contextMenu"]}>
-            <div
-              role="tab"
-              aria-selected={isActive}
-              data-tab={key}
-              className={cls.filter(Boolean).join(" ")}
-              title={`${t.workspace} / ${projectLabel(t.project)} / ${text}${dirty ? `\n${DIRTY_HINT}` : ""}${t.preview ? `\n${PREVIEW_HINT}` : ""}`}
-              onClick={() => onActivate(t)}
-              onDoubleClick={() => t.preview && onKeep(t)}
-              // 左键按住拖动；中键按下时不让 WebView 进入自动滚动，松开时关掉
-              onMouseDown={(e) => (e.button === 1 ? e.preventDefault() : startDrag(e, t))}
-              onAuxClick={(e) => {
-                if (e.button !== 1) return;
-                e.preventDefault();
-                onClose([t]);
-              }}
-            >
-              <span className={`editor-tab-label${fromContent ? " from-content" : ""}`}>
-                {t.todo.pinned && <PushpinFilled className="pin-mark" />}
-                {text}
-              </span>
-              <span
-                className="editor-tab-close"
-                role="button"
-                aria-label="关闭"
-                title={dirty ? `${DIRTY_HINT}（Ctrl+W 关闭）` : "关闭（Ctrl+W）"}
-                onClick={(e) => {
-                  e.stopPropagation();
+    <div className={`editor-tabbar${dim ? " dim" : ""}`}>
+      <div
+        className="editor-tabs"
+        role="tablist"
+        ref={barRef}
+        // 竖着滚滚轮时横着滚动标签
+        onWheel={(e) => {
+          if (barRef.current && !e.deltaX) barRef.current.scrollLeft += e.deltaY;
+        }}
+      >
+        {tabs.map((t, i) => {
+          const key = selKey(t);
+          const { text, fromContent } = displayTitle(t.todo);
+          const isActive = !!active && sameTodo(t, active);
+          const dirty = isActive && activeDirty;
+          const cls = [
+            "editor-tab",
+            isActive && "active",
+            t.preview && "preview",
+            t.todo.done && "done",
+            dirty && "dirty",
+            drag?.key === key && "drag-source",
+            drag?.target === key && `drop-${drag.place}`,
+          ];
+          return (
+            <Dropdown key={key} menu={menu(t, i)} trigger={["contextMenu"]}>
+              <div
+                role="tab"
+                aria-selected={isActive}
+                data-tab={key}
+                className={cls.filter(Boolean).join(" ")}
+                title={`${t.workspace} / ${projectLabel(t.project)} / ${text}${dirty ? `\n${DIRTY_HINT}` : ""}${t.preview ? `\n${PREVIEW_HINT}` : ""}`}
+                onClick={() => onActivate(t)}
+                onDoubleClick={() => t.preview && onKeep(t)}
+                // 左键按住拖动；中键按下时不让 WebView 进入自动滚动，松开时关掉
+                onMouseDown={(e) => (e.button === 1 ? e.preventDefault() : startDrag(e, t))}
+                onAuxClick={(e) => {
+                  if (e.button !== 1) return;
+                  e.preventDefault();
                   onClose([t]);
                 }}
-                onDoubleClick={(e) => e.stopPropagation()}
               >
-                <CloseOutlined />
-              </span>
-            </div>
-          </Dropdown>
-        );
-      })}
+                <span className={`editor-tab-label${fromContent ? " from-content" : ""}`}>
+                  {t.todo.pinned && <PushpinFilled className="pin-mark" />}
+                  {text}
+                </span>
+                <span
+                  className="editor-tab-close"
+                  role="button"
+                  aria-label="关闭"
+                  title={dirty ? `${DIRTY_HINT}（Ctrl+W 关闭）` : "关闭（Ctrl+W）"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClose([t]);
+                  }}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  <CloseOutlined />
+                </span>
+              </div>
+            </Dropdown>
+          );
+        })}
+      </div>
+      <Dropdown menu={splitMenu} trigger={["click"]} placement="bottomRight">
+        <span
+          className="editor-tabs-split"
+          role="button"
+          aria-label="分屏"
+          title={split ? "分屏：换方向、合并回一边" : "分屏"}
+        >
+          {split === "column" ? <BorderHorizontalOutlined /> : <BorderVerticleOutlined />}
+        </span>
+      </Dropdown>
     </div>
   );
 }

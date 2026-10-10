@@ -412,6 +412,12 @@ describe("右侧分屏", () => {
     expect(state.readGroupEditPosition(b, "公司", "需求", "x")?.cursor.pos).toBe(4);
   });
 
+  it("没有焦点的一边记的位置只算它自己的，不记成这条待办的（下次打开回到有焦点那一边最后动过的地方）", () => {
+    state.writeGroupEditPosition("a", "工作", "需求", "x", position(3));
+    state.writeGroupEditPosition("b", "工作", "需求", "x", position(9), false);
+    expect(state.readEditPosition("工作", "需求", "x")?.cursor.pos).toBe(3);
+  });
+
   it("一边消失后它的编辑器才卸载、才来记位置：不再记成那一边的，再分出来的一边用最后动过的", () => {
     const x = tab("工作", "需求", "x");
     state.keepTodoTab(x);

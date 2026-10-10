@@ -13,6 +13,8 @@ const DEFAULTS: AppSettings = {
   quickCaptureTarget: { workspace: "收件箱", project: "快速记录" },
   toggleDoneShortcut: "Ctrl+Alt+D",
   openExternalShortcut: "Ctrl+Alt+O",
+  splitRightShortcut: "Alt+Shift+Equal",
+  splitDownShortcut: "Alt+Shift+Minus",
   sidebarFontSize: 14,
   editorFontSize: 15,
   editorBackground: "beige",

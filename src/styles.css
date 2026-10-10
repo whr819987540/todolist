@@ -55,6 +55,11 @@ body.resizing * {
   cursor: col-resize !important;
   user-select: none !important;
 }
+body.resizing-v,
+body.resizing-v * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
 
 a {
   color: var(--c-primary);
@@ -363,6 +368,7 @@ mark {
   background: var(--c-bg);
   display: flex;
   flex-direction: column;
+  container: main-area / inline-size;
 }
 
 .resizer {
@@ -1171,24 +1177,118 @@ body.drag-moving .tree-row:hover .row-count {
   text-align: center;
 }
 
+/* ---------------- 右侧的标签组（分屏时左右 / 上下两边） ---------------- */
+
+.editor-groups {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.editor-groups.column {
+  flex-direction: column;
+}
+/* 每一边（不分屏时就是整个右侧）：上面一排标签，下面是编辑器或概览；按这一边的宽度决定显示多少（见下面的 @container） */
+.editor-group {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  container: editor-group / inline-size;
+}
+/* 两边中间的分隔条：拖动调整比例，双击恢复一半一半 */
+.group-resizer {
+  flex: none;
+  width: 5px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 2;
+}
+.group-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: var(--c-border);
+  transition: background 0.15s;
+}
+.group-resizer:hover::after {
+  background: var(--c-primary);
+}
+.editor-groups.column > .group-resizer {
+  width: auto;
+  height: 5px;
+  margin: -2px 0;
+  cursor: row-resize;
+}
+.editor-groups.column > .group-resizer::after {
+  inset: 2px 0;
+}
+/* 分屏时每一边至少这么宽 / 高（同 WorkspaceView 的 MIN_GROUP_WIDTH / MIN_GROUP_HEIGHT），窗口变窄时比例照旧、窄的那边不再变窄 */
+.editor-groups.row.split > .editor-group {
+  min-width: 240px;
+}
+.editor-groups.column.split > .editor-group {
+  min-height: 120px;
+}
+/* 左右分屏时右侧放不下两个 240px（窗口窄、侧栏拖宽时）：两边改成上下排，宽了以后回到左右（记住的方向不变） */
+@container main-area (max-width: 480px) {
+  .editor-groups.row {
+    flex-direction: column;
+  }
+  .editor-groups.row.split > .editor-group {
+    min-width: 0;
+    min-height: 120px;
+  }
+  .editor-groups.row > .group-resizer {
+    width: auto;
+    height: 5px;
+    margin: -2px 0;
+    cursor: row-resize;
+  }
+  .editor-groups.row > .group-resizer::after {
+    inset: 2px 0;
+  }
+}
+
 /* ---------------- 编辑区上方的标签 ---------------- */
 
 /* 标签下面有一排标签时，概览、加载中这些占满剩下的高度 */
-.main > .fullscreen-center {
+.editor-group > .fullscreen-center {
   flex: 1;
   height: auto;
 }
 
-.editor-tabs {
+.editor-tabbar {
   flex: none;
   display: flex;
   height: 34px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
   background: var(--c-bg-sidebar);
   /* 底下的分隔线画在标签下面，正显示着的标签用和编辑区一样的背景盖住它，和编辑区连成一片 */
   box-shadow: inset 0 -1px 0 var(--c-border);
+}
+.editor-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+/* 标签栏右边的分屏菜单 */
+.editor-tabs-split {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  color: var(--c-text-3);
+  cursor: pointer;
+  box-shadow: inset 1px -1px 0 var(--c-border);
+}
+.editor-tabs-split:hover {
+  color: var(--c-text);
+  background: var(--c-hover);
 }
 .editor-tabs::-webkit-scrollbar {
   display: none;
@@ -1216,6 +1316,11 @@ body.drag-moving .tree-row:hover .row-count {
   color: var(--c-text);
   background: var(--c-bg);
   box-shadow: inset 0 2px 0 var(--c-primary);
+}
+/* 分屏时没有焦点的那一边：正显示着的标签用灰色标出，看得出焦点在另一边 */
+.editor-tabbar.dim .editor-tab.active {
+  color: var(--c-text-2);
+  box-shadow: inset 0 2px 0 var(--c-text-4);
 }
 :root[data-theme="light"][data-editor-bg="beige"] .editor-tab.active {
   background: var(--c-beige);
@@ -1547,6 +1652,39 @@ body.drag-moving .editor-tab-close {
   }
   .list-time {
     width: auto;
+  }
+}
+
+/* 一边比较窄时（分屏、侧栏拖宽、窗口窄）：状态栏少显示几项，编辑区上方的按钮只显示图标，更窄时状态栏再少几项 */
+@container editor-group (max-width: 540px) {
+  .overview {
+    padding: 16px 16px 24px;
+  }
+  .editor-head {
+    padding: 10px 16px;
+  }
+  .editor-body {
+    padding: 12px 16px 0;
+  }
+  .statusbar {
+    gap: 12px;
+    padding: 0 10px;
+  }
+  .statusbar-lines,
+  .statusbar-encoding {
+    display: none;
+  }
+}
+@container editor-group (max-width: 520px) {
+  .editor-actions .ant-btn > span:not(.ant-btn-icon) {
+    display: none;
+  }
+}
+@container editor-group (max-width: 460px) {
+  .statusbar-chars,
+  .statusbar-font,
+  .statusbar-path {
+    display: none;
   }
 }
 

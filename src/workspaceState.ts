@@ -442,11 +442,20 @@ export function readGroupEditPosition(group: string, workspace: string, project:
 }
 
 /**
- * 记下第 group 组在这条待办里的编辑位置（同时记成这条待办的）。这一组已经消失了（合并回一边、标签都关掉了：它的编辑器
- * 在这之后才卸载、才来记）时不再记它的，免得以后新分出的同编号的一组用上这个旧的
+ * 记下第 group 组在这条待办里的编辑位置；persist 时同时记成这条待办的（.state.json 里的，下次打开、别的组第一次打开时用）：
+ * 分屏时只有在有焦点的一边动过的才算，没有焦点的一边（只是跟着另一边的改动挪了、滚了）只记它自己的。
+ * 这一组已经消失了（合并回一边、标签都关掉了：它的编辑器在这之后才卸载、才来记）时不再记它的，免得以后新分出的同编号的
+ * 一组用上这个旧的
  */
-export function writeGroupEditPosition(group: string, workspace: string, project: string, id: string, p: EditPosition) {
-  writeEditPosition(workspace, project, id, p);
+export function writeGroupEditPosition(
+  group: string,
+  workspace: string,
+  project: string,
+  id: string,
+  p: EditPosition,
+  persist = true,
+) {
+  if (persist) writeEditPosition(workspace, project, id, p);
   if (!readEditorGroups().groups.some((g) => g.id === group)) return;
   const key = todoKey(workspace, project, id);
   const m = groupPositions.get(key) ?? new Map<string, EditPosition>();

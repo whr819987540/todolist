@@ -31,7 +31,7 @@ import {
 import type { Actions } from "./menus";
 import type { useNameDialog } from "./NameDialog";
 import { type Collapsed, type Selection, WS_KEY } from "./sidebar/tree";
-import type { EditorHandle } from "./TodoEditor";
+import type { TodoRef } from "../tabs";
 import { useUndoDelete } from "./undo";
 
 /** 去重后按名称排序：侧栏里选中的工作区按这个顺序显示 */
@@ -63,9 +63,10 @@ export interface ActionContext {
   onHome: () => void;
   /** 先存盘再返回首页 */
   goHome: () => void;
-  /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
+  /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘（分屏时两边的都存） */
   flushEditor: () => Promise<unknown>;
-  editorRef: React.RefObject<EditorHandle | null>;
+  /** 待办改名、移动、删除后，显示着其中待办的编辑器（分屏时两边都算）不再保存 */
+  detachEditors: (match: (t: TodoRef) => boolean) => void;
   openDialog: ReturnType<typeof useNameDialog>[1];
   collapsed: PerWorkspace<Collapsed>;
   listOptions: PerWorkspace<ListOptions>;
@@ -115,7 +116,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
     onHome,
     goHome,
     flushEditor,
-    editorRef,
+    detachEditors,
     openDialog,
     collapsed,
     listOptions,
@@ -175,6 +176,11 @@ export function useWorkspaceActions(ctx: ActionContext) {
       onOk: () => run(onOk),
     });
 
+  /** 编辑器显示的是这个项目（或它的子项目）里的待办 */
+  const inProjectOf = (ws: string, project: string) => (t: TodoRef) => t.workspace === ws && inProject(t.project, project);
+  const isTodo = (ws: string, project: string, id: string) => (t: TodoRef) =>
+    t.workspace === ws && t.project === project && t.todoId === id;
+
   /** 绑定到某个工作区的操作：侧栏里每个工作区各用各的，右侧用选中的那个 */
   const actionsFor = (ws: string): Actions => {
     const tree = treeOf(ws);
@@ -195,9 +201,9 @@ export function useWorkspaceActions(ctx: ActionContext) {
           title: "重命名工作区",
           initial: ws,
           onSubmit: async (v) => {
-            if (inSel) await flushEditor();
+            await flushEditor();
             const name = await api.renameWorkspace(ws, v);
-            if (inSel) editorRef.current?.detach();
+            detachEditors((t) => t.workspace === ws);
             renameWorkspaceMemory(ws, name);
             setWorkspaces((list) => sortNames(list.map((w) => (w === ws ? name : w))));
             if (inSel) setSel({ ...sel, workspace: name }, "replace");
@@ -210,9 +216,9 @@ export function useWorkspaceActions(ctx: ActionContext) {
           `删除工作区「${ws}」？`,
           `其中的 ${tree?.projects.length ?? 0} 个项目、${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
-            if (inSel) await flushEditor();
+            await flushEditor();
             const rid = await api.deleteWorkspace(ws);
-            if (inSel) editorRef.current?.detach();
+            detachEditors((t) => t.workspace === ws);
             forgetWorkspaceMemory(ws);
             // 撤销后重新选中它（只剩它一个、已经回了首页时，首页会刷新出来）
             undoDelete(`已删除工作区「${ws}」`, [rid], ({ restored }) => {
@@ -259,9 +265,9 @@ export function useWorkspaceActions(ctx: ActionContext) {
           initial: leafName(project),
           onSubmit: async (v) => {
             const isSel = showsProject(project);
-            if (isSel) await flushEditor();
+            await flushEditor();
             const name = await api.renameProject(ws, project, v);
-            if (isSel) editorRef.current?.detach();
+            detachEditors(inProjectOf(ws, project));
             renameProjectState(ws, project, name);
             moveCollapsed(ws, project, ws, name);
             await reload();
@@ -279,13 +285,11 @@ export function useWorkspaceActions(ctx: ActionContext) {
           `其中的 ${subs ? `${subs} 个子项目、` : ""}${count} 条待办将一并移到回收站，可以在回收站里恢复。`,
           async () => {
             const isSel = showsProject(project);
-            if (isSel) await flushEditor();
+            await flushEditor();
             const rid = await api.deleteProject(ws, project);
+            detachEditors(inProjectOf(ws, project));
             // 正看着它（或它下面的）：退回往上最近的还在的父项目（它的父项目），顶层项目退回工作区概览
-            if (isSel) {
-              editorRef.current?.detach();
-              setSel({ workspace: ws, project: parentOf(project) });
-            }
+            if (isSel) setSel({ workspace: ws, project: parentOf(project) });
             forgetProjectState(ws, project);
             await reload();
             undoDelete(`已删除${isSubProject(project) ? "子项目" : "项目"}「${shortProjectLabel(project)}」`, [rid]);
@@ -295,10 +299,10 @@ export function useWorkspaceActions(ctx: ActionContext) {
       moveProject: (project, targetWs, parent) =>
         run(async () => {
           const isSel = showsProject(project);
-          if (isSel) await flushEditor();
+          await flushEditor();
           // 移过去后的路径：放进项目后是「父项目/名字」，子项目移出来后是名字
           const to = await api.moveProject(ws, project, targetWs, parent);
-          if (isSel) editorRef.current?.detach();
+          detachEditors(inProjectOf(ws, project));
           moveProjectState(ws, project, targetWs, to);
           // 折叠状态跟过去；展开目标工作区、放进的项目，看得到移过去的项目
           moveCollapsed(ws, project, targetWs, to);
@@ -338,12 +342,10 @@ export function useWorkspaceActions(ctx: ActionContext) {
       deleteTodo: (project, t) =>
         confirmDelete(`删除待办「${displayTitle(t).text}」？`, "将被移到回收站，可以在回收站里恢复。", async () => {
           const isSel = isSelTodo(project, t.id);
-          if (isSel) await flushEditor();
+          await flushEditor();
           const rid = await api.deleteTodo(ws, project, t.id);
-          if (isSel) {
-            editorRef.current?.detach();
-            setSel({ workspace: ws, project });
-          }
+          detachEditors(isTodo(ws, project, t.id));
+          if (isSel) setSel({ workspace: ws, project });
           forgetTodoState(ws, project, t.id);
           updateTodos(ws, project, (todos) => todos.filter((x) => x.id !== t.id));
           // 撤销时，删的是正打开着的那条就重新打开它
@@ -357,9 +359,9 @@ export function useWorkspaceActions(ctx: ActionContext) {
       moveTodo: (project, t, target, targetWs = ws) =>
         run(async () => {
           const isSel = isSelTodo(project, t.id);
-          if (isSel) await flushEditor();
+          await flushEditor();
           const moved = await api.moveTodo(ws, project, t.id, targetWs, target);
-          if (isSel) editorRef.current?.detach();
+          detachEditors(isTodo(ws, project, t.id));
           moveTodoState(ws, project, t.id, [targetWs, target, moved.id]);
           await reload();
           reveal(targetWs, target);
@@ -382,7 +384,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
         }),
       openExternal: (project, t) =>
         run(async () => {
-          if (isSelTodo(project, t.id)) await flushEditor();
+          await flushEditor();
           await api.openTodoExternal(ws, project, t.id);
         }),
       revealTodo: (project, t) => run(() => api.revealTodo(ws, project, t.id)),
@@ -391,7 +393,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
 
   /**
    * 逐条执行 fn，返回成功的条数；有失败的弹出提示（失败的条数和第一条的原因），成功的照常算。
-   * 多选的待办不会有打开着的（多选时右侧是批量操作，编辑器已经存好、关掉了），不用先存盘
+   * 多选时有焦点的一边是批量操作，那边的编辑器已经存好、关掉了；分屏的另一边可能开着其中的，移动、删除前先存盘
    */
   const each = async (items: TodoAt[], fn: (x: TodoAt) => Promise<void>): Promise<number> => {
     let ok = 0;
@@ -428,8 +430,10 @@ export function useWorkspaceActions(ctx: ActionContext) {
     move: async (items, target, targetWs) => {
       const todo = items.filter((x) => x.workspace !== targetWs || x.project !== target);
       let selMoved: Selection | null = null;
+      await flushEditor();
       const ok = await each(todo, async ({ workspace, project, todo: t }) => {
         const moved = await api.moveTodo(workspace, project, t.id, targetWs, target);
+        detachEditors(isTodo(workspace, project, t.id));
         moveTodoState(workspace, project, t.id, [targetWs, target, moved.id]);
         if (sel.workspace === workspace && sel.project === project && sel.todoId === t.id)
           selMoved = { workspace: targetWs, project: target, todoId: moved.id };
@@ -450,8 +454,10 @@ export function useWorkspaceActions(ctx: ActionContext) {
         cancelText: "取消",
         onOk: async () => {
           const ids: string[] = [];
+          await flushEditor();
           const ok = await each(items, async ({ workspace, project, todo: t }) => {
             ids.push(await api.deleteTodo(workspace, project, t.id));
+            detachEditors(isTodo(workspace, project, t.id));
             forgetTodoState(workspace, project, t.id);
             updateTodos(workspace, project, (todos) => todos.filter((x) => x.id !== t.id));
           });

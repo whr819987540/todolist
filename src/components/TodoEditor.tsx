@@ -33,7 +33,8 @@ import { useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoSummary } from "../types";
-import { formatDuration, fullTime, MY_VERSION, relativeTime, textStats, useLocalState, useNow } from "../utils";
+import type { TodoRef } from "../tabs";
+import { formatDuration, fullTime, MY_VERSION, relativeTime, textStats, useNow } from "../utils";
 import {
   keepUndo,
   readEditorMode,
@@ -59,8 +60,10 @@ export interface EditorHandle {
   find(replace: boolean): boolean;
   /** 焦点放进正文，光标还在原处、不滚动 */
   focusBody(): void;
-  /** 立即记下现在的编辑位置（平时光标、滚动停下片刻才记） */
+  /** 立即量出、记下现在的编辑位置（平时光标、滚动停下片刻才记）：分屏时新的一边从这里开始 */
   savePosition(): void;
+  /** 显示的是哪条待办 */
+  readonly todo: TodoRef;
 }
 
 interface Props {
@@ -69,6 +72,11 @@ interface Props {
   summary: TodoSummary;
   /** 所在的标签组的编号：分屏时同一条待办两边各记各的编辑位置 */
   group: string;
+  /** 在有焦点的那一边（不分屏时总是）：Ctrl+/、Ctrl+Shift+1 只作用于这一边 */
+  focused: boolean;
+  /** 显示大纲：本机的显示偏好，所有待办、分屏的两边共用 */
+  outlineOn: boolean;
+  onOutlineChange: (on: boolean) => void;
   autoFocusTitle: boolean;
   /** 正文加载出来后焦点放进正文（光标在上次编辑的地方），点标签切过来时用 */
   autoFocusBody: boolean;
@@ -121,7 +129,7 @@ const otherMode = (m: EditorMode): EditorMode => (m === "live" ? "source" : "liv
  * 这里管的是这一边自己的：编辑器（光标、滚动、查找框）、编辑模式、编辑位置、字数和大纲
  */
 export default function TodoEditor(props: Props) {
-  const { workspace, project, summary, handleRef, group } = props;
+  const { workspace, project, summary, handleRef, group, outlineOn } = props;
   const id = summary.id;
   const memberId = useId();
   const { message } = AntApp.useApp();
@@ -143,8 +151,6 @@ export default function TodoEditor(props: Props) {
   // 大纲（正文里的标题）同样打字停下来再更新；正在看的标题只在变了时重新渲染
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [activeHeading, setActiveHeading] = useState(-1);
-  // 显示大纲是本机的显示偏好，所有待办共用
-  const [outlineOn, setOutlineOn] = useLocalState("outlineVisible", true);
   // 实时渲染 / 源码模式，每条待办分别记住
   const [mode, setMode] = useState(() => readEditorMode(workspace, project, id));
   // 上次在这条待办里的编辑位置（分屏时这一边自己的）：打开时光标（选区）和滚动回到那里
@@ -169,6 +175,8 @@ export default function TodoEditor(props: Props) {
   const v = useRef({
     /** 还没记下的编辑位置 */
     position: null as EditPosition | null,
+    /** 这个位置是在这一边有焦点时动到的：记成这条待办的（分屏时没有焦点的一边只是跟着另一边的改动挪了、滚了，只记这一边自己的） */
+    persist: true,
     positionTimer: 0,
     statsTimer: 0,
     /** 大纲和正在看的位置：正在看的标题据此算，变了才重新渲染 */
@@ -180,12 +188,13 @@ export default function TodoEditor(props: Props) {
   /** 记下编辑位置（存在数据目录的 .state.json），下次打开这条待办时回到这里；改名、移动、删除之后（detached）不再记 */
   const savePosition = () => {
     window.clearTimeout(v.positionTimer);
-    if (v.position && !session.detached) writeGroupEditPosition(group, workspace, project, id, v.position);
+    if (v.position && !session.detached) writeGroupEditPosition(group, workspace, project, id, v.position, v.persist);
     v.position = null;
   };
 
   const onPosition = (p: EditPosition) => {
     v.position = p;
+    v.persist = propsRef.current.focused;
     window.clearTimeout(v.positionTimer);
     v.positionTimer = window.setTimeout(savePosition, POSITION_DELAY);
   };
@@ -245,7 +254,15 @@ export default function TodoEditor(props: Props) {
       detach: () => session.detachTodo(),
       find: (replace) => mdRef.current?.openFind(replace) ?? false,
       focusBody: () => mdRef.current?.focus(),
-      savePosition,
+      savePosition: () => {
+        const now = mdRef.current?.position();
+        if (now) {
+          v.position = now;
+          v.persist = true;
+        }
+        savePosition();
+      },
+      todo: { workspace, project, todoId: id },
     };
     handleRef.current = handle;
     return () => {
@@ -347,7 +364,7 @@ export default function TodoEditor(props: Props) {
   /** 显示 / 隐藏大纲（本机记住，所有待办共用）；标题不够多、打开了也不显示时提示一下 */
   const toggleOutline = () => {
     const next = !outlineOn;
-    setOutlineOn(next);
+    props.onOutlineChange(next);
     if (next && v.outline.length < MIN_OUTLINE)
       message.info(`已开启大纲，正文里有 ${MIN_OUTLINE} 个以上标题时显示在右侧`);
   };
@@ -359,11 +376,12 @@ export default function TodoEditor(props: Props) {
     toggleOutlineRef.current = toggleOutline;
   });
 
-  // Ctrl+/ 切换实时渲染 / 源码模式（同 Typora），Ctrl+Shift+1 显示 / 隐藏大纲（同 Typora），焦点在标题上时也能用
+  // Ctrl+/ 切换实时渲染 / 源码模式（同 Typora），Ctrl+Shift+1 显示 / 隐藏大纲（同 Typora），焦点在标题上时也能用；
+  // 分屏时只作用于有焦点的那一边
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const combo = eventShortcut(e);
-      if (combo !== "Ctrl+Slash" && combo !== "Ctrl+Shift+1") return;
+      if ((combo !== "Ctrl+Slash" && combo !== "Ctrl+Shift+1") || !propsRef.current.focused) return;
       e.preventDefault();
       if (e.repeat) return;
       if (combo === "Ctrl+Slash") toggleModeRef.current();
@@ -503,7 +521,12 @@ export default function TodoEditor(props: Props) {
                 mode={mode}
                 readOnly={readOnly}
                 placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
-                appShortcuts={[keys?.toggleDoneShortcut, keys?.openExternalShortcut]}
+                appShortcuts={[
+                  keys?.toggleDoneShortcut,
+                  keys?.openExternalShortcut,
+                  keys?.splitRightShortcut,
+                  keys?.splitDownShortcut,
+                ]}
                 editShortcuts={editShortcuts}
                 onChange={(text) => session.setContent(text)}
                 onBlur={() => autoSave && session.saveContent()}
@@ -520,7 +543,7 @@ export default function TodoEditor(props: Props) {
             items={outline}
             active={activeHeading}
             onJump={(item) => mdRef.current?.jumpTo(item.pos)}
-            onClose={() => setOutlineOn(false)}
+            onClose={() => props.onOutlineChange(false)}
           />
         )}
       </div>
@@ -547,9 +570,11 @@ export default function TodoEditor(props: Props) {
             {{ saved: "已保存", dirty: "未保存", saving: "正在保存…", error: "保存失败" }[status]}
           </span>
         </Tooltip>
-        <span>{stats.chars} 字</span>
-        <span>{stats.lines} 行</span>
-        <span className={readOnly ? "warning-text" : undefined}>Markdown · {ENCODING_LABELS[encoding]}</span>
+        <span className="statusbar-chars">{stats.chars} 字</span>
+        <span className="statusbar-lines">{stats.lines} 行</span>
+        <span className={`statusbar-encoding${readOnly ? " warning-text" : ""}`}>
+          Markdown · {ENCODING_LABELS[encoding]}
+        </span>
         <Tooltip
           title={
             <>

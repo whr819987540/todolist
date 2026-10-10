@@ -111,7 +111,7 @@ export interface SaveResult {
 /** 排序：按创建时间（新的在前）、修改时间（新的在前）、标题，或手动排序（拖动调整） */
 export type SortKey = "created" | "updated" | "title" | "manual";
 
-export type ShortcutAction = "toggleWindow" | "quickCapture" | "toggleDone" | "openExternal";
+export type ShortcutAction = "toggleWindow" | "quickCapture" | "toggleDone" | "openExternal" | "splitRight" | "splitDown";
 
 /** 快速记录存到的项目 */
 export interface QuickTarget {
@@ -149,6 +149,10 @@ export interface AppSettings {
   toggleDoneShortcut: string | null;
   /** 应用内快捷键：用默认程序打开选中的待办 */
   openExternalShortcut: string | null;
+  /** 应用内快捷键：右侧编辑区左右分屏（已经左右分着时合并回一边） */
+  splitRightShortcut: string | null;
+  /** 应用内快捷键：右侧编辑区上下分屏（已经上下分着时合并回一边） */
+  splitDownShortcut: string | null;
   /** 左侧工作区 / 项目 / 待办列表的字号（px） */
   sidebarFontSize: number;
   /** 右侧待办正文编辑区的字号（px） */

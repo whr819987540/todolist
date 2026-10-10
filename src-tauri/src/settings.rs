@@ -37,6 +37,10 @@ pub struct Settings {
     pub toggle_done_shortcut: Option<String>,
     /// 应用内快捷键：用默认程序打开选中的待办
     pub open_external_shortcut: Option<String>,
+    /// 应用内快捷键：右侧编辑区左右分屏（已经左右分着时合并回一边）
+    pub split_right_shortcut: Option<String>,
+    /// 应用内快捷键：右侧编辑区上下分屏（已经上下分着时合并回一边）
+    pub split_down_shortcut: Option<String>,
     /// 左侧工作区 / 项目 / 待办列表的字号（px）
     pub sidebar_font_size: u32,
     /// 右侧待办正文编辑区的字号（px）
@@ -108,6 +112,8 @@ impl Default for Settings {
             quick_capture_target: QuickTarget::default(),
             toggle_done_shortcut: Some("Ctrl+Alt+D".into()),
             open_external_shortcut: Some("Ctrl+Alt+O".into()),
+            split_right_shortcut: Some("Alt+Shift+Equal".into()),
+            split_down_shortcut: Some("Alt+Shift+Minus".into()),
             sidebar_font_size: 14,
             editor_font_size: 15,
             editor_background: EditorBackground::default(),
@@ -167,10 +173,19 @@ pub enum ShortcutAction {
     QuickCapture,
     ToggleDone,
     OpenExternal,
+    SplitRight,
+    SplitDown,
 }
 
 impl ShortcutAction {
-    pub const ALL: [Self; 4] = [Self::ToggleWindow, Self::QuickCapture, Self::ToggleDone, Self::OpenExternal];
+    pub const ALL: [Self; 6] = [
+        Self::ToggleWindow,
+        Self::QuickCapture,
+        Self::ToggleDone,
+        Self::OpenExternal,
+        Self::SplitRight,
+        Self::SplitDown,
+    ];
     /// 全局快捷键（在任何程序里都能用，要向系统注册）
     pub const GLOBAL: [Self; 2] = [Self::ToggleWindow, Self::QuickCapture];
 
@@ -180,6 +195,8 @@ impl ShortcutAction {
             Self::QuickCapture => "快速记录",
             Self::ToggleDone => "标记完成 / 未完成",
             Self::OpenExternal => "用默认程序打开",
+            Self::SplitRight => "左右分屏",
+            Self::SplitDown => "上下分屏",
         }
     }
 }
@@ -211,6 +228,8 @@ impl Settings {
             ShortcutAction::QuickCapture => self.quick_capture_shortcut.as_deref(),
             ShortcutAction::ToggleDone => self.toggle_done_shortcut.as_deref(),
             ShortcutAction::OpenExternal => self.open_external_shortcut.as_deref(),
+            ShortcutAction::SplitRight => self.split_right_shortcut.as_deref(),
+            ShortcutAction::SplitDown => self.split_down_shortcut.as_deref(),
         }
     }
 
@@ -220,6 +239,8 @@ impl Settings {
             ShortcutAction::QuickCapture => &mut self.quick_capture_shortcut,
             ShortcutAction::ToggleDone => &mut self.toggle_done_shortcut,
             ShortcutAction::OpenExternal => &mut self.open_external_shortcut,
+            ShortcutAction::SplitRight => &mut self.split_right_shortcut,
+            ShortcutAction::SplitDown => &mut self.split_down_shortcut,
         };
         *slot = shortcut;
     }
@@ -241,12 +262,24 @@ impl Settings {
     }
 
     /// 手改过的设置文件或备份包里，字号、保存间隔可能超出范围，颜色可能写错；
-    /// 加快速记录之前的设置里，别的快捷键可能已经设成了快速记录的默认按键，这时快速记录让给它、设为不使用
+    /// 加快速记录（分屏）之前的设置里，别的快捷键（含改过的编辑快捷键）可能已经设成了快速记录（分屏）的默认按键，
+    /// 这时后加的让给它、设为不使用
     pub fn normalize(&mut self) {
-        if let Some(quick) = self.quick_capture_shortcut.as_deref() {
-            let others = [&self.toggle_shortcut, &self.toggle_done_shortcut, &self.open_external_shortcut];
-            if others.iter().any(|o| o.as_deref().is_some_and(|o| same_keys(o, quick))) {
-                self.quick_capture_shortcut = None;
+        use ShortcutAction::*;
+        // 后加的快捷键让给加它之前就有的（以前的设置文件里可能已经用了它的默认按键）：快速记录让给显示 / 隐藏主窗口、
+        // 标记完成、用默认程序打开；分屏的两个再让给这些、快速记录和改过的编辑快捷键，上下分屏还让给左右分屏
+        let edits: Vec<String> = self.edit_shortcuts.values().flatten().cloned().collect();
+        let yields: [(ShortcutAction, &[ShortcutAction], bool); 3] = [
+            (QuickCapture, &[ToggleWindow, ToggleDone, OpenExternal], false),
+            (SplitRight, &[ToggleWindow, ToggleDone, OpenExternal, QuickCapture], true),
+            (SplitDown, &[ToggleWindow, ToggleDone, OpenExternal, QuickCapture, SplitRight], true),
+        ];
+        for (action, older, to_edits) in yields {
+            let Some(mine) = self.shortcut(action).map(str::to_string) else { continue };
+            let taken = older.iter().filter_map(|a| self.shortcut(*a)).any(|o| same_keys(o, &mine))
+                || (to_edits && edits.iter().any(|e| same_keys(e, &mine)));
+            if taken {
+                self.set_shortcut(action, None);
             }
         }
         for area in FontArea::ALL {
@@ -378,11 +411,61 @@ mod tests {
         let s = SettingsStore::load(&tmp.0).get();
         assert_eq!(s.toggle_shortcut.as_deref(), Some("alt+ctrl+KeyN"));
         assert_eq!(s.quick_capture_shortcut, None);
+        // 标记完成、用默认程序打开已经是 Ctrl+Alt+N 的也一样（备份包恢复时同样经过 normalize）
+        for field in ["toggleDoneShortcut", "openExternalShortcut"] {
+            let json = format!(r#"{{"toggleShortcut":"Ctrl+Alt+Y","{field}":"Ctrl+Alt+N"}}"#);
+            fs::write(tmp.0.join(SETTINGS_FILE), json).unwrap();
+            let s = SettingsStore::load(&tmp.0).get();
+            assert_eq!(s.quick_capture_shortcut, None, "{field}");
+            assert_eq!(s.toggle_shortcut.as_deref(), Some("Ctrl+Alt+Y"), "{field}");
+            let kept = if field == "toggleDoneShortcut" { &s.toggle_done_shortcut } else { &s.open_external_shortcut };
+            assert_eq!(kept.as_deref(), Some("Ctrl+Alt+N"), "{field}");
+        }
         // 不重复时照常用默认的
         fs::write(tmp.0.join(SETTINGS_FILE), br#"{"toggleShortcut":"Ctrl+Alt+Y"}"#).unwrap();
         assert_eq!(SettingsStore::load(&tmp.0).get().quick_capture_shortcut.as_deref(), Some("Ctrl+Alt+N"));
         assert!(same_keys("Ctrl+Shift+1", "shift+control+Digit1"));
         assert!(!same_keys("Ctrl+Alt+N", "Ctrl+N"));
+    }
+
+    #[test]
+    fn split_shortcuts_default_and_yield_to_existing_ones() {
+        let tmp = TempRoot::new("split-keys");
+        // 加分屏之前的设置文件：照常用默认的
+        fs::write(tmp.0.join(SETTINGS_FILE), br#"{"toggleShortcut":"Ctrl+Alt+Y"}"#).unwrap();
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.split_right_shortcut.as_deref(), Some("Alt+Shift+Equal"));
+        assert_eq!(s.split_down_shortcut.as_deref(), Some("Alt+Shift+Minus"));
+        // 以前已经把别的快捷键、编辑快捷键设成了分屏的默认按键（写法不同也算）：分屏让给它，设为不使用
+        fs::write(
+            tmp.0.join(SETTINGS_FILE),
+            br#"{"toggleDoneShortcut":"shift+alt+Equal","editShortcuts":{"strike":"Alt+Shift+Minus"}}"#,
+        )
+        .unwrap();
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.toggle_done_shortcut.as_deref(), Some("shift+alt+Equal"));
+        assert_eq!(s.split_right_shortcut, None);
+        assert_eq!(s.split_down_shortcut, None);
+        // 改过、存过的照原样读出来
+        let store = SettingsStore::load(&tmp.0);
+        let mut next = store.get();
+        next.toggle_done_shortcut = Some("Ctrl+Alt+D".into());
+        next.split_right_shortcut = Some("Ctrl+Alt+Backslash".into());
+        store.save(next).unwrap();
+        assert_eq!(SettingsStore::load(&tmp.0).get().split_right_shortcut.as_deref(), Some("Ctrl+Alt+Backslash"));
+        assert_eq!(ShortcutAction::SplitDown.label(), "上下分屏");
+        // 让给快速记录；手改成两个分屏用同一组按键的，上下分屏让给左右分屏
+        fs::write(
+            tmp.0.join(SETTINGS_FILE),
+            br#"{"quickCaptureShortcut":"Alt+Shift+Equal","splitDownShortcut":"Ctrl+Alt+K","splitRightShortcut":"ctrl+alt+K"}"#,
+        )
+        .unwrap();
+        let s = SettingsStore::load(&tmp.0).get();
+        assert_eq!(s.quick_capture_shortcut.as_deref(), Some("Alt+Shift+Equal"));
+        assert_eq!(s.split_right_shortcut.as_deref(), Some("ctrl+alt+K"));
+        assert_eq!(s.split_down_shortcut, None);
+        fs::write(tmp.0.join(SETTINGS_FILE), br#"{"quickCaptureShortcut":"Alt+Shift+Equal"}"#).unwrap();
+        assert_eq!(SettingsStore::load(&tmp.0).get().split_right_shortcut, None);
     }
 
     #[test]
