@@ -1748,7 +1748,7 @@ fn clean_title(title: &str) -> String {
 // 名称校验（Windows 文件名规则）
 // ---------------------------------------------------------------------------
 
-const INVALID_CHARS: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+pub(crate) const INVALID_CHARS: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 
 /// 访问已有条目时的宽松校验：只防路径穿越和非法字符
 pub(crate) fn check_component(name: &str, what: &str) -> Result<()> {

@@ -53,6 +53,9 @@ zip = { version = "8", default-features = false, features = ["deflate-flate2-zli
 keyring = { version = "3" }
 roxmltree = "0.21"
 percent-encoding = "2"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+ammonia = "4"
+base64 = "0.22"
 ```
 
 `src/lib.rs`：用 `#[path]` 直接引用主程序的源文件，不复制：
@@ -69,6 +72,8 @@ pub mod backup;
 pub mod autostart;
 #[path = "../../../src/webdav.rs"]
 pub mod webdav;
+#[path = "../../../src/export.rs"]
+pub mod export;
 ```
 
 ```sh
