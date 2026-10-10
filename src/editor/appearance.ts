@@ -120,6 +120,11 @@ const theme = EditorView.theme({
     minWidth: "3em",
     verticalAlign: "top",
     cursor: "text",
+    // 编辑器折行（lineWrapping）的 overflow-wrap: anywhere 会继承进格子，把长串在哪都折断、表格被挤进编辑区，
+    // 列窄得没法看；格子里按正常的规则断行，放不下时表格变宽、在外层横着滚动
+    whiteSpace: "normal",
+    wordBreak: "normal",
+    overflowWrap: "normal",
   },
   ".cm-md-table th": { fontWeight: "600", backgroundColor: "var(--c-hover)" },
   ".cm-md-table tbody tr:nth-child(even)": { backgroundColor: "var(--c-fill)" },
