@@ -132,7 +132,7 @@
   - 段落：Ctrl+1～6 标题 1～6（每级单独设置；已经是这一级时变回正文）、Ctrl+0 正文、Ctrl+= / Ctrl+- 提升 / 降低标题级别（正文 ↔ 标题 6 ↔ … ↔ 标题 1）、Ctrl+Shift+Q 引用、Ctrl+Shift+[ 有序列表、Ctrl+Shift+] 无序列表、Ctrl+Shift+K 代码块；引用、列表、代码块再按一次去掉
   - 缩进：Tab / Ctrl+] 增加缩进、Shift+Tab / Ctrl+[ 减少缩进（Tab、Shift+Tab 是固定的，Ctrl+] / Ctrl+[ 可以改）。光标（选区）在列表项里时，把这一项连同它的子项缩进成上一项的子项 / 提到上一级（列表的第一项不能再缩进，最外层不能再提），有序列表跟着重新编号（原本就不是连续编号的，如全写成 1.，不动）；不在列表里时 Tab 插入两个空格（选中多行时整体缩进）、Ctrl+] 缩进所在的行、Shift+Tab / Ctrl+[ 减少所在行的缩进；列表项里的代码块中同不在列表里。焦点不会因 Tab 跳出编辑区
   - 选择与删除：Ctrl+D 选中当前词（中文按词，同双击）、Ctrl+Shift+D 删除当前词、Ctrl+L 选中当前行（再按往下多选一行）
-  - 固定按键（不能修改，设置里只列出来）：列表里的 Tab / Shift+Tab、Ctrl+Z / Ctrl+Y 撤销 / 重做、Ctrl+Enter 跳出代码块、Ctrl+单击打开链接、Ctrl+F / Ctrl+H 查找 / 替换、F3 / Shift+F3 查找下一个 / 上一个
+  - 固定按键（不能修改，设置里只列出来）：列表里的 Tab / Shift+Tab、Ctrl+Z 撤销、Ctrl+Y / Ctrl+Shift+Z 重做、Ctrl+Enter 跳出代码块、Ctrl+单击打开链接、Ctrl+F / Ctrl+H 查找 / 替换、F3 / Shift+F3 查找下一个 / 上一个
 
 ## 设置备份
 

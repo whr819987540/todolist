@@ -1,10 +1,11 @@
-import { historyField, redoDepth, undoDepth } from "@codemirror/commands";
+import { historyField } from "@codemirror/commands";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import type { EditShortcutMap } from "../editShortcuts";
 import { keepFindOpen, openFind } from "../editor/find";
 import { jumpToHeading, type OutlineItem, outlineItems } from "../editor/outline";
+import { type DocPeers, undoSnapshot } from "../editor/peers";
 import { capturePosition, type EditPosition, restorePosition } from "../editor/position";
 import { createExtensions, type EditorMode, setMode, setReadOnly } from "../editor/setup";
 import type { UndoSnapshot } from "../workspaceState";
@@ -19,17 +20,22 @@ export interface MarkdownEditorHandle {
   outline(): OutlineItem[];
   /** 跳到 pos 处的标题：光标放在那一行末尾，标题滚到顶部 */
   jumpTo(pos: number): void;
-  /** 现在的正文和撤销记录；没有可以撤销、重做的修改时是 null */
-  snapshot(): UndoSnapshot | null;
+  /** 现在的编辑位置（光标、选区和滚动） */
+  position(): EditPosition;
 }
 
 interface Props {
-  /** 只在创建时读取，之后的外部改动用 handle.reset */
-  initialDoc: string;
+  /**
+   * 这条待办打开着的编辑器（分屏时两边可以开着同一条待办，正文在它们之间同步，见 peers.ts）。
+   * 还有别的开着时，正文用它们现在的、不带撤销记录（撤销转给最早的那个）；没有时正文用 initialDoc、撤销记录用 takeHistory 的
+   */
+  peers: DocPeers<EditorView>;
+  /** 只在创建时读取（别的编辑器开着这条待办时不用），之后的外部改动用 handle.reset */
+  initialDoc: () => string;
   /** 上次的编辑位置，只在创建时读取：光标（选区）和滚动回到那里，正文被外部大改过、找不到时光标在开头 */
   initialPosition: EditPosition | null;
-  /** 上次留下的撤销记录（UndoSnapshot.history），只在创建时读取；null 表示从头记 */
-  initialHistory: unknown;
+  /** 创建时取上次留下的撤销记录（UndoSnapshot.history），doc 是创建时的正文；null 表示从头记 */
+  takeHistory: (doc: string) => unknown;
   /** 建好后焦点放进来（光标在 initialPosition 处，不滚动），只在创建时读取 */
   autoFocus: boolean;
   mode: EditorMode;
@@ -61,7 +67,9 @@ export default function MarkdownEditor(props: Props) {
 
   useEffect(() => {
     const p = () => propsRef.current;
-    const extensions = () =>
+    const { peers } = p();
+    // 只在这个编辑器带撤销记录时为 true（这条待办只在这里开着，或别处开着的都关了、撤销记录交了过来）
+    const extensions = (withHistory: boolean) =>
       createExtensions({
         mode: p().mode,
         readOnly: p().readOnly,
@@ -73,10 +81,11 @@ export default function MarkdownEditor(props: Props) {
         onOpenLink: (url) => p().onOpenLink(url),
         onPosition: (pos) => p().onPosition(pos),
         onReadingPos: (pos) => p().onReadingPos(pos),
+        sharedHistory: withHistory ? undefined : peers.sharedHistory(),
       });
     /** 选中 anchor 到 head（相同时只放光标）；给了撤销记录时接着用 */
-    const createState = (doc: string, anchor: number, head: number, history: unknown = null) => {
-      const config = { extensions: extensions() };
+    const createState = (doc: string, anchor: number, head: number, withHistory: boolean, history: unknown = null) => {
+      const config = { extensions: extensions(withHistory) };
       const selection = EditorSelection.single(anchor, head);
       if (history != null) {
         try {
@@ -88,29 +97,36 @@ export default function MarkdownEditor(props: Props) {
       }
       return EditorState.create({ doc, selection, ...config });
     };
-    const { initialDoc, initialPosition, initialHistory } = p();
-    const restored = initialPosition && restorePosition(initialDoc, initialPosition);
+    const { initialPosition } = p();
+    const first = peers.size === 0;
+    const doc = peers.doc() ?? p().initialDoc();
+    const restored = initialPosition && restorePosition(doc, initialPosition);
     const view = new EditorView({
       parent: hostRef.current!,
-      state: createState(initialDoc, restored?.anchor ?? 0, restored?.head ?? 0, initialHistory),
+      state: createState(doc, restored?.anchor ?? 0, restored?.head ?? 0, first, first ? p().takeHistory(doc) : null),
+      // 正文的改动同步给开着同一条待办的别的编辑器
+      dispatchTransactions: (trs, v) => peers.dispatch(trs, v),
+    });
+    peers.attach(view, {
+      // 有撤销记录的那个关掉了：接过它的撤销记录，光标、选区、滚动、查找框不变
+      promote(history) {
+        const scrollTop = view.scrollDOM.scrollTop;
+        const { anchor, head } = view.state.selection.main;
+        keepFindOpen(view, () => view.setState(createState(view.state.doc.toString(), anchor, head, true, history)));
+        view.scrollDOM.scrollTop = scrollTop;
+      },
     });
     if (restored?.scroll) view.dispatch({ effects: restored.scroll });
     // 在这里而不是外层聚焦：开发时 StrictMode 会把编辑器建好、销毁、再建一次，外层拿到的可能是销毁了的那个
     if (p().autoFocus) view.focus();
     viewRef.current = view;
-    const snapshot = (): UndoSnapshot | null => {
-      const { state } = view;
-      if (!undoDepth(state) && !redoDepth(state)) return null;
-      const { doc, history } = state.toJSON({ history: historyField });
-      return { doc, history };
-    };
     const handleRef = p().handleRef;
     handleRef.current = {
       reset(doc) {
         const scrollTop = view.scrollDOM.scrollTop;
         const { anchor, head, scroll } = restorePosition(doc, capturePosition(view));
         // 换掉整个状态时查找框会关掉，按原来的条件重新打开
-        keepFindOpen(view, () => view.setState(createState(doc, anchor, head)));
+        keepFindOpen(view, () => view.setState(createState(doc, anchor, head, peers.primary === view)));
         view.scrollDOM.scrollTop = scroll ? scrollTop : 0;
         if (scroll) view.dispatch({ effects: scroll });
       },
@@ -118,10 +134,12 @@ export default function MarkdownEditor(props: Props) {
       openFind: (replace) => openFind(view, replace),
       outline: () => outlineItems(view.state),
       jumpTo: (pos) => jumpToHeading(view, pos),
-      snapshot,
+      position: () => capturePosition(view),
     };
     return () => {
-      p().onDestroy(snapshot());
+      // 撤销记录交给了别处还开着的编辑器时，这里不用再留
+      const handedOver = peers.detach(view, () => view.state.toJSON({ history: historyField }).history);
+      p().onDestroy(handedOver ? null : undoSnapshot(view.state));
       view.destroy();
       viewRef.current = null;
       handleRef.current = null;

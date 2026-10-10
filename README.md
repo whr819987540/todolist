@@ -136,7 +136,7 @@ TodoList\
 | Ctrl+D | 选中当前词（中文按词） |
 | Ctrl+Shift+D | 删除当前词 |
 | Ctrl+L | 选中当前行，再按往下多选一行 |
-| Ctrl+Z / Ctrl+Y | 撤销 / 重做（固定） |
+| Ctrl+Z / Ctrl+Y、Ctrl+Shift+Z | 撤销 / 重做（固定） |
 | Ctrl+Enter | 在代码块里：跳到代码块下面新的一行（固定） |
 | Ctrl+单击链接 | 用浏览器打开正文里的链接（固定） |
 | Ctrl+F / Ctrl+H | 查找 / 替换（固定） |
@@ -285,9 +285,10 @@ gh run view <编号> --log                 # 看结果；没通过时 gh run dow
   - `outline.ts`：大纲。按语法树找出标题、去掉标记（`outlineItems`），报告正在看的位置（光标在可见区域里时是光标处，否则是可见区域顶部，`trackReadingPos`），跳到标题；大纲面板是 `components/Outline.tsx`，`TodoEditor` 在打字停下片刻后（和字数一起）更新它，正在看的标题变了才重新渲染
   - `find.ts`：正文里的查找 / 替换。搜索状态、匹配高亮和查找替换命令用 `@codemirror/search`，查找框自己实现（中文、第几个 / 共几个、输入时跳到最近的结果）；Ctrl+F、Ctrl+H 由 `WorkspaceView` 经 `TodoEditor` 转过来，焦点不在正文里时也能打开
   - `position.ts`：编辑位置（光标和选区另一端、光标在编辑区里的高度、它们前后的原文），打开待办和外部修改后重新加载时据此找回光标（选区）和滚动
+  - `peers.ts`：同一条待办开着几个编辑器（分屏的两边）时，正文的改动在它们之间同步（同 CodeMirror 的 split view 示例：编辑器的 `dispatchTransactions` 先更新自己，再把改动标上 `syncAnnotation` 转给别的；同步过来的不算这个编辑器里的修改，存盘、输入法组合由改的那一边管）；撤销记录只在最早打开的那个编辑器里，别的编辑器按 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z（CodeMirror 自带的按键在 Windows 上没有 Ctrl+Shift+Z，`historyKeys` 补上）和浏览器自己的撤销 / 重做（beforeinput 的 `historyUndo` / `historyRedo`，如 Windows 上的 Ctrl+Shift+Z、右键菜单）转给它，它关掉时撤销记录交给留下的那个（`setState` 换成带撤销记录的状态，光标、滚动、查找框不变）
 - `src/projects.ts`：项目路径（顶层项目是名字，下一级用 `/` 连起来：「父项目/子项目/…」，层数不限，和 Rust 端 `store.rs` 的约定一样）的拆分（父项目、各级父项目 `ancestorsOf`、第几级）、显示成「父项目 / 子项目 / …」、排序（同资源管理器的树，每个项目后面跟着它的各级子项目）、改名移动后跟着改（`reparent`），地方小时中间折叠成「…」的写法（`compactPath`、`shortProjectLabel`、`shortPlaceLabel`），项目连同各级子项目的待办（`deepTodos`）和待办数（`deepCounts`：一次算完全部项目，每条待办算进它所在的项目和各级父项目）
 - `src/components/PathCrumb.tsx`：编辑区上方、项目概览上方的路径（每一级都能点）。画好后在 `useLayoutEffect` 里量：放不下就多折叠一级（从工作区后面的第一级起，最后是工作区），在浏览器绘制前接着重画，到头了才让名字末尾省略；`ResizeObserver` 看到宽度变了从不折叠重新量（路径区域的宽度不随内容变，不会来回折腾）
-- `src/components/`：首页（含搜索）、工作区视图、侧栏树（`TreeRows` 的 `ProjectBranch` 也显示子项目，子项目在父项目的分支里、排在它自己的待办前面）、概览、拖动移动（`DragMove.tsx`，用鼠标事件自己实现，没用 HTML5 拖放；放下的位置按侧栏节点上的 `data-drop-ws` / `data-drop-project` 找；指针在同一项目的另一条待办行（`data-sel`，左侧列表和项目概览里都有）上时是调整顺序，`workspaceActions` 的 `reorderTodo` 按现在显示的顺序算出新顺序（`utils.ts` 的 `reorderedIds`）存下）、编辑器（`TodoEditor` 管定时保存（auto save 关闭时 1 小时兜底）、auto save、冲突（含「另存为新待办」：Rust 端 `create_todo` 可以带正文一次建好）和记下编辑位置，打字时不重新渲染，状态栏的字数、行数停顿片刻再算（`utils.ts` 的 `textStats`），`MarkdownEditor` 包装 CodeMirror）、设置
+- `src/components/`：首页（含搜索）、工作区视图、侧栏树（`TreeRows` 的 `ProjectBranch` 也显示子项目，子项目在父项目的分支里、排在它自己的待办前面）、概览、拖动移动（`DragMove.tsx`，用鼠标事件自己实现，没用 HTML5 拖放；放下的位置按侧栏节点上的 `data-drop-ws` / `data-drop-project` 找；指针在同一项目的另一条待办行（`data-sel`，左侧列表和项目概览里都有）上时是调整顺序，`workspaceActions` 的 `reorderTodo` 按现在显示的顺序算出新顺序（`utils.ts` 的 `reorderedIds`）存下）、编辑器（`todoSession.ts` 是一条打开着的待办的会话：正文、标题、定时保存（auto save 关闭时 1 小时兜底）、auto save、冲突（含「另存为新待办」：Rust 端 `create_todo` 可以带正文一次建好），分屏时两边开着同一条待办的两个 `TodoEditor` 共用一个，只有它存盘；`TodoEditor` 管这一边自己的编辑器、编辑模式、记下编辑位置、大纲，打字时不重新渲染，状态栏的字数、行数停顿片刻再算（`utils.ts` 的 `textStats`），`MarkdownEditor` 包装 CodeMirror）、设置
   - 设置：`SettingsButton.tsx` 是设置按钮和对话框，五个页签各在 `settings/` 下一个文件——`GeneralSettings`（常规：开机自启、开屏方式）、`ShortcutSettings`（快捷键：应用快捷键和编辑快捷键，录制时检查冲突）、`AppearanceSettings`（外观：主题、编辑区背景色、字号）、`SaveSettings`（保存）、`BackupSettings`（备份与恢复）；`ShortcutRow` 是录制一个快捷键的那一行
   - 工作区视图：`WorkspaceView.tsx` 管选中的工作区、右侧显示的内容、多选（批量操作，`picking.ts` 算 Ctrl / Shift+单击后选中哪些，右侧的 `BatchPanel.tsx`，批量的菜单在 `menus.tsx`、操作在 `workspaceActions.ts` 的 `batch`）、加载和刷新、快捷键、侧栏宽度；新建、重命名、删除、移动、打开等操作在 `workspaceActions.ts` 的 `useWorkspaceActions`（`actionsFor(ws)` 每次渲染新建、用这次渲染的状态；`stableActions(ws)` 是传给侧栏行的不变对象，调用时转给最新的 `actionsFor`）
   - 侧栏：`Sidebar.tsx` 管树的焦点和键盘操作（↑↓←→、Enter、Alt+方向键），其余在 `sidebar/` 下——`SidebarToolbar`（顶部：返回首页、选中工作区的 `WorkspacePicker`、主题、设置、搜索、新建、排序、隐藏已完成、全部折叠 / 展开）、`TreeRows`（工作区、项目、待办的行；项目行递归显示各级子项目，缩进、竖线、深处的级数标记见 `tree.ts` 的 `indentOf` / `indentLevelsFor`）、`RowPopups`（待办行共用的悬停提示 `TodoTip` 和右键菜单）、`tree.ts`（右侧显示的内容 `Selection`、行上 `data-sel` 的键、折叠状态、计数、各级子项目缩进多少（`indentOf`）和侧栏宽度下最多缩进到第几级（`indentLevelsFor`）、「隐藏全部完成的项目」时藏起哪些项目（有子项目时连同下面各级一起看，从上往下一级一级看），切走后再显示 1 秒的项目怎么记，「全部折叠 / 全部展开」看哪些项目）、`lingering.ts`（给切走后再显示 1 秒的项目计时）

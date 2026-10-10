@@ -765,6 +765,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         workspace={selTree.name}
         project={selProject.name}
         summary={selTodo}
+        group={editorGroups.groups[group].id}
         autoFocusTitle={focusTitleId === selTodo.id}
         autoFocusBody={focusBodyKey === selKey(sel)}
         handleRef={editorRef}

@@ -1,5 +1,6 @@
 import type { Extension, StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { syncAnnotation } from "./peers";
 
 /** 正文里的一个位置（字符偏移），连同它前后的一段原文：正文在外部被改过时按原文找回 */
 export interface TextAnchor {
@@ -99,12 +100,16 @@ export function restorePosition(
   };
 }
 
-/** 光标移动、正文改动、滚动之后报告新的编辑位置；布局在 CodeMirror 的测量阶段读，不额外触发重排 */
+/**
+ * 光标移动、正文改动、滚动之后报告新的编辑位置；布局在 CodeMirror 的测量阶段读，不额外触发重排。
+ * 分屏另一边开着同一条待办、在那边改的（同步过来的改动，peers.ts）不算这边动过
+ */
 export function trackPosition(onPosition: (p: EditPosition) => void): Extension {
   const request = { key: "editPosition", read: capturePosition, write: onPosition };
   return [
     EditorView.updateListener.of((u) => {
-      if (u.selectionSet || u.docChanged) u.view.requestMeasure(request);
+      if (u.selectionSet || u.transactions.some((tr) => tr.docChanged && !tr.annotation(syncAnnotation)))
+        u.view.requestMeasure(request);
     }),
     EditorView.domEventHandlers({
       scroll: (_e, view) => {

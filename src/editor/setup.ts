@@ -1,7 +1,7 @@
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { Compartment, EditorState, type Extension, Prec } from "@codemirror/state";
-import { EditorView, keymap, placeholder } from "@codemirror/view";
+import { EditorView, type KeyBinding, keymap, placeholder } from "@codemirror/view";
 import type { EditShortcutMap } from "../editShortcuts";
 import { eventShortcut, sameShortcut } from "../shortcuts";
 import { appearance } from "./appearance";
@@ -11,6 +11,7 @@ import { findExtensions } from "./find";
 import { ctrlClickLinks } from "./links";
 import { livePreview } from "./livePreview";
 import { trackReadingPos } from "./outline";
+import { historyKeys, syncAnnotation } from "./peers";
 import { type EditPosition, trackPosition } from "./position";
 import { sourceIndent } from "./sourceIndent";
 
@@ -32,6 +33,11 @@ export interface EditorOptions {
   onPosition: (p: EditPosition) => void;
   /** 正在看的位置变了（光标在可见区域里时是光标处，否则是可见区域顶部），大纲据此高亮当前标题 */
   onReadingPos: (pos: number) => void;
+  /**
+   * 同一条待办在分屏的另一边也开着、撤销记录在那边的编辑器里时（peers.ts 的 sharedHistory）：这个编辑器不带撤销记录，
+   * 撤销、重做的按键（keys）和浏览器自己的撤销 / 重做（extension）都转给那边。没有时自己带撤销记录
+   */
+  sharedHistory?: { keys: readonly KeyBinding[]; extension: Extension };
 }
 
 const modeConf = new Compartment();
@@ -49,6 +55,7 @@ const APP_KEYS = ["Alt+ArrowLeft", "Alt+ArrowRight", "Alt+ArrowUp", "Alt+ArrowDo
 /**
  * 报告正文改动和失去焦点。输入法组合（拼音还没上屏）期间拼音也在文档里，这时的改动不报告，
  * 上屏后再一起报告，免得把拼音当成正文存盘；组合中失去焦点也等上屏后再报告。
+ * 从分屏另一边同步过来的改动（peers.ts）不报告：由改的那一边报告（它在输入法组合中时等上屏）
  */
 function changeReporter(o: EditorOptions): Extension {
   let changed = false;
@@ -66,7 +73,7 @@ function changeReporter(o: EditorOptions): Extension {
   };
   return [
     EditorView.updateListener.of((u) => {
-      if (u.docChanged) changed = true;
+      if (u.transactions.some((tr) => !tr.changes.empty && !tr.annotation(syncAnnotation))) changed = true;
       settle(u.view);
     }),
     EditorView.domEventHandlers({
@@ -104,13 +111,13 @@ export function createExtensions(o: EditorOptions): Extension[] {
     ),
     // 编辑快捷键：Ctrl+B 加粗、Tab 缩进列表等，同 Typora
     editBindings(o.editShortcuts),
-    history(),
+    o.sharedHistory ? o.sharedHistory.extension : history(),
     // 跳出代码块；要先于 Markdown 自带的回车续写列表
     Prec.highest(codeFenceKeymap),
     keymap.of([
       // Ctrl+/ 留给切换模式
       ...defaultKeymap.filter((b) => b.key !== "Mod-/"),
-      ...historyKeymap,
+      ...(o.sharedHistory?.keys ?? historyKeys),
     ]),
     ...markdownSupport(),
     EditorView.lineWrapping,

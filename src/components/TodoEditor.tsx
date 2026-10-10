@@ -23,37 +23,29 @@ import {
   type InputRef,
   type MenuProps,
 } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { api, errMsg } from "../api";
 import { webUrl } from "../editor/links";
 import { activeIndex, type OutlineItem } from "../editor/outline";
 import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
-import { registerFlusher, useWindowFocus } from "../hooks";
+import { useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
-import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
-import {
-  formatDuration,
-  fullTime,
-  MY_VERSION,
-  myVersionTitle,
-  relativeTime,
-  textStats,
-  useLocalState,
-  useNow,
-} from "../utils";
+import type { TextEncoding, TodoSummary } from "../types";
+import { formatDuration, fullTime, MY_VERSION, relativeTime, textStats, useLocalState, useNow } from "../utils";
 import {
   keepUndo,
   readEditorMode,
-  readEditPosition,
+  readGroupEditPosition,
   takeUndo,
   writeEditorMode,
-  writeEditPosition,
+  writeGroupEditPosition,
 } from "../workspaceState";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 import Outline from "./Outline";
 import PathCrumb from "./PathCrumb";
+import { type SessionMember, todoSession } from "./todoSession";
 
 export interface EditorHandle {
   /**
@@ -61,18 +53,22 @@ export interface EditorHandle {
    * 返回是否都存好了（没有要存的也算）；正文有冲突（弹出了冲突对话框）、保存失败（已提示）时为 false
    */
   flush(): Promise<boolean>;
-  /** 待办已被删除/移走：之后不再尝试保存。撤销记录先按原来的位置留下，由 workspaceState 跟到新位置 */
+  /** 待办已被删除/移走：之后不再尝试保存（分屏的另一边开着同一条待办时也是）。撤销记录先按原来的位置留下，由 workspaceState 跟到新位置 */
   detach(): void;
   /** 在正文里查找（Ctrl+F）；replace 为 true 时同时展开替换（Ctrl+H）。正文还没加载出来时返回 false */
   find(replace: boolean): boolean;
   /** 焦点放进正文，光标还在原处、不滚动 */
   focusBody(): void;
+  /** 立即记下现在的编辑位置（平时光标、滚动停下片刻才记） */
+  savePosition(): void;
 }
 
 interface Props {
   workspace: string;
   project: string;
   summary: TodoSummary;
+  /** 所在的标签组的编号：分屏时同一条待办两边各记各的编辑位置 */
+  group: string;
   autoFocusTitle: boolean;
   /** 正文加载出来后焦点放进正文（光标在上次编辑的地方），点标签切过来时用 */
   autoFocusBody: boolean;
@@ -92,8 +88,6 @@ interface Props {
   onDirty: (dirty: boolean) => void;
 }
 
-type Status = "saved" | "dirty" | "saving" | "error";
-
 /** Ctrl+滚轮调字号：滚轮转一格（约 100）调 1px，触控板双指缩放的小增量攒够一半再调 */
 const WHEEL_STEP = 50;
 
@@ -109,12 +103,6 @@ export const MIN_OUTLINE = 2;
 const sameOutline = (a: readonly OutlineItem[], b: readonly OutlineItem[]) =>
   a.length === b.length && a.every((x, i) => x.pos === b[i].pos && x.level === b[i].level && x.text === b[i].text);
 
-/**
- * auto save 关闭时的兜底（秒）：有未保存的修改，从第一处开始满 1 小时也自动保存一次，
- * 免得程序在托盘里挂好几天、改了的内容一直只在内存里。auto save 开着时按设置的间隔（不超过 1 小时）
- */
-export const FALLBACK_SAVE_SECS = 3600;
-
 const ENCODING_LABELS: Record<TextEncoding, string> = {
   "UTF-8": "UTF-8",
   "UTF-16": "UTF-16（修改后转存为 UTF-8）",
@@ -127,12 +115,15 @@ const otherMode = (m: EditorMode): EditorMode => (m === "live" ? "source" : "liv
 
 /**
  * 右侧的待办详情：标题 + Markdown 正文（实时渲染或源码模式）。
+ * 正文、标题、保存和外部修改冲突在这条待办的会话里（todoSession.ts），分屏时两边开着同一条待办共用一个：
  * Ctrl+S、切换待办、从托盘退出时总是保存；有未保存的修改后还定时保存：auto save 开着时按设置的间隔，
- * 关着时满 1 小时兜底。auto save 开着时编辑器或窗口失去焦点也立即保存
+ * 关着时满 1 小时兜底。auto save 开着时编辑器或窗口失去焦点也立即保存。
+ * 这里管的是这一边自己的：编辑器（光标、滚动、查找框）、编辑模式、编辑位置、字数和大纲
  */
 export default function TodoEditor(props: Props) {
-  const { workspace, project, summary, handleRef } = props;
+  const { workspace, project, summary, handleRef, group } = props;
   const id = summary.id;
+  const memberId = useId();
   const { message } = AntApp.useApp();
   const { info: settingsInfo, setFontSize } = useSettings();
   const keys = settingsInfo?.settings;
@@ -141,28 +132,23 @@ export default function TodoEditor(props: Props) {
   const { autoSave, saveDelaySecs } = saveOptions;
   const now = useNow();
 
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
-  // 正文只在创建编辑器时读一次；之后的正文在 s.content 里，打字时不重新渲染这个组件
-  const [initialDoc, setInitialDoc] = useState("");
+  // 这条待办的会话：分屏的另一边开着同一条待办时用它的（正文不再从磁盘读，用那边现在的）
+  const [session] = useState(() => todoSession(workspace, project, id, summary.title));
+  const { loading, loadError, status, conflict, encoding, path, title, lead } = useSyncExternalStore(
+    session.subscribe,
+    session.getState,
+  );
   // 状态栏的字数、行数：打字停下来一会儿再算，不是每次按键都对全文统计
-  const [stats, setStats] = useState({ chars: 0, lines: 0 });
+  const [stats, setStats] = useState(() => (loading ? { chars: 0, lines: 0 } : textStats(session.currentDoc())));
   // 大纲（正文里的标题）同样打字停下来再更新；正在看的标题只在变了时重新渲染
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [activeHeading, setActiveHeading] = useState(-1);
   // 显示大纲是本机的显示偏好，所有待办共用
   const [outlineOn, setOutlineOn] = useLocalState("outlineVisible", true);
-  const [title, setTitle] = useState(summary.title);
-  const [path, setPath] = useState("");
-  const [encoding, setEncoding] = useState<TextEncoding>("UTF-8");
-  const [status, setStatus] = useState<Status>("saved");
-  const [conflict, setConflict] = useState(false);
   // 实时渲染 / 源码模式，每条待办分别记住
   const [mode, setMode] = useState(() => readEditorMode(workspace, project, id));
-  // 上次在这条待办里的编辑位置：打开时光标（选区）和滚动回到那里
-  const [initialPosition] = useState(() => readEditPosition(workspace, project, id));
-  // 这次运行期间上次打开时留下的撤销记录，正文在外部被改过时不用
-  const [initialHistory, setInitialHistory] = useState<unknown>(null);
+  // 上次在这条待办里的编辑位置（分屏时这一边自己的）：打开时光标（选区）和滚动回到那里
+  const [initialPosition] = useState(() => readGroupEditPosition(group, workspace, project, id));
   // 认不出编码的文件只读，免得保存时把原文件覆盖成乱码
   const readOnly = encoding === "unknown";
 
@@ -178,23 +164,9 @@ export default function TodoEditor(props: Props) {
     saveOptionsRef.current = saveOptions;
   });
 
-  // 保存相关的可变状态放在 ref 里，异步回调和卸载时都能拿到最新值。
+  // 这一边自己的可变状态放在 ref 里，异步回调和卸载时都能拿到最新值。
   // 渲染时只取一次这个对象本身（每次都是同一个），里面的值只在回调和 effect 里读写，渲染结果不依赖它们
-  // eslint-disable-next-line react-hooks/refs
-  const s = useRef({
-    content: "",
-    savedContent: "",
-    title: summary.title,
-    savedTitle: summary.title,
-    mtime: null as number | null,
-    loaded: false,
-    detached: false,
-    conflict: false,
-    /** 定时保存：从第一处未保存的修改开始倒计时 */
-    timer: 0,
-    /** 这次倒计时从什么时候算起（第一处未保存的修改的时间），没在倒计时时是 0 */
-    dirtyAt: 0,
-    chain: Promise.resolve(),
+  const v = useRef({
     /** 还没记下的编辑位置 */
     position: null as EditPosition | null,
     positionTimer: 0,
@@ -203,216 +175,97 @@ export default function TodoEditor(props: Props) {
     outline: [] as OutlineItem[],
     readingPos: 0,
     activeHeading: -1,
-    /** 打开后修改过标题或正文 */
-    edited: false,
   }).current;
-
-  const isDirty = () => s.content !== s.savedContent || s.title !== s.savedTitle;
-
-  const noteEdit = () => {
-    if (s.edited) return;
-    s.edited = true;
-    propsRef.current.onEdit();
-  };
-
-  const stopTimer = () => {
-    window.clearTimeout(s.timer);
-    s.timer = 0;
-    s.dirtyAt = 0;
-  };
-
-  /** 现在的定时保存间隔（ms）：auto save 开着时按设置，关着时 1 小时兜底 */
-  const saveDelayMs = () => {
-    const { autoSave, saveDelaySecs } = saveOptionsRef.current;
-    return (autoSave ? saveDelaySecs : FALLBACK_SAVE_SECS) * 1000;
-  };
-
-  /**
-   * 有未保存的修改时开始倒计时，从第一处未保存的修改算起；倒计时中继续修改不往后推，最多隔这么久就存一次。
-   * 已经在倒计时（或已经超时、正等着保存）时不重复开始
-   */
-  const schedule = () => {
-    if (s.timer || s.detached || !isDirty()) return;
-    s.dirtyAt ||= Date.now();
-    s.timer = window.setTimeout(
-      () => {
-        s.timer = 0;
-        flush();
-      },
-      // schedule 只在回调、effect 里调用，不在渲染时调用；purity 规则在这个组件里推断错了
-      // （删掉不相干的 useRef(zoomBy) 它就不报了），不是真的在渲染时取时间
-      // eslint-disable-next-line react-hooks/purity
-      Math.max(0, s.dirtyAt + saveDelayMs() - Date.now()),
-    );
-  };
-
-  /** 更新保存状态；有未保存的修改时按需开始定时保存 */
-  const refreshStatus = () => {
-    const dirty = isDirty();
-    setStatus(dirty ? "dirty" : "saved");
-    if (dirty) schedule();
-    else stopTimer();
-  };
-
-  const enqueue = (job: () => Promise<void>) => {
-    s.chain = s.chain.then(job, job);
-    return s.chain;
-  };
-
-  /** 存正文；返回是否存好了（没有要存的也算），有冲突、保存失败时为 false */
-  const saveContent = (force = false): Promise<boolean> => {
-    let ok = true;
-    const job = enqueue(async () => {
-      if (!s.loaded || s.detached) return;
-      if (s.conflict && !force) {
-        ok = false;
-        return;
-      }
-      const text = s.content;
-      if (text === s.savedContent && !force) return;
-      setStatus("saving");
-      try {
-        const r = await api.saveTodoContent(workspace, project, id, text, s.mtime, force);
-        if (!r.saved) {
-          ok = false;
-          s.conflict = true;
-          setConflict(true);
-          setStatus("dirty");
-          return;
-        }
-        s.savedContent = text;
-        s.mtime = r.mtime;
-        s.conflict = false;
-        setEncoding("UTF-8");
-        propsRef.current.onSummary(r.summary);
-        refreshStatus();
-      } catch (e) {
-        ok = false;
-        setStatus("error");
-        messageRef.current.error(`保存失败：${errMsg(e)}`);
-      }
-    });
-    return job.then(() => ok);
-  };
-
-  /** 存标题；返回是否存好了（没有要存的也算） */
-  const saveTitle = (): Promise<boolean> => {
-    let ok = true;
-    const job = enqueue(async () => {
-      if (s.detached) return;
-      const t = s.title;
-      if (t === s.savedTitle) return;
-      try {
-        const r = await api.setTodoTitle(workspace, project, id, t);
-        s.savedTitle = t;
-        propsRef.current.onSummary(r);
-        refreshStatus();
-      } catch (e) {
-        ok = false;
-        setStatus("error");
-        messageRef.current.error(`保存标题失败：${errMsg(e)}`);
-      }
-    });
-    return job.then(() => ok);
-  };
 
   /** 记下编辑位置（存在数据目录的 .state.json），下次打开这条待办时回到这里；改名、移动、删除之后（detached）不再记 */
   const savePosition = () => {
-    window.clearTimeout(s.positionTimer);
-    if (s.position && !s.detached) writeEditPosition(workspace, project, id, s.position);
-    s.position = null;
+    window.clearTimeout(v.positionTimer);
+    if (v.position && !session.detached) writeGroupEditPosition(group, workspace, project, id, v.position);
+    v.position = null;
   };
 
   const onPosition = (p: EditPosition) => {
-    s.position = p;
-    window.clearTimeout(s.positionTimer);
-    s.positionTimer = window.setTimeout(savePosition, POSITION_DELAY);
+    v.position = p;
+    window.clearTimeout(v.positionTimer);
+    v.positionTimer = window.setTimeout(savePosition, POSITION_DELAY);
   };
 
   /** 正在看的标题：光标在可见区域里时是光标所在的那一节，否则是可见区域顶部的那一节 */
   const updateActiveHeading = () => {
-    const i = activeIndex(s.outline, s.readingPos);
-    if (i === s.activeHeading) return;
-    s.activeHeading = i;
+    const i = activeIndex(v.outline, v.readingPos);
+    if (i === v.activeHeading) return;
+    v.activeHeading = i;
     setActiveHeading(i);
   };
 
   /** 按现在的正文重新列出大纲（没变时不重新渲染） */
   const refreshOutline = () => {
     const items = mdRef.current?.outline() ?? [];
-    if (!sameOutline(items, s.outline)) {
-      s.outline = items;
+    if (!sameOutline(items, v.outline)) {
+      v.outline = items;
       setOutline(items);
     }
     updateActiveHeading();
   };
 
   const onReadingPos = (pos: number) => {
-    s.readingPos = pos;
+    v.readingPos = pos;
     updateActiveHeading();
   };
 
-  /** 立即存标题和正文，返回是否都存好了 */
-  const flush = async () => {
-    stopTimer();
-    savePosition();
-    const title = saveTitle();
-    const content = saveContent();
-    return (await title) && (await content);
-  };
-
-  // 加载正文；卸载（切换到别的待办、返回首页等）时把没保存的写盘，不受 auto save 开关影响，同时记下编辑位置
+  // 打开这条待办（加入它的会话，第一个打开的从磁盘读正文）；卸载（切换到别的待办、返回首页等）时记下编辑位置、
+  // 把没保存的写盘（不受 auto save 开关影响）
   useEffect(() => {
-    let cancelled = false;
-    api
-      .readTodo(workspace, project, id)
-      .then((d) => {
-        if (cancelled) return;
-        s.content = s.savedContent = d.content;
-        s.mtime = d.mtime;
-        s.loaded = true;
-        setInitialHistory(takeUndo(workspace, project, id, d.content));
-        setInitialDoc(d.content);
-        setStats(textStats(d.content));
-        setPath(d.path);
-        setEncoding(d.encoding);
-        setLoading(false);
-        propsRef.current.onSummary(d.summary);
-        if (propsRef.current.autoFocusTitle) titleRef.current?.focus();
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setLoadError(errMsg(e));
-        setLoading(false);
-      });
-    const unregister = registerFlusher(flush, true);
-    handleRef.current = {
-      flush,
-      detach: () => {
-        const snap = mdRef.current?.snapshot();
-        if (snap) keepUndo(workspace, project, id, snap);
-        s.detached = true;
-        stopTimer();
+    const member: SessionMember = {
+      id: memberId,
+      onSummary: (s) => propsRef.current.onSummary(s),
+      onEdit: () => propsRef.current.onEdit(),
+      saveOptions: () => saveOptionsRef.current,
+      error: (text) => messageRef.current.error(text),
+      savePosition,
+      loaded: (doc) => setStats(textStats(doc)),
+      titleFocused: () => !!titleRef.current?.input && document.activeElement === titleRef.current.input,
+      contentChanged: () => {
+        window.clearTimeout(v.statsTimer);
+        v.statsTimer = window.setTimeout(() => {
+          setStats(textStats(session.currentDoc()));
+          refreshOutline();
+        }, STATS_DELAY);
       },
+      reset: (doc) => {
+        window.clearTimeout(v.statsTimer);
+        setStats(textStats(doc));
+        mdRef.current?.reset(doc);
+        refreshOutline();
+      },
+    };
+    session.attach(member);
+    const handle: EditorHandle = {
+      flush: session.flush,
+      detach: () => session.detachTodo(),
       find: (replace) => mdRef.current?.openFind(replace) ?? false,
       focusBody: () => mdRef.current?.focus(),
+      savePosition,
     };
+    handleRef.current = handle;
     return () => {
-      cancelled = true;
-      window.clearTimeout(s.statsTimer);
-      unregister();
-      flush();
+      window.clearTimeout(v.statsTimer);
+      savePosition();
+      session.detach(member);
+      if (handleRef.current === handle) handleRef.current = null;
       propsRef.current.onDirty(false);
     };
-    // 只在挂载时执行一次、卸载时 flush 一次：组件以 工作区/项目/id 为 key 挂载，workspace、project、id、handleRef
-    // 不会变；flush、stopTimer 每次渲染都是新函数，但只经由 s 和各个 ref 读写，挂载时那一份一直可用。
-    // 补上这些依赖会让每次渲染都重新读正文、注销再注册 flusher，并在清理时多存一次盘
+    // 只在挂载时执行一次、卸载时离开一次：组件以 工作区/项目/id 为 key 挂载，workspace、project、id、handleRef、
+    // session 不会变；savePosition 等每次渲染都是新函数，但只经由 v、session 和各个 ref 读写，挂载时那一份一直可用。
+    // 补上这些依赖会让每次渲染都离开再加入会话，并在离开时多存一次盘
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 正文加载出来、编辑器建好之后列出大纲（子组件的 effect 先执行，这时编辑器已经建好）
+  // 正文加载出来、编辑器建好之后列出大纲（子组件的 effect 先执行，这时编辑器已经建好），新建的待办聚焦标题
   useEffect(() => {
-    if (!loading) refreshOutline();
+    if (loading) return;
+    refreshOutline();
+    if (propsRef.current.autoFocusTitle) titleRef.current?.focus();
     // 只在加载完成时执行一次；之后打字、外部修改重新加载时另外更新
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
@@ -424,51 +277,19 @@ export default function TodoEditor(props: Props) {
 
   // 标题在别处被改（例如刷新）且这里没有编辑中时，同步过来
   useEffect(() => {
-    if (s.title === s.savedTitle && document.activeElement !== titleRef.current?.input) {
-      s.title = s.savedTitle = summary.title;
-      setTitle(summary.title);
-    }
-  }, [summary.title, s]);
+    session.syncTitle(summary.title);
+  }, [summary.title, session]);
 
   // 开关 auto save、改了定时保存的间隔：按新的间隔重新安排，仍从第一处未保存的修改算起（已经超时的立即保存）
   useEffect(() => {
-    window.clearTimeout(s.timer);
-    s.timer = 0;
-    schedule();
-    // 只在这两个设置变了时重新安排：schedule 每次渲染都是新函数（间隔从 saveOptionsRef 读，前面的 effect 已经更新过），
-    // 加进依赖会让每次渲染（打字时状态栏刷新等）都清掉重来；s 是不变的对象
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSave, saveDelaySecs]);
+    session.reschedule();
+  }, [autoSave, saveDelaySecs, session]);
 
-  /** 换成磁盘上的正文（外部改过后重新加载） */
-  const applyDiskContent = (d: TodoDetail) => {
-    s.content = s.savedContent = d.content;
-    s.mtime = d.mtime;
-    window.clearTimeout(s.statsTimer);
-    setStats(textStats(d.content));
-    setEncoding(d.encoding);
-    refreshStatus();
-    mdRef.current?.reset(d.content);
-    refreshOutline();
-  };
-
-  // auto save：窗口失焦立即保存（编辑位置总是立即记下）；重新获得焦点时检查文件是否被外部程序改过
-  useWindowFocus(async (focused) => {
-    if (!focused) {
-      savePosition();
-      if (autoSave) flush();
-      return;
-    }
-    if (!s.loaded || s.detached || s.conflict || s.content !== s.savedContent) return;
-    try {
-      const d = await api.readTodo(workspace, project, id);
-      // 读取期间用户开始打字了：保留用户的输入，由保存时的冲突检测兜底
-      if (d.mtime === s.mtime || s.content !== s.savedContent) return;
-      applyDiskContent(d);
-      propsRef.current.onSummary(d.summary);
-    } catch {
-      /* 文件被删等情况由外层刷新处理 */
-    }
+  // 窗口失焦时立即记下编辑位置（auto save 开着时还存盘）；重新获得焦点时检查文件是否被外部程序改过。
+  // 两边开着同一条待办时只由最早打开的那一边去查、去存
+  useWindowFocus((focused) => {
+    if (!focused) savePosition();
+    if (session.getState().lead === memberId) session.windowFocus(focused);
   });
 
   const zoomBy = (step: number) => {
@@ -505,88 +326,29 @@ export default function TodoEditor(props: Props) {
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const onContentChange = (text: string) => {
-    s.content = text;
-    noteEdit();
-    refreshStatus();
-    window.clearTimeout(s.statsTimer);
-    s.statsTimer = window.setTimeout(() => {
-      setStats(textStats(s.content));
-      refreshOutline();
-    }, STATS_DELAY);
-  };
-
-  /** composing：输入法组合中（拼音还没上屏），这时只更新输入框，不算修改 */
-  const onTitleChange = (text: string, composing = false) => {
-    setTitle(text);
-    if (composing) return;
-    s.title = text;
-    noteEdit();
-    refreshStatus();
-  };
-
-  const resolveConflict = async (keepMine: boolean) => {
-    setConflict(false);
-    if (keepMine) {
-      await saveContent(true);
-      return;
-    }
-    try {
-      const d = await api.readTodo(workspace, project, id);
-      s.conflict = false;
-      applyDiskContent(d);
-      propsRef.current.onSummary(d.summary);
-    } catch (e) {
-      message.error(errMsg(e));
-    }
-  };
-
   /**
-   * 冲突时「另存为新待办」，两份都保留：这里的正文连同标题（加上「（我的版本）」）存成同一项目里的一条新待办，
-   * 这一条重新加载外部的版本，然后打开新的那条。新的那条的正文和这里一模一样，编辑位置、撤销记录、编辑模式
-   * 跟过去，打开后接着原来的地方编辑
+   * 冲突时「另存为新待办」（见 todoSession.ts 的 saveAsNew），编辑位置用这一边的；然后打开新的那条，
+   * 接着原来的地方编辑
    */
   const saveAsNew = async () => {
-    setConflict(false);
-    const mine = s.content;
-    const newTitle = myVersionTitle(s.title, mine);
     savePosition();
-    const position = readEditPosition(workspace, project, id);
-    const snap = mdRef.current?.snapshot();
-    let created: TodoSummary;
-    try {
-      created = await api.createTodo(workspace, project, newTitle, mine);
-    } catch (e) {
-      message.error(`另存为新待办失败：${errMsg(e)}`);
-      setConflict(true);
-      return;
-    }
-    if (position) writeEditPosition(workspace, project, created.id, position);
-    if (snap) keepUndo(workspace, project, created.id, snap);
-    writeEditorMode(workspace, project, created.id, mode);
-    try {
-      const d = await api.readTodo(workspace, project, id);
-      s.conflict = false;
-      applyDiskContent(d);
-      propsRef.current.onSummary(d.summary);
-    } catch {
-      /* 这一条在外部被删了等：由外层刷新处理。这里的内容已经在新的那条里了，冲突标记留着，不会再往这一条存 */
-    }
-    message.success(`已另存为新待办「${newTitle}」，这一条换成了外部修改后的内容`);
-    propsRef.current.onSavedAsNew(created);
+    const r = await session.saveAsNew(readGroupEditPosition(group, workspace, project, id), mode);
+    if (!r) return;
+    message.success(`已另存为新待办「${r.title}」，这一条换成了外部修改后的内容`);
+    propsRef.current.onSavedAsNew(r.created);
   };
 
   /** 切换这条待办的编辑模式并记下；改名、移动、删除之后（detached）不再记 */
   const toggleMode = () => {
     const next = otherMode(mode);
     setMode(next);
-    if (!s.detached) writeEditorMode(workspace, project, id, next);
+    if (!session.detached) writeEditorMode(workspace, project, id, next);
   };
   /** 显示 / 隐藏大纲（本机记住，所有待办共用）；标题不够多、打开了也不显示时提示一下 */
   const toggleOutline = () => {
     const next = !outlineOn;
     setOutlineOn(next);
-    if (next && s.outline.length < MIN_OUTLINE)
+    if (next && v.outline.length < MIN_OUTLINE)
       message.info(`已开启大纲，正文里有 ${MIN_OUTLINE} 个以上标题时显示在右侧`);
   };
 
@@ -678,13 +440,13 @@ export default function TodoEditor(props: Props) {
             placeholder="无标题（左侧将显示正文开头）"
             value={title}
             maxLength={200}
-            onChange={(e) => onTitleChange(e.target.value, (e.nativeEvent as InputEvent).isComposing)}
+            onChange={(e) => session.setTitle(e.target.value, (e.nativeEvent as InputEvent).isComposing)}
             onCompositionEnd={(e) => {
-              onTitleChange(e.currentTarget.value);
+              session.setTitle(e.currentTarget.value);
               // 组合中失去焦点的，上屏后补上失去焦点时的保存
-              if (autoSave && document.activeElement !== e.currentTarget) saveTitle();
+              if (autoSave && document.activeElement !== e.currentTarget) session.saveTitle();
             }}
-            onBlur={() => autoSave && saveTitle()}
+            onBlur={() => autoSave && session.saveTitle()}
             onPressEnter={() => mdRef.current?.focus()}
           />
           <div className="editor-meta">
@@ -733,21 +495,22 @@ export default function TodoEditor(props: Props) {
               )}
               <MarkdownEditor
                 handleRef={mdRef}
-                initialDoc={initialDoc}
+                peers={session.peers}
+                initialDoc={session.currentDoc}
                 initialPosition={initialPosition}
-                initialHistory={initialHistory}
+                takeHistory={(doc) => takeUndo(workspace, project, id, doc)}
                 autoFocus={props.autoFocusBody && !props.autoFocusTitle}
                 mode={mode}
                 readOnly={readOnly}
                 placeholder={"在这里记录详细内容…\n\n支持 Markdown 语法，Ctrl + / 切换实时渲染和源码模式"}
                 appShortcuts={[keys?.toggleDoneShortcut, keys?.openExternalShortcut]}
                 editShortcuts={editShortcuts}
-                onChange={onContentChange}
-                onBlur={() => autoSave && saveContent()}
+                onChange={(text) => session.setContent(text)}
+                onBlur={() => autoSave && session.saveContent()}
                 onOpenLink={openLink}
                 onPosition={onPosition}
                 onReadingPos={onReadingPos}
-                onDestroy={(snap) => snap && !s.detached && keepUndo(workspace, project, id, snap)}
+                onDestroy={(snap) => snap && !session.detached && keepUndo(workspace, project, id, snap)}
               />
             </>
           )}
@@ -833,18 +596,19 @@ export default function TodoEditor(props: Props) {
         </span>
       </footer>
 
+      {/* 两边开着同一条待办时只弹一个，由最早打开的那一边弹 */}
       <Modal
-        open={conflict}
+        open={conflict && lead === memberId}
         title="文件已在外部被修改"
         width={560}
         closable={false}
         mask={{ closable: false }}
         keyboard={false}
         footer={[
-          <Button key="theirs" onClick={() => resolveConflict(false)}>
+          <Button key="theirs" onClick={() => session.resolveConflict(false)}>
             放弃我的修改，重新加载
           </Button>,
-          <Button key="mine" danger onClick={() => resolveConflict(true)}>
+          <Button key="mine" danger onClick={() => session.resolveConflict(true)}>
             用我的内容覆盖
           </Button>,
           <Button key="copy" type="primary" onClick={saveAsNew}>
