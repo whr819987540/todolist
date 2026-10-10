@@ -1,7 +1,15 @@
 import { App as AntApp, Checkbox } from "antd";
 import { useCallback, useRef } from "react";
 import { api, errMsg } from "../api";
-import { exportCounts, exportedText, exportGroups, exportTitle, readExportDir, rememberExportDir } from "../exporting";
+import {
+  exportCounts,
+  exportedText,
+  exportGroups,
+  exportTitle,
+  printDialogText,
+  readExportDir,
+  rememberExportDir,
+} from "../exporting";
 import type { ExportFormat, ExportGroup, ExportScope, SortKey } from "../types";
 
 /** 一次导出：导出什么、按哪种排序（这个工作区侧栏现在的），以及先存盘 */
@@ -90,6 +98,11 @@ export function useExport() {
           includeDone,
           groups,
         });
+        if (r.printDialog !== null) {
+          // 没导出成文件：不记目录，没有「打开」「在文件夹中显示」
+          message.open({ key, type: "warning", duration: DONE_SECONDS, content: printDialogText(r.printDialog) });
+          return;
+        }
         rememberExportDir(r.path);
         const act = (fn: (path: string) => Promise<void>) => () => {
           message.destroy(key);

@@ -1391,23 +1391,38 @@ async fn pick_export_target(
     Ok(Some(export::with_extension(&path, format).to_string_lossy().into_owned()))
 }
 
-/// 按前端排好的顺序把待办导出到 request.path（在后台线程里做），返回存到的路径和导出了几条
+/// 按前端排好的顺序把待办导出到 request.path（在后台线程里做），返回存到的路径和导出了几条；
+/// 导出 PDF 退回了系统的打印对话框时 print_dialog 是没能直接存成 PDF 的原因
 #[tauri::command]
 async fn export_todos(app: AppHandle, request: export::Request) -> Cmd<export::Exported> {
     in_background(&app, move |app| {
         let doc = export::collect(&app.state::<Store>(), &request)?;
         let html = export::render(&doc, Local::now());
         let path = export::with_extension(Path::new(&request.path), request.format);
-        match request.format {
+        let print_dialog = match request.format {
             export::Format::Html => {
-                store::atomic_write(&path, html.as_bytes()).map_err(|e| format!("保存导出的文件失败：{e}"))?
+                store::atomic_write(&path, html.as_bytes()).map_err(|e| format!("保存导出的文件失败：{e}"))?;
+                None
             }
-            export::Format::Pdf => print_pdf(app, &html, &path, &doc.title())?,
+            export::Format::Pdf => match print_pdf(app, &html, &path, &doc.title())? {
+                Printed::Pdf => None,
+                Printed::Dialog(reason) => Some(reason),
+            },
+        };
+        if print_dialog.is_none() {
+            app.state::<ExportedFiles>().add(path.clone());
         }
-        app.state::<ExportedFiles>().add(path.clone());
-        Ok(export::Exported { path: path.to_string_lossy().into_owned(), count: doc.count() })
+        Ok(export::Exported { path: path.to_string_lossy().into_owned(), count: doc.count(), print_dialog })
     })
     .await
+}
+
+/// 导出 PDF 是怎么做成的
+enum Printed {
+    /// 直接存成了 PDF
+    Pdf,
+    /// WebView2 没能直接存成 PDF（附上原因），退回了系统的打印对话框，用户在里面自己存
+    Dialog(String),
 }
 
 /// 打印 PDF 用的看不见的窗口的 label 前缀，后面是序号：上一个窗口关掉的消息还没处理完时，新的也建得起来。
@@ -1426,24 +1441,29 @@ const PDF_MARGIN_INCHES: f64 = 15.0 / 25.4;
 
 /// 把导出的 HTML 打印成 PDF 存到 pdf：先写成临时文件，在看不见的窗口里加载，加载完用 WebView2 的 PrintToPdf 打印
 /// （A4 纵向、页边距 15 毫米、印出背景色，页眉是日期和标题，页脚是页码），做完关掉窗口、删掉临时文件。
+/// PrintToPdf 做不成（WebView2 太旧、打印失败）时退回系统的打印对话框（见 show_print_dialog），临时文件等那个窗口关掉再删。
 /// 要在后台线程里调用：WebView2 在主线程的事件处理里同步建窗口可能卡死（见 quick_window），这里还要等它加载、打印完
-fn print_pdf(app: &AppHandle, html: &str, pdf: &Path, title: &str) -> Cmd<()> {
+fn print_pdf(app: &AppHandle, html: &str, pdf: &Path, title: &str) -> Cmd<Printed> {
+    // 目标位置不能写（文件夹不在了、文件被别的程序占用）时直接说原因，不退回打印对话框：换个地方就行
+    export::check_writable(pdf)?;
     let _one = PDF_PRINTING.lock().unwrap_or_else(|e| e.into_inner());
     let n = PDF_WINDOWS.fetch_add(1, Ordering::Relaxed) + 1;
     let tmp = std::env::temp_dir().join(format!("todolist-export-{}-{n}.html", std::process::id()));
     std::fs::write(&tmp, html).map_err(|e| format!("写临时文件失败：{e}"))?;
     let result = print_file(app, &format!("{PDF_WINDOW}-{n}"), &tmp, pdf, title);
-    let _ = std::fs::remove_file(&tmp);
+    if !matches!(result, Ok(Printed::Dialog(_))) {
+        let _ = std::fs::remove_file(&tmp);
+    }
     result
 }
 
 #[cfg(not(windows))]
-fn print_file(_app: &AppHandle, _label: &str, _html: &Path, _pdf: &Path, _title: &str) -> Cmd<()> {
+fn print_file(_app: &AppHandle, _label: &str, _html: &Path, _pdf: &Path, _title: &str) -> Cmd<Printed> {
     Err("只能在 Windows 上导出 PDF".into())
 }
 
 #[cfg(windows)]
-fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str) -> Cmd<()> {
+fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str) -> Cmd<Printed> {
     let url = tauri::Url::from_file_path(html).map_err(|_| format!("临时文件的路径不对：{}", html.display()))?;
     let (loaded, wait_loaded) = mpsc::channel();
     let loaded = Mutex::new(Some(loaded));
@@ -1474,15 +1494,58 @@ fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str
             let _ = done.send(Err(e));
         }
     });
-    let result = match started {
-        Ok(()) => wait_done.recv_timeout(PDF_PRINT_TIMEOUT).unwrap_or_else(|_| Err("打印成 PDF 超时".into())),
-        Err(e) => Err(format!("无法打印成 PDF：{e}")),
+    // 打印出错的（连同 WebView2 太旧的）退回打印对话框；开始不了、超时的直接报错
+    let reason = match started.map(|()| wait_done.recv_timeout(PDF_PRINT_TIMEOUT)) {
+        Ok(Ok(Ok(()))) => {
+            let _ = window.destroy();
+            return Ok(Printed::Pdf);
+        }
+        Ok(Ok(Err(reason))) => reason,
+        Ok(Err(_)) => {
+            let _ = window.destroy();
+            return Err("打印成 PDF 超时".into());
+        }
+        Err(e) => {
+            let _ = window.destroy();
+            return Err(format!("无法打印成 PDF：{e}"));
+        }
     };
-    let _ = window.destroy();
-    result
+    // 目标位置是能写的（print_pdf 先看过），没做成多半是 WebView2 的问题
+    match show_print_dialog(&window, html) {
+        Ok(()) => Ok(Printed::Dialog(reason)),
+        Err(e) => {
+            let _ = window.destroy();
+            Err(format!("{reason}；{e}"))
+        }
+    }
 }
 
-/// 在主线程上（with_webview 里）开始打印，打完把结果发给 done
+/// 退回系统的打印对话框：把打印用的窗口显示出来（里面是导出的内容），打开打印对话框，用户在里面选「另存为 PDF」或
+/// 「Microsoft Print to PDF」自己存。窗口留着由用户关掉（不像主窗口那样藏到托盘，见 run 的 on_window_event）：
+/// 打印完就关的话，打印到打印机（包括 Microsoft Print to PDF）时页面还要再排一次版，可能被打断。窗口关掉后删掉临时文件
+#[cfg(windows)]
+fn show_print_dialog(window: &WebviewWindow, html: &Path) -> Cmd<()> {
+    let tmp = html.to_path_buf();
+    window.on_window_event(move |e| {
+        if let WindowEvent::Destroyed = e {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    });
+    let _ = window.set_title("导出 PDF：在打印对话框里选「另存为 PDF」，存好后关掉这个窗口");
+    let _ = window.set_skip_taskbar(false);
+    let _ = window.center();
+    window.show().map_err(|e| format!("无法打开打印对话框：{e}"))?;
+    let _ = window.set_focus();
+    window.eval("print()").map_err(|e| format!("无法打开打印对话框：{e}"))
+}
+
+/// 调试版设了环境变量 TODOLIST_PDF_PRINT_DIALOG 时不直接存成 PDF，总是退回打印对话框（手动测试退回的流程用）
+#[cfg(windows)]
+fn force_print_dialog() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("TODOLIST_PDF_PRINT_DIALOG").is_some()
+}
+
+/// 在主线程上（with_webview 里）开始打印，打完把结果发给 done；出错时返回的、发给 done 的是没做成的原因
 #[cfg(windows)]
 fn start_print(webview: &tauri::webview::PlatformWebview, pdf: &Path, title: &str, done: mpsc::Sender<Cmd<()>>) -> Cmd<()> {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -1490,7 +1553,10 @@ fn start_print(webview: &tauri::webview::PlatformWebview, pdf: &Path, title: &st
     };
     use webview2_com::PrintToPdfCompletedHandler;
     use windows_core::{Interface, HSTRING};
-    let too_old = |_| "系统的 WebView2 太旧，不能打印成 PDF，请更新 Microsoft Edge WebView2 Runtime".to_string();
+    if force_print_dialog() {
+        return Err("调试版设了 TODOLIST_PDF_PRINT_DIALOG".into());
+    }
+    let too_old = |_| "系统的 WebView2 太旧，不支持直接存成 PDF（更新 Microsoft Edge WebView2 Runtime 后就可以）".to_string();
     // 都在主线程上调 WebView2 的 COM 接口，参数都是这里建好的
     unsafe {
         let core: ICoreWebView2_7 = webview.controller().CoreWebView2().map_err(print_error)?.cast().map_err(too_old)?;
@@ -1511,7 +1577,7 @@ fn start_print(webview: &tauri::webview::PlatformWebview, pdf: &Path, title: &st
         let handler = PrintToPdfCompletedHandler::create(Box::new(move |result, ok| {
             let _ = done.send(match result {
                 Err(e) => Err(print_error(e)),
-                Ok(()) if !ok => Err("WebView2 没能打印成 PDF，可能是目标位置不能写".into()),
+                Ok(()) if !ok => Err("WebView2 没能打印成 PDF".into()),
                 Ok(()) => Ok(()),
             });
             Ok(())
@@ -1607,6 +1673,10 @@ pub fn run() {
         // 点窗口的关闭按钮只隐藏到托盘，真正退出走托盘菜单的「退出」
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                // 导出 PDF 退回打印对话框时显示出来的窗口直接关掉（见 show_print_dialog）
+                if window.label().starts_with(PDF_WINDOW) {
+                    return;
+                }
                 api.prevent_close();
                 let _ = window.hide();
             }
