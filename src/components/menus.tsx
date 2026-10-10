@@ -2,12 +2,14 @@ import {
   CheckCircleOutlined,
   CloseOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EditOutlined,
   ExportOutlined,
   FolderAddOutlined,
   FolderOpenOutlined,
   FolderOutlined,
   HomeOutlined,
+  Html5Outlined,
   PlusOutlined,
   PushpinOutlined,
   SwapOutlined,
@@ -15,7 +17,7 @@ import {
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { isSubProject, parentOf, projectLabel, projectMoveProblem } from "../projects";
-import type { TodoSummary, WorkspaceTree } from "../types";
+import type { ExportFormat, TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import type { BatchActions } from "./workspaceActions";
 
@@ -29,6 +31,8 @@ export interface Actions {
   renameWorkspace(): void;
   deleteWorkspace(): void;
   openWorkspaceFolder(): void;
+  /** 导出整个工作区（见 exportFlow.tsx） */
+  exportWorkspace(format: ExportFormat): void;
 
   newProject(): void;
   /** 在顶层项目 parent 里新建子项目 */
@@ -38,6 +42,8 @@ export interface Actions {
   /** 连同其中的待办（和子项目）移到工作区 targetWorkspace 的顶层，或放进那里的顶层项目 targetParent 成为子项目 */
   moveProject(project: string, targetWorkspace: string, targetParent?: string): void;
   openProjectFolder(project: string): void;
+  /** 导出项目（连同子项目） */
+  exportProject(project: string, format: ExportFormat): void;
 
   /** open=true 时创建后立即打开并聚焦标题；返回是否创建成功（失败时已弹出提示） */
   newTodo(project: string, title?: string, open?: boolean): Promise<boolean>;
@@ -52,10 +58,27 @@ export interface Actions {
   reorderTodo(project: string, id: string, targetId: string, place: "before" | "after"): void;
   openExternal(project: string, t: TodoSummary): void;
   revealTodo(project: string, t: TodoSummary): void;
+  /** 导出这条待办 */
+  exportTodo(project: string, t: TodoSummary, format: ExportFormat): void;
 }
 
 type Handler = NonNullable<MenuProps["onClick"]>;
 type ClickInfo = Parameters<Handler>[0];
+
+const EXPORT_PREFIX = "export:";
+
+/** 「导出」和它的子菜单：导出为 HTML */
+function exportItem(): NonNullable<MenuProps["items"]>[number] {
+  return {
+    key: "export",
+    icon: <DownloadOutlined />,
+    label: "导出",
+    children: [{ key: `${EXPORT_PREFIX}html`, icon: <Html5Outlined />, label: "导出为 HTML" }],
+  };
+}
+
+/** 点的是「导出」里的哪一种；不是导出时为 null */
+const exportFormat = (key: string) => (key.startsWith(EXPORT_PREFIX) ? (key.slice(EXPORT_PREFIX.length) as ExportFormat) : null);
 
 /** 菜单挂在树节点上：点击菜单项的事件会沿 React 树冒泡到节点的 onClick，这里统一拦下 */
 function handler(fn: (key: string) => void): Handler {
@@ -71,12 +94,15 @@ export function workspaceMenu(a: Actions): MenuProps {
       { key: "new-project", icon: <PlusOutlined />, label: "新建项目" },
       { key: "rename", icon: <EditOutlined />, label: "重命名工作区" },
       { key: "folder", icon: <FolderOpenOutlined />, label: "在资源管理器中打开" },
+      exportItem(),
       { type: "divider" },
       { key: "home", icon: <HomeOutlined />, label: "返回首页" },
       { key: "delete", icon: <DeleteOutlined />, label: "删除工作区", danger: true },
     ],
     onClick: handler((key) => {
-      if (key === "new-project") a.newProject();
+      const format = exportFormat(key);
+      if (format) a.exportWorkspace(format);
+      else if (key === "new-project") a.newProject();
       else if (key === "rename") a.renameWorkspace();
       else if (key === "folder") a.openWorkspaceFolder();
       else if (key === "home") a.goHome();
@@ -103,14 +129,17 @@ export function projectMenu(a: Actions, project: string, targets: readonly MoveT
         popupClassName: "move-menu",
       },
       { key: "folder", icon: <FolderOpenOutlined />, label: "在资源管理器中打开" },
+      exportItem(),
       { type: "divider" },
       { key: "delete", icon: <DeleteOutlined />, label: "删除项目", danger: true },
     ],
     onClick: handler((key) => {
+      const format = exportFormat(key);
       if (key.startsWith(PROJECT_MOVE_PREFIX)) {
         const [workspace, parent] = JSON.parse(key.slice(PROJECT_MOVE_PREFIX.length)) as [string, string];
         a.moveProject(project, workspace, parent || undefined);
-      } else if (key === "new-todo") a.newTodo(project, "", true);
+      } else if (format) a.exportProject(project, format);
+      else if (key === "new-todo") a.newTodo(project, "", true);
       else if (key === "new-sub") a.newSubProject(project);
       else if (key === "rename") a.renameProject(project);
       else if (key === "folder") a.openProjectFolder(project);
@@ -221,14 +250,17 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: r
         popupClassName: "move-menu",
       },
       { key: "reveal", icon: <FolderOpenOutlined />, label: "在资源管理器中显示" },
+      exportItem(),
       { type: "divider" },
       { key: "delete", icon: <DeleteOutlined />, label: "删除", danger: true },
     ],
     onClick: handler((key) => {
+      const format = exportFormat(key);
       if (key.startsWith(MOVE_PREFIX)) {
         const [workspace, target] = JSON.parse(key.slice(MOVE_PREFIX.length)) as [string, string];
         a.moveTodo(project, t, target, workspace === ownWorkspace ? undefined : workspace);
-      } else if (key === "open") a.openExternal(project, t);
+      } else if (format) a.exportTodo(project, t, format);
+      else if (key === "open") a.openExternal(project, t);
       else if (key === "done") a.toggleDone(project, t);
       else if (key === "pin") a.togglePinned(project, t);
       else if (key === "reveal") a.revealTodo(project, t);

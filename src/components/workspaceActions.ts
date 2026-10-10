@@ -5,6 +5,7 @@ import type { How } from "../navHistory";
 import { deepTodos, inProject, isSubProject, leafName, projectLabel, reparent, subProjectsOf } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
+import { useExport } from "./exportFlow";
 import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
 import {
   forgetProjectState,
@@ -52,8 +53,8 @@ export interface ActionContext {
   onHome: () => void;
   /** 先存盘再返回首页 */
   goHome: () => void;
-  /** 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘 */
-  flushEditor: () => Promise<unknown>;
+  /** 结构性操作（重命名、移动、删除）、导出之前先把编辑器里的内容落盘；返回是否存好了（没有打开着的待办也算） */
+  flushEditor: () => Promise<boolean>;
   editorRef: React.RefObject<EditorHandle | null>;
   openDialog: ReturnType<typeof useNameDialog>[1];
   collapsed: PerWorkspace<Collapsed>;
@@ -88,6 +89,7 @@ export interface BatchActions {
 export function useWorkspaceActions(ctx: ActionContext) {
   const { message, modal } = AntApp.useApp();
   const undoDelete = useUndoDelete();
+  const runExport = useExport();
   // 撤销删除时（提示停留的几秒里选中的工作区可能变了）用最新的 reload
   const reloadRef = useRef(ctx.reload);
   useEffect(() => {
@@ -215,6 +217,14 @@ export function useWorkspaceActions(ctx: ActionContext) {
         );
       },
       openWorkspaceFolder: () => run(() => api.openFolder(ws)),
+      exportWorkspace: (format) =>
+        runExport({
+          format,
+          scope: "workspace",
+          workspace: ws,
+          sortKey: listOptions.get(ws).sortKey,
+          flush: () => (inSel ? flushEditor() : Promise.resolve(true)),
+        }),
 
       newProject: () =>
         openDialog({
@@ -299,6 +309,15 @@ export function useWorkspaceActions(ctx: ActionContext) {
           else message.success(`已移动到工作区「${targetWs}」`);
         }),
       openProjectFolder: (project) => run(() => api.openFolder(ws, project)),
+      exportProject: (project, format) =>
+        runExport({
+          format,
+          scope: "project",
+          workspace: ws,
+          project,
+          sortKey: listOptions.get(ws).sortKey,
+          flush: () => (showsProject(project) ? flushEditor() : Promise.resolve(true)),
+        }),
 
       newTodo: (project, title = "", open = true) =>
         run(async () => {
@@ -374,6 +393,16 @@ export function useWorkspaceActions(ctx: ActionContext) {
           await api.openTodoExternal(ws, project, t.id);
         }),
       revealTodo: (project, t) => run(() => api.revealTodo(ws, project, t.id)),
+      exportTodo: (project, t, format) =>
+        runExport({
+          format,
+          scope: "todo",
+          workspace: ws,
+          project,
+          todo: t.id,
+          sortKey: listOptions.get(ws).sortKey,
+          flush: () => (isSelTodo(project, t.id) ? flushEditor() : Promise.resolve(true)),
+        }),
     };
   };
 

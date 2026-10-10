@@ -267,3 +267,38 @@ export interface AutoBackupStatus {
   /** 这次运行期间最近一次自动备份的结果 */
   lastRun: AutoBackupRun | null;
 }
+
+/** 导出成什么 */
+export type ExportFormat = "html";
+
+/** 导出的范围：一条待办、一个项目（连同子项目）、整个工作区 */
+export type ExportScope = "todo" | "project" | "workspace";
+
+/** 导出的一个项目（或子项目）和其中排好序的待办 id */
+export interface ExportGroup {
+  project: string;
+  ids: string[];
+}
+
+/** 交给 Rust 端的导出请求：导出哪些、什么顺序由前端定（侧栏的排序），Rust 端按这个顺序从磁盘读 */
+export interface ExportRequest {
+  format: ExportFormat;
+  /** 存到哪里（pickExportTarget 选的） */
+  path: string;
+  scope: ExportScope;
+  workspace: string;
+  /** 导出项目时是这个项目的路径 */
+  project: string | null;
+  /** 包含已完成的待办 */
+  includeDone: boolean;
+  /** 项目按侧栏的顺序（项目自己的在前，子项目跟在后面） */
+  groups: ExportGroup[];
+}
+
+/** 导出完的结果 */
+export interface Exported {
+  /** 存到的完整路径 */
+  path: string;
+  /** 导出了几条待办 */
+  count: number;
+}
