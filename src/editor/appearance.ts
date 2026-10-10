@@ -112,7 +112,9 @@ const theme = EditorView.theme({
   // 从资源管理器拖进图片时，放下的位置
   ".cm-drop-caret": { borderLeft: "2px solid var(--c-primary)", marginLeft: "-1px" },
   // 表格（tables.ts）：很宽时在编辑区里横着滚动，不撑破编辑区
-  ".cm-md-table-wrap": { overflowX: "auto", maxWidth: "100%", padding: "6px 0 8px" },
+  // contain: inline-size：宽度只跟着编辑区，不随表格变宽——编辑区的内容是 flex 子元素，最小宽度取内容里最宽的，
+  // 不这样的话很宽的表格会把整个编辑区撑宽，外层的横向滚动不起作用
+  ".cm-md-table-wrap": { overflowX: "auto", maxWidth: "100%", padding: "6px 0 8px", contain: "inline-size" },
   ".cm-md-table": { borderCollapse: "collapse", lineHeight: "1.6" },
   ".cm-md-table th, .cm-md-table td": {
     border: "1px solid var(--c-border-strong)",
