@@ -17,6 +17,8 @@ const sum = (id: string, title = id): TodoSummary => ({
   doneAt: null,
   pinned: false,
   order: null,
+  tags: [],
+  priority: 0,
 });
 
 // 假的数据目录：只有一条待办「工作 / 需求 / A」的正文

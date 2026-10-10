@@ -23,6 +23,8 @@ const todo = (p: Partial<TodoSummary>): TodoSummary => ({
   doneAt: null,
   pinned: false,
   order: null,
+  tags: [],
+  priority: 0,
   ...p,
 });
 

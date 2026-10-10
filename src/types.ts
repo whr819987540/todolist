@@ -11,7 +11,14 @@ export interface TodoSummary {
   pinned: boolean;
   /** 手动排序时的位置（从小到大）；没拖动排过的（新建的、移过来的）为 null，手动排序时排在最前面 */
   order: number | null;
+  /** 标签（去掉了首尾空白和开头的 #，同一条里不区分大小写地去了重），按加上的先后 */
+  tags: string[];
+  /** 优先级：3 高、2 中、1 低、0 无 */
+  priority: Priority;
 }
+
+/** 待办的优先级：3 高、2 中、1 低、0 无（默认） */
+export type Priority = 0 | 1 | 2 | 3;
 
 export interface ProjectNode {
   /** 项目路径：顶层项目是名字，子项目是「父项目/子项目」（projects.ts） */

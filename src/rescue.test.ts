@@ -17,6 +17,8 @@ const summary = (title: string, id = "20261009-120000"): TodoSummary => ({
   doneAt: null,
   pinned: false,
   order: null,
+  tags: [],
+  priority: 0,
 });
 
 const here = { workspace: "工作", project: "需求" };
