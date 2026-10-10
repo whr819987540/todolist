@@ -1,6 +1,7 @@
 import type { InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { parentOf } from "../projects";
+import { isFiltering, matchFilter, useTodoFilter } from "../filter";
+import { deepTodos, parentOf } from "../projects";
 import { type ContentHits, NO_HITS } from "../search";
 import type { MenuProps } from "antd";
 import type { WorkspaceTree } from "../types";
@@ -16,11 +17,13 @@ import {
   type Collapsed,
   countAll,
   countDone,
+  hiddenByFilter,
   hiddenDoneProjects,
   isProjectDone,
   parseSelKey,
   type Selection,
   selKey,
+  unionHidden,
   WS_KEY,
 } from "./sidebar/tree";
 import { WorkspaceBranch } from "./sidebar/TreeRows";
@@ -99,23 +102,33 @@ export default function Sidebar(props: Props) {
     [setListOptions],
   );
 
+  // 按标签、优先级筛选（侧栏显示的各工作区共用一个）
+  const filter = useTodoFilter();
+
   // 「隐藏全部完成的项目」开着时，右侧显示的内容离开一个全部完成的项目后，它再显示一会儿才藏起来（sidebar/lingering.ts）；
-  // 搜索时本来就不藏，不必留。离开的是子项目时，它全部完成了，它或者它的父项目（也全部完成了时）会被藏起来
+  // 搜索时本来就不藏，不必留。离开的是子项目时，它全部完成了，它或者它的父项目（也全部完成了时）会被藏起来。
+  // 筛选时离开一个没有符合的待办的项目同样（搜索时也筛）
   const lingering = useLingeringProjects(sel, (ws, project) => {
-    if (kw || !listOptionsOf(ws).hideDoneProjects) return false;
     const projects = trees.find((t) => t.name === ws)?.projects ?? [];
-    return isProjectDone(projects, project);
+    const o = listOptionsOf(ws);
+    if (!kw && o.hideDoneProjects && isProjectDone(projects, project)) return true;
+    return (
+      isFiltering(filter) &&
+      !deepTodos(projects, project).some((t) => (!o.hideDone || !t.done) && matchFilter(t, filter))
+    );
   });
 
-  // 各工作区藏起来的项目，参数和下面传给 WorkspaceBranch 的一样：顶部的「全部折叠 / 全部展开」不看它们。
+  // 各工作区藏起来、筛掉的项目，参数和下面传给 WorkspaceBranch 的一样：顶部的「全部折叠 / 全部展开」不看它们。
   // 那里只对有展开着的项目的工作区才调用，没开这一项、在搜索时直接返回
-  const hiddenOf = (t: WorkspaceTree) =>
-    hiddenDoneProjects(t.projects, {
-      hide: listOptionsOf(t.name).hideDoneProjects,
-      keyword: kw,
-      selProject: sel.workspace === t.name ? sel.project : undefined,
-      lingering: lingering.get(t.name),
-    });
+  const hiddenOf = (t: WorkspaceTree) => {
+    const o = listOptionsOf(t.name);
+    const selProject = sel.workspace === t.name ? sel.project : undefined;
+    const lingers = lingering.get(t.name);
+    return unionHidden(
+      hiddenDoneProjects(t.projects, { hide: o.hideDoneProjects, keyword: kw, selProject, lingering: lingers }),
+      hiddenByFilter(t.projects, { filter, hideDone: o.hideDone, selProject, lingering: lingers }),
+    );
+  };
 
   const total = trees.reduce((n, t) => n + countAll(t), 0);
   const done = trees.reduce((n, t) => n + countDone(t), 0);
@@ -243,6 +256,7 @@ export default function Sidebar(props: Props) {
             hits={props.hits && (props.hits.get(tree.name) ?? NO_HITS)}
             {...listOptionsOf(tree.name)}
             lingering={lingering.get(tree.name) ?? NONE}
+            filter={filter}
             now={now}
             today={today}
             dragState={props.drag.state}

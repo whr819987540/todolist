@@ -1,6 +1,7 @@
 import { App as AntApp, Spin, type InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, errMsg } from "../api";
+import { isFiltering, useTodoFilter } from "../filter";
 import { useAppEvent, useWindowFocus } from "../hooks";
 import { rangePick, togglePick } from "../picking";
 import { useContentSearch } from "../search";
@@ -187,6 +188,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   // 用键盘在左侧列表里移到的选中项：这时焦点留在列表，右侧不自动聚焦输入框
   const [kbSel, setKbSel] = useState<Selection | null>(null);
   const [keyword, setKeyword] = useState("");
+  // 按标签、优先级筛选（只记在这次运行期间，见 filter.ts）：筛选时不能拖动调整顺序
+  const filter = useTodoFilter();
   const collapsed = usePerWorkspace(collapsedKey, readCollapsed);
   const setCollapsed = collapsed.set;
   const listOptions = usePerWorkspace(listOptionsKey, readListOptions);
@@ -514,7 +517,11 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const drag = useDragMove({
     trees: trees ?? [],
     expand: (ws) => expand(ws, WS_KEY),
-    canReorder: !keyword.trim(),
+    reorderBlocked: keyword.trim()
+      ? "搜索时不能调整顺序，先清空搜索"
+      : isFiltering(filter)
+        ? "筛选时不能调整顺序，先清除筛选"
+        : null,
     onDrop: (item, target) => {
       if (item.kind === "todos") {
         if (target.project) batch.move(item.items, target.project, target.workspace);

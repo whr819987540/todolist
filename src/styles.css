@@ -823,6 +823,116 @@ mark {
   word-break: break-all;
 }
 
+/* ---------------- 筛选（按标签、优先级） ---------------- */
+
+/* 侧栏顶部开着筛选时的一行：写明筛的是什么，点了打开筛选，× 清除 */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 8px 4px;
+  padding: 2px 6px 2px 8px;
+  border-radius: 6px;
+  background: var(--c-primary-bg);
+  color: var(--c-primary);
+  font-size: 12px;
+  line-height: 20px;
+}
+.filter-bar-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.filter-bar-clear {
+  flex: none;
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.filter-bar-clear:hover {
+  background: var(--c-primary-bg-hover);
+}
+/* 筛选的弹出框 */
+.filter-panel {
+  width: 260px;
+}
+.filter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 2px 0 6px;
+}
+.filter-section {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-2);
+}
+.filter-tags {
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+.filter-priorities {
+  margin-bottom: 8px;
+}
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.filter-item:hover {
+  background: var(--c-hover);
+}
+.filter-item .ant-checkbox-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+.filter-item .tag-chip {
+  font-size: 12px;
+  line-height: 18px;
+  max-width: 150px;
+}
+.filter-count {
+  flex: none;
+  min-width: 20px;
+  font-size: 12px;
+  color: var(--c-text-3);
+  text-align: right;
+}
+.filter-empty {
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+.filter-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 6px;
+  border-top: 1px solid var(--c-border);
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+/* 项目概览里开着筛选时，列表上面的一行 */
+.filter-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 -4px;
+  font-size: 12px;
+  color: var(--c-primary);
+}
+.filter-note a {
+  margin-left: 8px;
+}
+
 /* ---------------- 优先级 ---------------- */
 
 /* 标题前面的小旗子：高红、中橙、低蓝；无优先级（选的时候）是空心的灰旗子 */
@@ -908,6 +1018,13 @@ mark {
 /* 放不下的几个：「+N」，悬停看全部 */
 .tag-more {
   color: var(--c-text-3);
+}
+/* 点一下按这个标签筛选 */
+.tag-chip.clickable {
+  cursor: pointer;
+}
+.tag-chip.clickable:hover {
+  border-color: var(--tag-fg, var(--c-primary));
 }
 /* 搜索时命中的标签：描边画在里面（外面会被 .tag-list 截掉） */
 .tag-chip.hit {

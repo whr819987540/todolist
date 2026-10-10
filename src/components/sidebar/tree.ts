@@ -1,5 +1,6 @@
 // 侧栏树共用的定义：右侧显示的内容（选中项）和它在行上的键、折叠状态、待办计数、隐藏全部完成的项目时藏起哪些，
-// 「全部折叠 / 全部展开」看哪些项目
+// 筛选时筛掉哪些项目，「全部折叠 / 全部展开」看哪些项目
+import { isFiltering, matchFilter, type TodoFilter } from "../../filter";
 import { deepTodos, inProject, parentOf } from "../../projects";
 import type { ProjectNode, WorkspaceTree } from "../../types";
 
@@ -64,6 +65,44 @@ export function hiddenDoneProjects(
     if (parent !== undefined && !hidden.has(parent)) hide(p.name);
   }
   return hidden.size ? hidden : NONE_HIDDEN;
+}
+
+/**
+ * 开着筛选时侧栏里筛掉的项目（路径）：没有符合筛选的待办的（父项目连同子项目一起看；隐藏已完成的待办时已完成的不算），
+ * 除了右侧正在显示的、刚切走还要再显示一会儿的（同 hiddenDoneProjects，显示的是子项目时它的父项目也不筛）。
+ * 筛掉的父项目连同子项目一起不显示；父项目没筛掉时，没有符合的待办的子项目单独筛掉。没开筛选时什么都不筛
+ */
+export function hiddenByFilter(
+  projects: readonly ProjectNode[],
+  o: {
+    filter: TodoFilter;
+    /** 隐藏已完成的待办 */
+    hideDone: boolean;
+    selProject?: string;
+    lingering?: ReadonlySet<string>;
+  },
+): ReadonlySet<string> {
+  if (!isFiltering(o.filter)) return NONE_HIDDEN;
+  const showing = [o.selProject, ...(o.lingering ?? [])].filter((x) => x !== undefined);
+  const hidden = new Set<string>();
+  const hide = (p: ProjectNode, deep: boolean) => {
+    if (showing.some((x) => inProject(x, p.name))) return;
+    const todos = deep ? deepTodos(projects, p.name) : p.todos;
+    if (!todos.some((t) => (!o.hideDone || !t.done) && matchFilter(t, o.filter))) hidden.add(p.name);
+  };
+  for (const p of projects) if (parentOf(p.name) === undefined) hide(p, true);
+  for (const p of projects) {
+    const parent = parentOf(p.name);
+    if (parent !== undefined && !hidden.has(parent)) hide(p, false);
+  }
+  return hidden.size ? hidden : NONE_HIDDEN;
+}
+
+/** 两种藏起来的项目合起来（有一边是空的时直接用另一边，侧栏的行不必重新渲染） */
+export function unionHidden(a: ReadonlySet<string>, b: ReadonlySet<string>): ReadonlySet<string> {
+  if (!a.size) return b;
+  if (!b.size) return a;
+  return new Set([...a, ...b]);
 }
 
 /** 藏起来的项目（hiddenDoneProjects）里有它或它的父项目：侧栏里看不见 */

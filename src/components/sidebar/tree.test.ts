@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { NO_FILTER, type TodoFilter } from "../../filter";
 import type { ProjectNode, TodoSummary, WorkspaceTree } from "../../types";
 import {
   anyVisibleProjectOpen,
   type Collapsed,
+  hiddenByFilter,
   hiddenDoneProjects,
   isProjectDone,
   type Lingering,
   lingeringAfter,
   NO_LINGERING,
+  unionHidden,
   WS_KEY,
 } from "./tree";
 
@@ -238,5 +241,53 @@ describe("「全部折叠 / 全部展开」看哪些项目", () => {
     const workAll = folded({ 工作: ["全完成", "没完成", "空的"] });
     expect(anyVisibleProjectOpen([work, life], workAll, hiding())).toBe(true);
     expect(anyVisibleProjectOpen([work, life], folded({ 工作: ["没完成", "空的"], 生活: ["杂事"] }), hiding())).toBe(false);
+  });
+});
+
+// docs/requirements.md「筛选」：没有符合筛选的待办的项目（父项目连同子项目一起看）不显示；右侧正在显示的、刚切走的照常显示；
+// 隐藏已完成的待办时，只有已完成的待办符合的项目也不显示
+describe("筛选时筛掉哪些项目", () => {
+  const tagged = (name: string, ...todos: [string, boolean?][]): ProjectNode => ({
+    name,
+    todos: todos.map(([tag, done = false], i) => ({ ...todo(`${name}-${i}`, done), tags: tag ? [tag] : [] })),
+  });
+  const work: TodoFilter = { ...NO_FILTER, tags: ["工作"] };
+  const names = (s: ReadonlySet<string>) => [...s].sort();
+  const hide = (projects: ProjectNode[], o: { hideDone?: boolean; selProject?: string; lingering?: ReadonlySet<string> } = {}) =>
+    names(hiddenByFilter(projects, { filter: work, hideDone: false, ...o }));
+
+  it("没开筛选时什么都不筛", () => {
+    expect(hiddenByFilter([tagged("p", ["急"])], { filter: NO_FILTER, hideDone: false }).size).toBe(0);
+  });
+
+  it("没有符合的待办的项目筛掉，空项目也筛掉", () => {
+    expect(hide([tagged("有", ["工作"], ["急"]), tagged("没有", ["急"]), tagged("空的")])).toEqual(["没有", "空的"]);
+  });
+
+  it("隐藏已完成的待办时，只有已完成的符合的项目也筛掉", () => {
+    const ps = [tagged("p", ["工作", true], ["急"])];
+    expect(hide(ps)).toEqual([]);
+    expect(hide(ps, { hideDone: true })).toEqual(["p"]);
+  });
+
+  it("父项目连同子项目一起看：子项目里有符合的，父项目照常显示，没有符合的子项目单独筛掉", () => {
+    expect(hide([tagged("p", ["急"]), tagged("p/a", ["工作"]), tagged("p/b", ["急"])])).toEqual(["p/b"]);
+    // 都没有：父项目连同子项目一起筛掉，只算一个
+    expect(hide([tagged("p", ["急"]), tagged("p/a")])).toEqual(["p"]);
+  });
+
+  it("右侧正在显示的、刚切走的照常显示；显示的是子项目时它的父项目也显示", () => {
+    const ps = [tagged("p", ["急"]), tagged("p/a"), tagged("q")];
+    expect(hide(ps, { selProject: "p/a" })).toEqual(["q"]);
+    expect(hide(ps, { lingering: new Set(["q"]) })).toEqual(["p"]);
+  });
+
+  it("和隐藏全部完成的项目合起来", () => {
+    const done = new Set(["a"]);
+    const filtered = new Set(["b"]);
+    expect([...unionHidden(done, filtered)].sort()).toEqual(["a", "b"]);
+    const none = new Set<string>();
+    expect(unionHidden(none, filtered)).toBe(filtered);
+    expect(unionHidden(done, none)).toBe(done);
   });
 });

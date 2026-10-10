@@ -1,8 +1,11 @@
 import {
   CheckOutlined,
+  CloseOutlined,
   ColumnHeightOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
+  FilterFilled,
+  FilterOutlined,
   FolderAddOutlined,
   FolderFilled,
   HomeOutlined,
@@ -11,13 +14,16 @@ import {
   SortAscendingOutlined,
   VerticalAlignMiddleOutlined,
 } from "@ant-design/icons";
-import { Button, Dropdown, Input, Tooltip, type InputRef, type MenuProps } from "antd";
+import { Button, Dropdown, Input, Popover, Tooltip, type InputRef, type MenuProps } from "antd";
+import { useState } from "react";
+import { clearFilter, describeFilter, isFiltering, useTodoFilter } from "../../filter";
 import { parentOf, projectLabel } from "../../projects";
 import { ThemeButton } from "../../theme";
 import type { SortKey, WorkspaceTree } from "../../types";
 import type { ListOptions } from "../../workspaceState";
 import type { Actions } from "../menus";
 import SettingsButton from "../SettingsButton";
+import FilterPanel from "./FilterPanel";
 import { anyVisibleProjectOpen, type Collapsed, type Selection, WS_KEY } from "./tree";
 import WorkspacePicker from "./WorkspacePicker";
 
@@ -30,8 +36,9 @@ const SORT_LABELS: Record<SortKey, string> = {
 };
 
 /**
- * 侧栏顶部：返回首页、选中要显示的工作区、主题、设置；搜索和「新建」；排序、隐藏已完成（待办、全部完成的项目）、全部折叠 / 展开。
- * 「新建」、排序和隐藏已完成作用于右侧正在显示的工作区
+ * 侧栏顶部：返回首页、选中要显示的工作区、主题、设置；搜索和「新建」；排序、隐藏已完成（待办、全部完成的项目）、
+ * 筛选（按标签、优先级）、全部折叠 / 展开，开着筛选时下面一行写明筛的是什么。
+ * 「新建」、排序和隐藏已完成作用于右侧正在显示的工作区；筛选作用于侧栏显示的各工作区
  */
 export default function SidebarToolbar(props: {
   trees: WorkspaceTree[];
@@ -51,11 +58,15 @@ export default function SidebarToolbar(props: {
   setListOptions: (workspace: string, patch: Partial<ListOptions>) => void;
   collapsedOf: (workspace: string) => Collapsed;
   setCollapsed: (workspace: string, fn: (prev: Collapsed) => Collapsed) => void;
-  /** 侧栏里这个工作区藏起来的项目（隐藏全部完成的项目时，和树里一样算），「全部折叠 / 全部展开」不看它们；用到时才算 */
+  /** 侧栏里这个工作区藏起来、筛掉的项目（和树里一样算），「全部折叠 / 全部展开」不看它们；用到时才算 */
   hiddenOf: (tree: WorkspaceTree) => ReadonlySet<string>;
 }) {
   const { trees, sel, actions: a, searchRef, keyword, collapsedOf, setCollapsed } = props;
   const multi = trees.length > 1;
+  const filter = useTodoFilter();
+  const filtering = isFiltering(filter);
+  // 筛选的弹出框：点按钮、点下面写着筛选的那一行都打开
+  const [filterOpen, setFilterOpen] = useState(false);
 
   // 看得见的项目有展开着的时是「全部折叠」。点了连藏起来的、折叠着的工作区里的一起折叠 / 展开：关掉隐藏、其中的待办
   // 改回未完成、展开工作区后再显示出来时，它们和别的项目一样折叠着 / 展开着。「全部展开」时折叠着的工作区也展开，
@@ -181,6 +192,25 @@ export default function SidebarToolbar(props: {
             />
           </Tooltip>
         </Dropdown>
+        <Popover
+          open={filterOpen}
+          onOpenChange={setFilterOpen}
+          trigger={["click"]}
+          placement="bottomRight"
+          arrow={false}
+          // 关着时不渲染：里面要数全部待办的标签
+          destroyOnHidden
+          content={<FilterPanel trees={trees} />}
+        >
+          <Tooltip title={filtering ? `筛选：${describeFilter(filter)}` : "按标签、优先级筛选"}>
+            <Button
+              type="text"
+              size="small"
+              className={`filter-btn${filtering ? " is-active" : ""}`}
+              icon={filtering ? <FilterFilled /> : <FilterOutlined />}
+            />
+          </Tooltip>
+        </Popover>
         <Tooltip title={anyProjectOpen ? "全部折叠" : "全部展开"}>
           <Button
             type="text"
@@ -191,6 +221,23 @@ export default function SidebarToolbar(props: {
           />
         </Tooltip>
       </div>
+
+      {filtering && (
+        <div className="filter-bar">
+          <span
+            className="filter-bar-text"
+            title={`筛选：${describeFilter(filter)}（点一下修改）`}
+            onClick={() => setFilterOpen(true)}
+          >
+            <FilterFilled /> 筛选：{describeFilter(filter)}
+          </span>
+          <Tooltip title="清除筛选">
+            <span className="filter-bar-clear" role="button" aria-label="清除筛选" onClick={clearFilter}>
+              <CloseOutlined />
+            </span>
+          </Tooltip>
+        </div>
+      )}
     </>
   );
 }

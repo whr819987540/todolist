@@ -134,9 +134,9 @@ function judgeReorder(
   todo: TodoSummary,
   target: DropTarget,
   trees: WorkspaceTree[],
-  canReorder: boolean,
+  reorderBlocked: string | null,
 ): { status: DropStatus; hint: string } {
-  if (!canReorder) return { status: "none", hint: "搜索时不能调整顺序，先清空搜索" };
+  if (reorderBlocked) return { status: "none", hint: reorderBlocked };
   const other = trees
     .find((t) => t.name === target.workspace)
     ?.projects.find((p) => p.name === target.project)
@@ -152,9 +152,9 @@ function judge(
   item: DragItem,
   target: DropTarget | null,
   trees: WorkspaceTree[],
-  canReorder: boolean,
+  reorderBlocked: string | null,
 ): { status: DropStatus; hint: string } {
-  if (item.kind === "todo" && target?.todoId) return judgeReorder(item.todo, target, trees, canReorder);
+  if (item.kind === "todo" && target?.todoId) return judgeReorder(item.todo, target, trees, reorderBlocked);
   if (item.kind === "project") {
     if (!target) return { status: "none", hint: "拖到别的项目上放进去成为子项目，或拖到工作区那一行上移到顶层" };
     const same = target.workspace === item.workspace;
@@ -206,8 +206,8 @@ export function useDragMove(opts: {
   trees: WorkspaceTree[];
   /** 展开折叠起来的工作区 */
   expand(workspace: string): void;
-  /** 能不能调整顺序（搜索时不能） */
-  canReorder: boolean;
+  /** 不能调整顺序（搜索、筛选时）的原因，能调整时是 null */
+  reorderBlocked: string | null;
   onDrop(item: DragItem, target: DropTarget): void;
 }): DragMove & { ghost: React.ReactNode } {
   const [state, setState] = useState<DragState | null>(null);
@@ -252,7 +252,7 @@ export function useDragMove(opts: {
         expandWs = collapsed;
         if (collapsed) expandTimer = window.setTimeout(() => optsRef.current.expand(collapsed), EXPAND_DELAY);
       }
-      const { status, hint } = judge(item, target, optsRef.current.trees, optsRef.current.canReorder);
+      const { status, hint } = judge(item, target, optsRef.current.trees, optsRef.current.reorderBlocked);
       document.body.classList.toggle("drag-nodrop", status !== "ok");
       if (current && current.status === status && current.hint === hint && sameTarget(current.target, target)) return;
       current = { item, target, status, hint };

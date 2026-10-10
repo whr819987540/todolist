@@ -24,6 +24,7 @@ const SUITES = [
   "pin",
   "tags",
   "priority",
+  "filter",
   "reorder",
   "batch",
   "recycle",

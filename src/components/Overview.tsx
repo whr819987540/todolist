@@ -1,6 +1,7 @@
 import {
   CheckOutlined,
   EditOutlined,
+  FilterFilled,
   FolderAddOutlined,
   FolderFilled,
   FolderOpenOutlined,
@@ -8,8 +9,9 @@ import {
   PlusOutlined,
   PushpinFilled,
 } from "@ant-design/icons";
-import { Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "antd";
+import { App as AntApp, Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "antd";
 import { useState } from "react";
+import { clearFilter, describeFilter, filterByTag, isFiltering, matchFilter, useTodoFilter } from "../filter";
 import { deepTodos, isSubProject, leafName, parentOf, subProjectsOf, topProjects } from "../projects";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime, sortTodos, useNow } from "../utils";
@@ -152,7 +154,7 @@ export function WorkspaceOverview({
 
 /**
  * 选中项目（未选中具体待办）时右侧显示的项目概览。父项目的完成进度和数目包括子项目里的待办，上面列出子项目的卡片，
- * 下面是它自己的待办（快速添加的也加在它自己里）
+ * 下面是它自己的待办（快速添加的也加在它自己里）。开着筛选时待办列表也跟着筛（同侧栏），进度、数目照常算全部
  */
 export function ProjectOverview(p: {
   workspace: string;
@@ -169,12 +171,16 @@ export function ProjectOverview(p: {
   drag: DragMove;
 }) {
   const { project, actions: a } = p;
+  const { message } = AntApp.useApp();
   const now = useNow();
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState(false);
+  const filter = useTodoFilter();
+  const filtering = isFiltering(filter);
   const sorted = sortTodos(project.todos, p.sortKey);
-  const undone = sorted.filter((t) => !t.done);
-  const done = sorted.filter((t) => t.done);
+  const shown = filtering ? sorted.filter((t) => matchFilter(t, filter)) : sorted;
+  const undone = shown.filter((t) => !t.done);
+  const done = shown.filter((t) => t.done);
   const isSub = isSubProject(project.name);
   const subs = isSub ? [] : subProjectsOf(p.projects, project.name);
   const all = deepTodos(p.projects, project.name);
@@ -189,7 +195,12 @@ export function ProjectOverview(p: {
     setAdding(true);
     try {
       // 创建失败（例如项目文件夹在外部被删）时保留输入，方便重试
-      if (await a.newTodo(project.name, title, false)) setDraft("");
+      if (await a.newTodo(project.name, title, false)) {
+        setDraft("");
+        // 新建的不带标签、优先级
+        if (filtering && !matchFilter({ tags: [], priority: 0 }, filter))
+          message.info("已添加，不符合现在的筛选，列表里没有显示");
+      }
     } finally {
       setAdding(false);
     }
@@ -222,7 +233,7 @@ export function ProjectOverview(p: {
             {t.pinned && <PushpinFilled className="pin-mark" />}
             <PriorityFlag priority={t.priority} />
             <span className="list-title-text">{text}</span>
-            <TagChips tags={t.tags} max={LIST_TAGS} />
+            <TagChips tags={t.tags} max={LIST_TAGS} onTagClick={filterByTag} />
           </span>
           <Tooltip title={`创建时间：${fullTime(t.createdAt)}`}>
             <span className="list-time">创建 {shortTime(t.createdAt, now)}</span>
@@ -320,10 +331,22 @@ export function ProjectOverview(p: {
         )
       ) : (
         <>
+          {filtering && (
+            <div className="filter-note">
+              <FilterFilled /> 筛选：{describeFilter(filter)}，显示 {shown.length} 条，共 {project.todos.length} 条
+              <a onClick={clearFilter}>清除筛选</a>
+            </div>
+          )}
           <div className="section-title">
             {own}未完成（{undone.length}）
           </div>
-          <div className="list">{undone.length ? undone.map(row) : <div className="list-empty">全部完成了，真棒！</div>}</div>
+          <div className="list">
+            {undone.length ? (
+              undone.map(row)
+            ) : (
+              <div className="list-empty">{filtering ? "没有符合筛选的未完成待办" : "全部完成了，真棒！"}</div>
+            )}
+          </div>
           {done.length > 0 && (
             <>
               <div className="section-title">
