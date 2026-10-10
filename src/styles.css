@@ -906,6 +906,23 @@ mark {
   color: var(--c-text-3);
   text-align: right;
 }
+.filter-more {
+  flex: none;
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 4px;
+  color: var(--c-text-3);
+  cursor: pointer;
+  visibility: hidden;
+}
+.filter-item:hover .filter-more,
+.filter-more.ant-dropdown-open {
+  visibility: visible;
+}
+.filter-more:hover {
+  background: var(--c-hover);
+  color: var(--c-primary);
+}
 .filter-empty {
   margin-bottom: 10px;
   font-size: 12px;

@@ -1,7 +1,8 @@
 // 按标签和优先级筛选：侧栏顶部的「筛选」弹出框（标签、优先级带条数，任一 / 全部），只列符合的待办、没有符合的项目不显示
 // （右侧正在显示的照常、切走 1 秒后才藏），顶部那一行和 ×，和搜索一起用，点侧栏 / 编辑区里的标签按它筛选，项目概览跟着筛、
-// 快速添加不符合时提示，筛选时不能拖动调整顺序，「全部折叠 / 全部展开」不算筛掉的，返回首页再进来还在、重新打开后没了
-export const title = "按标签和优先级筛选";
+// 快速添加不符合时提示，筛选时不能拖动调整顺序，「全部折叠 / 全部展开」不算筛掉的，返回首页再进来还在、重新打开后没了；
+// 弹出框里重命名（改成已有的就是合并）、删除标签
+export const title = "按标签和优先级筛选、重命名和删除标签";
 
 export default async function (t) {
   const { main: m, check } = t;
@@ -153,4 +154,58 @@ export default async function (t) {
   await m.reload();
   await m.enter("工作");
   check("只记在这次运行期间：重新打开后没有筛选", !(await bar()));
+
+  // 弹出框里重命名、删除标签：作用于侧栏里显示的各工作区
+  await m.selectAllWorkspaces();
+  await m.expandAll();
+  const tagsOf = (ws, p, id) => (t.meta(ws, p).find((x) => x.id === id)?.tags ?? []).join();
+  /** 点弹出框里标签 tag 后面的「…」，再点 action */
+  const tagMenu = async (tag, action) => {
+    await openPanel();
+    await m.ev(`const item = await waitFor(() => [...document.querySelectorAll(".ant-popover:not(.ant-popover-hidden) .filter-item")]
+        .find((e) => e.querySelector(".ant-checkbox-wrapper").textContent.trim() === ${JSON.stringify(tag)}));
+      item.querySelector(".filter-more").click();
+      const entry = await waitFor(() => menuItem(${JSON.stringify(action)})); entry.click(); return 1`);
+  };
+  /** 在重命名的对话框里填上 name，点「改名」 */
+  const renameTo = async (name) => {
+    await m.ev(`const input = await waitFor(() => document.querySelector(".ant-modal input"));
+      setInput(input, ${JSON.stringify(name)}); await sleep(200);
+      button("改名", document.querySelector(".ant-modal-footer")).click(); return 1`);
+  };
+  const updatedA = t.meta("工作", "需求").find((x) => x.id === "A").updatedAt;
+  await m.clearToasts();
+  await tagMenu("急", "重命名");
+  await renameTo("紧急");
+  const renamed = await t.until(() => tagsOf("工作", "需求", "A") === "工作,紧急" && tagsOf("工作", "日常", "D") === "紧急");
+  check("重命名：带这个标签的待办一起改，提示改了几条", renamed && (await m.toast()).includes("改名为「紧急」（2 条）"), {
+    A: tagsOf("工作", "需求", "A"),
+    D: tagsOf("工作", "日常", "D"),
+    toast: await m.toast(),
+  });
+  check("重命名不算修改，修改时间不变", t.meta("工作", "需求").find((x) => x.id === "A").updatedAt === updatedA);
+  // 选着「紧急」时改成已有的「工作」：合并，筛选里跟着改
+  await openPanel();
+  await toggle("紧急");
+  await m.clearToasts();
+  await tagMenu("紧急", "重命名");
+  await renameTo("工作");
+  const merged = await t.until(() => tagsOf("工作", "需求", "A") === "工作" && tagsOf("工作", "日常", "D") === "工作");
+  check("改成已有的名字就是合并（两个都有的只留一个）", merged && (await m.toast()).includes("合并到「工作」"), {
+    A: tagsOf("工作", "需求", "A"),
+    D: tagsOf("工作", "日常", "D"),
+    toast: await m.toast(),
+  });
+  check("筛选里选着的跟着改名", (await t.until(async () => (await bar()) === "筛选：标签 工作")) === true, await bar());
+  // 删除：先确认，写明几条
+  await tagMenu("工作", "删除");
+  const confirmText = await m.ev(`return (await waitFor(() => document.querySelector(".ant-modal-confirm")?.textContent)) ?? ""`);
+  check("删除前确认，写明会从几条待办上去掉", confirmText.includes("4 条待办") && confirmText.includes("待办本身不删除"), confirmText);
+  await m.ev(`button("删除", document.querySelector(".ant-modal-confirm")).click(); return 1`);
+  const removed = await t.until(() => !tagsOf("工作", "需求", "A") && !tagsOf("工作", "需求", "B") && !tagsOf("工作", "日常", "D") && !tagsOf("生活", "杂事", "E"));
+  check("确定后从这些待办上去掉（别的工作区里的也是），待办本身还在", removed && t.exists("工作/需求/A.md"), {
+    A: tagsOf("工作", "需求", "A"),
+    E: tagsOf("生活", "杂事", "E"),
+  });
+  check("筛选里选着的跟着去掉", await t.until(async () => !(await bar())));
 }

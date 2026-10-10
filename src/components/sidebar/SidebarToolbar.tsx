@@ -23,6 +23,7 @@ import type { SortKey, WorkspaceTree } from "../../types";
 import type { ListOptions } from "../../workspaceState";
 import type { Actions } from "../menus";
 import SettingsButton from "../SettingsButton";
+import type { TagActions } from "../workspaceActions";
 import FilterPanel from "./FilterPanel";
 import { anyVisibleProjectOpen, type Collapsed, type Selection, WS_KEY } from "./tree";
 import WorkspacePicker from "./WorkspacePicker";
@@ -60,6 +61,8 @@ export default function SidebarToolbar(props: {
   setCollapsed: (workspace: string, fn: (prev: Collapsed) => Collapsed) => void;
   /** 侧栏里这个工作区藏起来、筛掉的项目（和树里一样算），「全部折叠 / 全部展开」不看它们；用到时才算 */
   hiddenOf: (tree: WorkspaceTree) => ReadonlySet<string>;
+  /** 重命名、删除标签（筛选的弹出框里） */
+  tagActions: TagActions;
 }) {
   const { trees, sel, actions: a, searchRef, keyword, collapsedOf, setCollapsed } = props;
   const multi = trees.length > 1;
@@ -200,7 +203,7 @@ export default function SidebarToolbar(props: {
           arrow={false}
           // 关着时不渲染：里面要数全部待办的标签
           destroyOnHidden
-          content={<FilterPanel trees={trees} />}
+          content={<FilterPanel trees={trees} tagActions={props.tagActions} />}
         >
           <Tooltip title={filtering ? `筛选：${describeFilter(filter)}` : "按标签、优先级筛选"}>
             <Button

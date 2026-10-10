@@ -12,7 +12,8 @@ import {
   subProjectsOf,
   topProjects,
 } from "../projects";
-import { addTags, allTodos, countTags, removeTags } from "../tags";
+import { dropTagFromFilter, renameTagInFilter, setFilter } from "../filter";
+import { addTags, allTodos, cleanTag, countTags, MAX_TAG_CHARS, removeTags, sameTag } from "../tags";
 import { priorityText } from "../priority";
 import type { Priority, TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
@@ -103,6 +104,14 @@ export interface BatchActions {
   remove(items: TodoAt[]): void;
 }
 
+/** 标签本身的操作（侧栏「筛选」的弹出框里），作用于侧栏里显示的各工作区的全部待办 */
+export interface TagActions {
+  /** 改名（改成已有的就是合并） */
+  rename(tag: string): void;
+  /** 先确认，再从带它的待办上去掉 */
+  remove(tag: string): void;
+}
+
 /**
  * 工作区视图里所有可触发的操作（Actions，见 menus.tsx），侧栏、概览、编辑器共用。
  * actionsFor(ws) 每次渲染都是新的，用的是这次渲染的状态；stableActions(ws) 是不变的对象（每个工作区一个），
@@ -186,12 +195,15 @@ export function useWorkspaceActions(ctx: ActionContext) {
     }
   };
 
-  /** 选标签时下拉里列出的：侧栏里显示的工作区用过的标签，用得多的在前，后面写着几条 */
-  const tagOptions = (): TagOption[] =>
-    countTags(allTodos(workspaces.map(treeOf).filter((t) => t !== undefined))).map((c) => ({
-      name: c.name,
-      note: `${c.count} 条`,
-    }));
+  /** 侧栏里显示的工作区用过的标签和几条有，用得多的在前 */
+  const shownTags = () => countTags(allTodos(workspaces.map(treeOf).filter((t) => t !== undefined)));
+
+  /** 选标签时下拉里列出的：侧栏里显示的工作区用过的标签，后面写着几条 */
+  const tagOptions = (): TagOption[] => shownTags().map((c) => ({ name: c.name, note: `${c.count} 条` }));
+
+  /** 对话框里写明作用于哪些工作区 */
+  const shownWorkspaces = () =>
+    workspaces.length > 1 ? `侧栏里显示的 ${workspaces.length} 个工作区（${workspaces.join("、")}）` : `工作区「${workspaces[0]}」`;
 
   const confirmDelete = (title: string, content: string, onOk: () => Promise<void>) =>
     modal.confirm({
@@ -560,6 +572,44 @@ export function useWorkspaceActions(ctx: ActionContext) {
       }),
   };
 
+  const tags: TagActions = {
+    rename: (tag) =>
+      openDialog({
+        title: `重命名标签「${tag}」`,
+        label: `${shownWorkspaces()}里带这个标签的待办一起改；改成已有的标签就是合并到它`,
+        initial: tag,
+        maxLength: MAX_TAG_CHARS,
+        okText: "改名",
+        onSubmit: async (v) => {
+          const r = cleanTag(v);
+          if ("error" in r) throw new Error(r.error);
+          if (r.tag === tag) return;
+          const merging = shownTags().some((c) => sameTag(c.name, r.tag) && !sameTag(c.name, tag));
+          const n = await api.renameTag(workspaces, tag, r.tag);
+          setFilter((f) => renameTagInFilter(f, tag, r.tag));
+          await reload();
+          message.success(merging ? `已把「${tag}」合并到「${r.tag}」（${n} 条）` : `已把标签「${tag}」改名为「${r.tag}」（${n} 条）`);
+        },
+      }),
+    remove: (tag) => {
+      const count = shownTags().find((c) => sameTag(c.name, tag))?.count ?? 0;
+      modal.confirm({
+        title: `删除标签「${tag}」？`,
+        content: `将从${shownWorkspaces()}的 ${count} 条待办上去掉这个标签，待办本身不删除。`,
+        okText: "删除",
+        okButtonProps: { danger: true },
+        cancelText: "取消",
+        onOk: () =>
+          run(async () => {
+            const n = await api.removeTag(workspaces, tag);
+            setFilter((f) => dropTagFromFilter(f, tag));
+            await reload();
+            message.success(`已从 ${n} 条待办上删除标签「${tag}」`);
+          }),
+      });
+    },
+  };
+
   // 侧栏的行只在自己的内容变了时才重新渲染，传给它们的操作要是不变的对象：每个工作区一个，调用时转给最新的 actionsFor
   const actionsRef = useRef(actionsFor);
   useEffect(() => {
@@ -585,5 +635,5 @@ export function useWorkspaceActions(ctx: ActionContext) {
     };
   }, []);
 
-  return { actionsFor, stableActions, batch };
+  return { actionsFor, stableActions, batch, tags };
 }

@@ -1,4 +1,5 @@
-import { Button, Checkbox, Segmented } from "antd";
+import { DeleteOutlined, EditOutlined, MoreOutlined } from "@ant-design/icons";
+import { Button, Checkbox, Dropdown, Segmented } from "antd";
 import {
   clearFilter,
   countPriorities,
@@ -13,12 +14,14 @@ import { PRIORITIES } from "../../priority";
 import { allTodos, countTags, hasTag, sameTag, tagClass } from "../../tags";
 import type { WorkspaceTree } from "../../types";
 import { PriorityLabel } from "../TodoMarks";
+import type { TagActions } from "../workspaceActions";
 
 /**
  * 侧栏顶部「筛选」的弹出框：侧栏里显示的各工作区的待办用到的标签（带条数，多的在前）和各档优先级（带条数），都可以多选；
- * 标签之间「任一」还是「全部」可以切换。选着的标签没有待办用了时也列出来（0 条），可以取消
+ * 标签之间「任一」还是「全部」可以切换。选着的标签没有待办用了时也列出来（0 条），可以取消。
+ * 每个标签后面的「…」可以重命名、删除这个标签（作用于侧栏显示的各工作区）
  */
-export default function FilterPanel({ trees }: { trees: readonly WorkspaceTree[] }) {
+export default function FilterPanel({ trees, tagActions }: { trees: readonly WorkspaceTree[]; tagActions: TagActions }) {
   const filter = useTodoFilter();
   const todos = allTodos(trees);
   const used = countTags(todos);
@@ -50,6 +53,21 @@ export default function FilterPanel({ trees }: { trees: readonly WorkspaceTree[]
                 <span className={tagClass(t.name)}>{t.name}</span>
               </Checkbox>
               <span className="filter-count">{t.count}</span>
+              <Dropdown
+                trigger={["click"]}
+                placement="bottomRight"
+                menu={{
+                  items: [
+                    { key: "rename", icon: <EditOutlined />, label: "重命名" },
+                    { key: "delete", icon: <DeleteOutlined />, label: "删除", danger: true },
+                  ],
+                  onClick: ({ key }) => (key === "rename" ? tagActions.rename(t.name) : tagActions.remove(t.name)),
+                }}
+              >
+                <span className="filter-more" role="button" aria-label={`标签「${t.name}」的操作`} title="重命名、删除这个标签">
+                  <MoreOutlined />
+                </span>
+              </Dropdown>
             </div>
           ))}
         </div>
