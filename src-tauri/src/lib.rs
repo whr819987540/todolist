@@ -1,6 +1,7 @@
 mod autostart;
 mod backup;
 mod data_backup;
+mod export;
 mod settings;
 mod store;
 mod watch;
@@ -13,7 +14,7 @@ use serde::Serialize;
 use settings::{
     EditorBackground, FontArea, QuickTarget, Settings, SettingsStore, ShortcutAction, StartupView, Theme,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -1488,6 +1489,88 @@ fn auto_backup_once(app: &AppHandle) {
     let _ = app.emit_to("main", "auto-backup", ());
 }
 
+// ----- 导出成 HTML（export.rs） -----
+
+/// 这次运行期间导出过的文件：导出完的提示里「打开」「在文件夹中显示」只认这些
+#[derive(Default)]
+struct ExportedFiles(Mutex<HashSet<PathBuf>>);
+
+impl ExportedFiles {
+    fn add(&self, path: PathBuf) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(path);
+    }
+
+    fn check(&self, path: &str) -> Cmd<PathBuf> {
+        let path = PathBuf::from(path);
+        if self.0.lock().unwrap_or_else(|e| e.into_inner()).contains(&path) {
+            Ok(path)
+        } else {
+            Err("只能打开导出的文件".into())
+        }
+    }
+}
+
+/// 弹出「另存为」对话框选导出到哪里，返回路径；取消时返回 null。之后前端调 export_todos。
+/// 默认文件名是待办的标题（没有标题时正文开头）、项目名或工作区名；从 dir（上次导出到的目录，前端记在本机）打开，
+/// 没有或不在了时从「文档」打开
+#[tauri::command]
+async fn pick_export_target(
+    app: AppHandle,
+    window: WebviewWindow,
+    store: State<'_, Store>,
+    format: export::Format,
+    workspace: String,
+    project: Option<String>,
+    todo: Option<String>,
+    dir: Option<String>,
+) -> Cmd<Option<String>> {
+    let base = export::default_name(&store, &workspace, project.as_deref(), todo.as_deref());
+    let start = dir
+        .map(PathBuf::from)
+        .filter(|d| d.is_dir())
+        .or_else(|| app.path().document_dir().ok())
+        .or_else(|| app.path().home_dir().ok());
+    let mut dialog = window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("导出")
+        .add_filter(format.filter_name(), &[format.ext()])
+        .set_file_name(export::file_name(&base, format));
+    if let Some(dir) = start {
+        dialog = dialog.set_directory(dir);
+    }
+    let Some(path) = dialog.blocking_save_file() else { return Ok(None) };
+    let path = path.into_path().map_err(|e| format!("无法保存到这个位置：{e}"))?;
+    Ok(Some(export::with_extension(&path, format).to_string_lossy().into_owned()))
+}
+
+/// 按前端排好的顺序把待办导出到 request.path（在后台线程里做），返回存到的路径和导出了几条
+#[tauri::command]
+async fn export_todos(app: AppHandle, request: export::Request) -> Cmd<export::Exported> {
+    in_background(&app, move |app| {
+        let doc = export::collect(&app.state::<Store>(), &request)?;
+        let html = export::render(&doc, Local::now());
+        let path = export::with_extension(Path::new(&request.path), request.format);
+        store::atomic_write(&path, html.as_bytes()).map_err(|e| format!("保存导出的文件失败：{e}"))?;
+        app.state::<ExportedFiles>().add(path.clone());
+        Ok(export::Exported { path: path.to_string_lossy().into_owned(), count: doc.count() })
+    })
+    .await
+}
+
+/// 用默认程序打开导出的文件（导出完的提示里的「打开」）
+#[tauri::command]
+async fn open_exported(files: State<'_, ExportedFiles>, path: String) -> Cmd<()> {
+    open_with_default(&files.check(&path)?)
+}
+
+/// 在资源管理器中显示导出的文件
+#[tauri::command]
+async fn reveal_exported(files: State<'_, ExportedFiles>, path: String) -> Cmd<()> {
+    tauri_plugin_opener::reveal_item_in_dir(files.check(&path)?).map_err(|e| format!("无法打开资源管理器：{e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1532,6 +1615,7 @@ pub fn run() {
             app.manage(settings);
             app.manage(webdav);
             app.manage(BackupJobs::default());
+            app.manage(ExportedFiles::default());
             // 数据目录在外部变了（网盘同步、别的程序保存、在资源管理器里增删改名）时通知主窗口刷新。
             // 监听建不起来（数据目录在不支持变化通知的网络盘上等）时只在窗口获得焦点、F5 时刷新，不打扰用户
             let handle = app.handle().clone();
@@ -1655,6 +1739,10 @@ pub fn run() {
             set_auto_backup,
             pick_backup_dir,
             open_backup_dir,
+            pick_export_target,
+            export_todos,
+            open_exported,
+            reveal_exported,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
