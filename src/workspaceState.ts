@@ -1,8 +1,8 @@
 // 界面状态：
 // - 记在数据目录 .state.json 里、跟着数据走的：侧栏选中显示的工作区、上次停在哪里、每个工作区上次打开的待办、
-//   右侧标签页里打开着的待办、各待办的编辑位置和编辑模式；
+//   右侧标签页里打开着的待办（分屏时两边各自的）、各待办的编辑位置和编辑模式；
 // - 只记在本机 localStorage 里的：每个工作区的折叠状态、排序和隐藏已完成；
-// - 只在这次运行期间记在内存里的：各待办的撤销记录。
+// - 只在这次运行期间记在内存里的：各待办的撤销记录，分屏时各边各自的编辑位置。
 // 工作区在首页改名 / 删除时也要跟着更新（后退、前进的记录也在这时一起更新），所以放在这里供首页和工作区视图共用。
 
 import { api } from "./api";
@@ -12,7 +12,26 @@ import type { EditorMode } from "./editor/setup";
 import { registerFlusher } from "./hooks";
 import { mapPlaces } from "./navHistory";
 import { inProject, reparent } from "./projects";
-import { closeTabs, mapTabs, moveTab, type OpenTodo, openTab, type TodoRef } from "./tabs";
+import {
+  closeGroupTabs,
+  dropEmpty,
+  focusGroup,
+  keepGroupTab,
+  mapGroupTabs,
+  mergeGroups,
+  moveGroupTab,
+  moveTabToGroup,
+  type OpenTodo,
+  pinGroupTabs,
+  showGroupTab,
+  SINGLE_GROUP,
+  splitGroups,
+  type SplitDirection,
+  tabIndex,
+  type TabGroup,
+  type TabGroups,
+  type TodoRef,
+} from "./tabs";
 import type { SortKey } from "./types";
 
 /** .state.json 里各项的名字 */
@@ -20,6 +39,8 @@ const OPEN_KEY = "openWorkspaces";
 const LAST_VIEW_KEY = "lastView";
 const LAST_TODOS_KEY = "lastTodos";
 const TABS_KEY = "openTodos";
+/** 分屏时的另一组标签、方向、比例、各组正显示着的和哪一组有焦点；不分屏时没有这一项（第一组仍记在 openTodos） */
+const SPLIT_KEY = "editorSplit";
 const POSITIONS_KEY = "editPositions";
 const MODES_KEY = "editorModes";
 /** 以前记在 localStorage 里的几项（用的也是这些名字），第一次启动时搬进 .state.json */
@@ -206,67 +227,151 @@ export function writeLastTodo(workspace: string, project: string, id: string) {
   writeSaved(LAST_TODOS_KEY, { ...all, [workspace]: [project, id] });
 }
 
-// ----- 右侧标签页里打开着的待办（tabs.ts），按标签的顺序；下次打开软件还在 -----
+// ----- 右侧标签页里打开着的待办（tabs.ts），分屏时两组各自的，按标签的顺序；下次打开软件还在 -----
 
-/** 上次读出的标签：.state.json 里这一项没变时返回同一个数组（useSyncExternalStore 要求） */
-let tabsRead: { raw: unknown; list: readonly OpenTodo[] } = { raw: undefined, list: [] };
+/** 上次读出的标签组：.state.json 里这两项没变时返回同一个对象（useSyncExternalStore 要求） */
+let groupsRead: { raw: unknown; rawSplit: unknown; groups: TabGroups } | null = null;
 const tabListeners = new Set<() => void>();
-/** 正显示着的那个标签（新开的标签放在它后面）；只在这次运行期间记 */
-let activeTab: TodoRef | null = null;
-/** 改名、移动、删除（mapTodoState），标签变了，每次加一 */
+/** 改名、移动、删除（mapTodoState）、开关标签，标签变了，每次加一 */
 let generation = 0;
 
 const nonEmpty = (x: unknown): x is string => typeof x === "string" && !!x;
 
-/** 打开着的待办；认不出、重复的项去掉 */
-export function readOpenTodos(): readonly OpenTodo[] {
-  const raw = saved[TABS_KEY];
-  if (raw === tabsRead.raw) return tabsRead.list;
+/** 一组打开着的待办；认不出、重复的项去掉 */
+function parseTabs(raw: unknown): OpenTodo[] {
   const list: OpenTodo[] = [];
   for (const v of Array.isArray(raw) ? raw : []) {
     if (!isObject(v) || !nonEmpty(v.workspace) || !nonEmpty(v.project) || !nonEmpty(v.todoId)) continue;
     const t = { workspace: v.workspace, project: v.project, todoId: v.todoId, preview: v.preview === true };
-    if (!list.some((x) => x.workspace === t.workspace && x.project === t.project && x.todoId === t.todoId)) list.push(t);
+    if (tabIndex(list, t) < 0) list.push(t);
   }
-  tabsRead = { raw, list };
   return list;
 }
 
-/** 标签变了时回调，返回取消订阅的函数 */
-export function subscribeOpenTodos(fn: () => void): () => void {
+/** 一组正显示着的标签：要是这一组里的 */
+function parseCurrent(raw: unknown, tabs: readonly OpenTodo[]): TodoRef | null {
+  if (!isObject(raw) || !nonEmpty(raw.workspace) || !nonEmpty(raw.project) || !nonEmpty(raw.todoId)) return null;
+  const t = { workspace: raw.workspace, project: raw.project, todoId: raw.todoId };
+  return tabIndex(tabs, t) >= 0 ? t : null;
+}
+
+/**
+ * 第一组标签（openTodos 里写的样子）的校验值，记在 editorSplit 里：以前的版本只认得 openTodos，用它关过、改过标签（关掉、
+ * 改名、移动后跟过去）后两边对不上，这时 editorSplit 是以前的样子，不再用
+ */
+function tabsCheck(raw: unknown): string {
+  const text = JSON.stringify(raw ?? []);
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = (Math.imul(h, 33) ^ text.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/**
+ * 右侧的标签组（不分屏时只有一组）；认不出的项去掉，分屏的一组没有标签时当作不分屏，editorSplit 和 openTodos 对不上
+ * （以前的版本改过标签）时也当作不分屏。已经不在了的待办的标签由工作区加载完后的 pruneTodoTabs 关掉
+ */
+export function readEditorGroups(): TabGroups {
+  const raw = saved[TABS_KEY];
+  const rawSplit = saved[SPLIT_KEY];
+  if (groupsRead && raw === groupsRead.raw && rawSplit === groupsRead.rawSplit) return groupsRead.groups;
+  const first = parseTabs(raw);
+  let groups: TabGroups = { ...SINGLE_GROUP, groups: [{ id: "a", tabs: first, current: null }] };
+  if (isObject(rawSplit) && rawSplit.check === tabsCheck(raw)) {
+    const second = parseTabs(rawSplit.tabs);
+    const currents = Array.isArray(rawSplit.current) ? rawSplit.current : [];
+    const ratio = typeof rawSplit.ratio === "number" && rawSplit.ratio > 0 && rawSplit.ratio < 1 ? rawSplit.ratio : 0.5;
+    groups = dropEmpty({
+      groups: [
+        { id: "a", tabs: first, current: parseCurrent(currents[0], first) },
+        { id: "b", tabs: second, current: parseCurrent(currents[1], second) },
+      ],
+      direction: rawSplit.direction === "column" ? "column" : "row",
+      ratio,
+      focused: rawSplit.focused === 1 ? 1 : 0,
+    });
+  }
+  groupsRead = { raw, rawSplit, groups };
+  return groups;
+}
+
+/** 标签组变了时回调，返回取消订阅的函数 */
+export function subscribeEditorGroups(fn: () => void): () => void {
   tabListeners.add(fn);
   return () => {
     tabListeners.delete(fn);
   };
 }
 
-function writeOpenTodos(list: readonly OpenTodo[]) {
-  if (list === readOpenTodos()) return;
-  generation++;
-  // 预览标签才写 preview，固定的省掉
-  writeSaved(
-    TABS_KEY,
-    list.map(({ workspace, project, todoId, preview }) => ({ workspace, project, todoId, ...(preview && { preview }) })),
-  );
+/** 预览标签才写 preview，固定的省掉 */
+const plainTabs = (list: readonly OpenTodo[]) =>
+  list.map(({ workspace, project, todoId, preview }) => ({ workspace, project, todoId, ...(preview && { preview }) }));
+const plainRef = (t: TodoRef | null) => t && { workspace: t.workspace, project: t.project, todoId: t.todoId };
+
+function writeGroups(next: TabGroups) {
+  const cur = readEditorGroups();
+  if (next === cur) return;
+  const tabsChanged = next.groups.length !== cur.groups.length || next.groups.some((x, i) => x.tabs !== cur.groups[i]?.tabs);
+  if (tabsChanged) generation++;
+  // 消失了的一组：不再记它各自的编辑位置
+  for (const old of cur.groups) if (!next.groups.some((x) => x.id === old.id)) forgetGroupPositions(old.id);
+  const first = plainTabs(next.groups[0].tabs);
+  writeSaved(TABS_KEY, first);
+  const split =
+    next.groups.length > 1
+      ? {
+          check: tabsCheck(first),
+          direction: next.direction,
+          ratio: Math.round(next.ratio * 1000) / 1000,
+          focused: next.focused,
+          tabs: plainTabs(next.groups[1].tabs),
+          current: next.groups.map((x: TabGroup) => plainRef(x.current)),
+        }
+      : undefined;
+  writeSaved(SPLIT_KEY, split);
+  groupsRead = { raw: saved[TABS_KEY], rawSplit: saved[SPLIT_KEY], groups: next };
   for (const fn of [...tabListeners]) fn();
 }
 
-/** 右侧显示了这条待办：还没有标签的放进预览标签，已经有的不动；记下它是正显示着的标签 */
-export function showTodoTab(todo: TodoRef) {
-  writeOpenTodos(openTab(readOpenTodos(), todo, false, activeTab));
-  activeTab = todo;
-}
+const updateGroups = (fn: (g: TabGroups) => TabGroups) => writeGroups(fn(readEditorGroups()));
 
-/** 这条待办的标签固定下来（新建的、修改过的、双击打开的）；还没有标签的新开一个 */
-export function keepTodoTab(todo: TodoRef) {
-  writeOpenTodos(openTab(readOpenTodos(), todo, true, activeTab));
-}
+/** 右侧在有焦点的一组里显示了这条待办：还没有标签的放进这一组的预览标签，已经有的不动；记下它是这一组正显示着的 */
+export const showTodoTab = (todo: TodoRef) => updateGroups((g) => showGroupTab(g, todo));
 
-export const closeTodoTabs = (closing: readonly TodoRef[]) => writeOpenTodos(closeTabs(readOpenTodos(), closing));
+/** 这条待办在第 at 组（默认有焦点的一组）的标签固定下来（新建的、双击打开的）；还没有标签的新开一个 */
+export const keepTodoTab = (todo: TodoRef, at?: number) => updateGroups((g) => keepGroupTab(g, todo, at ?? g.focused));
 
-/** 拖动标签：moving 挪到 target 的前面 / 后面 */
-export const moveTodoTab = (moving: TodoRef, target: TodoRef, place: "before" | "after") =>
-  writeOpenTodos(moveTab(readOpenTodos(), moving, target, place));
+/** 修改了这条待办：它在各组的预览标签都固定下来 */
+export const pinTodoTabs = (todo: TodoRef) => updateGroups((g) => pinGroupTabs(g, todo));
+
+/** 关掉第 at 组里的这些标签；分屏时一组的标签都关掉了，这一组消失 */
+export const closeTodoTabs = (at: number, closing: readonly TodoRef[]) => updateGroups((g) => closeGroupTabs(g, at, closing));
+
+/** 拖动标签：第 at 组里 moving 挪到 target 的前面 / 后面 */
+export const moveTodoTab = (at: number, moving: TodoRef, target: TodoRef, place: "before" | "after") =>
+  updateGroups((g) => moveGroupTab(g, at, moving, target, place));
+
+/** 把标签从第 from 组拖到第 to 组（见 tabs.ts 的 moveTabToGroup） */
+export const moveTodoTabToGroup = (
+  from: number,
+  moving: TodoRef,
+  to: number,
+  target: TodoRef | null,
+  place: "before" | "after",
+) => updateGroups((g) => moveTabToGroup(g, from, moving, to, target, place));
+
+/** 分屏的快捷键（见 tabs.ts 的 splitGroups） */
+export const splitEditor = (direction: SplitDirection, todo: TodoRef | null, otherShown: boolean) =>
+  updateGroups((g) => splitGroups(g, direction, todo, otherShown));
+
+/** 合并回一边 */
+export const mergeEditorGroups = () => updateGroups(mergeGroups);
+
+/** 焦点到第 at 组 */
+export const focusEditorGroup = (at: number) => updateGroups((g) => focusGroup(g, at));
+
+/** 拖动两组中间的分隔条：第一组占的比例 */
+export const setEditorSplitRatio = (ratio: number) =>
+  updateGroups((g) => (Math.abs(g.ratio - ratio) < 0.0005 ? g : { ...g, ratio }));
 
 /**
  * 读数据之前记下 stateGeneration()，读完时变了的话，读到的可能还是改名、移动之前的样子，或者不含刚新建、开了标签的待办，
@@ -275,10 +380,8 @@ export const moveTodoTab = (moving: TodoRef, target: TodoRef, place: "before" | 
 export const stateGeneration = () => generation;
 
 /** 工作区刷新后，关掉其中已经不在了的待办（在外部被删除等）的标签 */
-export function pruneTodoTabs(workspace: string, exists: (project: string, id: string) => boolean) {
-  const list = readOpenTodos();
-  writeOpenTodos(closeTabs(list, list.filter((t) => t.workspace === workspace && !exists(t.project, t.todoId))));
-}
+export const pruneTodoTabs = (workspace: string, exists: (project: string, id: string) => boolean) =>
+  updateGroups((g) => mapGroupTabs(g, (k) => (k[0] === workspace && !exists(k[1], k[2]) ? null : k)));
 
 // ----- 各待办的编辑位置、编辑模式：按 [工作区, 项目, 待办 id] 记，最近记的排在最后 -----
 
@@ -326,6 +429,35 @@ export function readEditPosition(workspace: string, project: string, id: string)
 
 export const writeEditPosition = (workspace: string, project: string, id: string, p: EditPosition) =>
   writePerTodo(POSITIONS_KEY, todoKey(workspace, project, id), p);
+
+/**
+ * 分屏时各组各自的编辑位置：同一条待办两边都开着时，一边切走再切回来回到这一边原来的位置。只在这次运行期间记，
+ * todoKey → 组的编号 → 位置，最近记的排在最后；.state.json 里按待办记的是最后动过的那一边的
+ */
+const groupPositions = new Map<string, Map<string, EditPosition>>();
+
+/** 第 group 组上次在这条待办里的编辑位置；这一组还没打开过它时用按待办记的 */
+export function readGroupEditPosition(group: string, workspace: string, project: string, id: string): EditPosition | null {
+  return groupPositions.get(todoKey(workspace, project, id))?.get(group) ?? readEditPosition(workspace, project, id);
+}
+
+/**
+ * 记下第 group 组在这条待办里的编辑位置（同时记成这条待办的）。这一组已经消失了（合并回一边、标签都关掉了：它的编辑器
+ * 在这之后才卸载、才来记）时不再记它的，免得以后新分出的同编号的一组用上这个旧的
+ */
+export function writeGroupEditPosition(group: string, workspace: string, project: string, id: string, p: EditPosition) {
+  writeEditPosition(workspace, project, id, p);
+  if (!readEditorGroups().groups.some((g) => g.id === group)) return;
+  const key = todoKey(workspace, project, id);
+  const m = groupPositions.get(key) ?? new Map<string, EditPosition>();
+  groupPositions.delete(key);
+  groupPositions.set(key, m.set(group, p));
+  for (const k of [...groupPositions.keys()].slice(0, groupPositions.size - MAX_PER_TODO)) groupPositions.delete(k);
+}
+
+function forgetGroupPositions(group: string) {
+  for (const [k, m] of [...groupPositions]) if (m.delete(group) && !m.size) groupPositions.delete(k);
+}
 
 const isMode = (m: unknown): m is EditorMode => m === "live" || m === "source";
 
@@ -375,8 +507,8 @@ export function takeUndo(workspace: string, project: string, id: string, doc: st
 }
 
 /**
- * 改名、移动、删除之后，记住的编辑位置、编辑模式、各工作区上次打开的待办、标签、撤销记录和后退、前进的记录跟过去；
- * fn 返回 null 的删掉
+ * 改名、移动、删除之后，记住的编辑位置（包括各组各自的）、编辑模式、各工作区上次打开的待办、标签、撤销记录和后退、前进的
+ * 记录跟过去；fn 返回 null 的删掉
  */
 function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
   generation++;
@@ -407,17 +539,14 @@ function mapTodoState(fn: (key: TodoKey) => TodoKey | null) {
     if (self && to && to[0] === self[0]) last[to[0]] = [to[1], to[2]];
   }
   writeSaved(LAST_TODOS_KEY, last);
-  writeOpenTodos(mapTabs(readOpenTodos(), fn));
-  if (activeTab) {
-    const to = fn([activeTab.workspace, activeTab.project, activeTab.todoId]);
-    activeTab = to && { workspace: to[0], project: to[1], todoId: to[2] };
-  }
-  for (const [k, snap] of [...undos]) {
-    const nk = move(k);
-    if (nk === k) continue;
-    undos.delete(k);
-    if (nk) undos.set(nk, snap);
-  }
+  updateGroups((g) => mapGroupTabs(g, fn));
+  for (const memory of [undos, groupPositions] as Map<string, unknown>[])
+    for (const [k, v] of [...memory]) {
+      const nk = move(k);
+      if (nk === k) continue;
+      memory.delete(k);
+      if (nk) memory.set(nk, v);
+    }
   mapPlaces(fn);
 }
 

@@ -200,7 +200,8 @@ describe("各工作区上次打开的待办", () => {
 
 describe("右侧标签页里打开着的待办", () => {
   const tab = (workspace: string, project: string, todoId: string) => ({ workspace, project, todoId });
-  const ids = () => state.readOpenTodos().map((t) => `${t.workspace}/${t.project}/${t.todoId}${t.preview ? "（预览）" : ""}`);
+  const ids = (at = 0) =>
+    state.readEditorGroups().groups[at].tabs.map((t) => `${t.workspace}/${t.project}/${t.todoId}${t.preview ? "（预览）" : ""}`);
 
   it("显示一条待办时放进预览标签，固定下来后再显示别的待办另开一个预览标签", () => {
     state.showTodoTab(tab("工作", "需求", "a"));
@@ -212,12 +213,12 @@ describe("右侧标签页里打开着的待办", () => {
 
   it("变了时通知订阅者；没变时读到的是同一个数组", () => {
     let calls = 0;
-    const off = state.subscribeOpenTodos(() => calls++);
+    const off = state.subscribeEditorGroups(() => calls++);
     state.keepTodoTab(tab("工作", "需求", "a"));
-    const before = state.readOpenTodos();
+    const before = state.readEditorGroups();
     state.keepTodoTab(tab("工作", "需求", "a"));
     expect(calls).toBe(1);
-    expect(state.readOpenTodos()).toBe(before);
+    expect(state.readEditorGroups()).toBe(before);
     off();
   });
 
@@ -250,7 +251,7 @@ describe("右侧标签页里打开着的待办", () => {
     vi.mocked(api.readUiState).mockResolvedValueOnce(written!);
     const again: State = await import("./workspaceState");
     await again.loadUiState();
-    expect(again.readOpenTodos().map((t) => [t.todoId, t.preview])).toEqual([
+    expect(again.readEditorGroups().groups[0].tabs.map((t) => [t.todoId, t.preview])).toEqual([
       ["a", false],
       ["b", true],
     ]);
@@ -271,7 +272,7 @@ describe("右侧标签页里打开着的待办", () => {
     );
     const again: State = await import("./workspaceState");
     await again.loadUiState();
-    expect(again.readOpenTodos()).toEqual([{ workspace: "工作", project: "需求", todoId: "a", preview: false }]);
+    expect(again.readEditorGroups().groups[0].tabs).toEqual([{ workspace: "工作", project: "需求", todoId: "a", preview: false }]);
   });
 
   it("刷新后关掉已经不在了的待办的标签，别的工作区的不动", () => {
@@ -280,6 +281,151 @@ describe("右侧标签页里打开着的待办", () => {
     state.keepTodoTab(tab("生活", "杂事", "gone"));
     state.pruneTodoTabs("工作", (_project, id) => id !== "gone");
     expect(ids()).toEqual(["工作/需求/a", "生活/杂事/gone"]);
+  });
+});
+
+describe("右侧分屏", () => {
+  const tab = (workspace: string, project: string, todoId: string) => ({ workspace, project, todoId });
+  const ids = (at: number) => state.readEditorGroups().groups[at]?.tabs.map((t) => t.todoId).join(" ");
+  const lastWritten = async () => {
+    const { api } = await import("./api");
+    await (await import("./hooks")).flushAll();
+    const calls = vi.mocked(api.writeUiState).mock.calls;
+    return calls[calls.length - 1]![0];
+  };
+
+  it("分屏的方向、比例、两边的标签、各自正显示着的和哪一边有焦点记在 .state.json，下次打开软件还在", async () => {
+    const { api } = await import("./api");
+    state.showTodoTab(tab("工作", "需求", "a"));
+    state.splitEditor("column", tab("工作", "需求", "a"), true);
+    state.showTodoTab(tab("工作", "需求", "b"));
+    state.setEditorSplitRatio(0.3);
+    state.focusEditorGroup(0);
+    const written = await lastWritten();
+    const saved = JSON.parse(written);
+    // 第一组仍记在 openTodos（以前的版本也认得）
+    expect(saved.openTodos).toEqual([{ workspace: "工作", project: "需求", todoId: "a", preview: true }]);
+    expect(saved.editorSplit).toMatchObject({ direction: "column", ratio: 0.3, focused: 0 });
+
+    vi.resetModules();
+    vi.mocked(api.readUiState).mockResolvedValueOnce(written);
+    const again: State = await import("./workspaceState");
+    await again.loadUiState();
+    const g = again.readEditorGroups();
+    expect(g.groups.map((x) => [x.tabs.map((t) => t.todoId).join(" "), x.current?.todoId])).toEqual([
+      ["a", "a"],
+      ["a b", "b"],
+    ]);
+    expect([g.direction, g.ratio, g.focused]).toEqual(["column", 0.3, 0]);
+  });
+
+  it("用以前的版本（只认得 openTodos）改过标签后再打开：不再恢复分屏的另一边；没改过的照常恢复", async () => {
+    const { api } = await import("./api");
+    state.showTodoTab(tab("工作", "需求", "a"));
+    state.splitEditor("row", tab("工作", "需求", "a"), true);
+    state.keepTodoTab(tab("工作", "需求", "b"));
+    const written = JSON.parse(await lastWritten());
+    expect(written.editorSplit).toBeDefined();
+
+    // 以前的版本关掉了第一组的标签，editorSplit 原样留着
+    const old = { ...written, openTodos: [] };
+    vi.resetModules();
+    vi.mocked(api.readUiState).mockResolvedValueOnce(JSON.stringify(old));
+    let again: State = await import("./workspaceState");
+    await again.loadUiState();
+    expect(again.readEditorGroups().groups).toHaveLength(1);
+    expect(again.readEditorGroups().focused).toBe(0);
+
+    // 以前的版本没动标签（只改了别的）：照常恢复
+    vi.resetModules();
+    vi.mocked(api.readUiState).mockResolvedValueOnce(JSON.stringify({ ...written, lastView: null }));
+    again = await import("./workspaceState");
+    await again.loadUiState();
+    expect(again.readEditorGroups().groups.map((g) => g.tabs.map((t) => t.todoId).join(" "))).toEqual(["a", "a b"]);
+  });
+
+  it("合并回一边后不再记分屏", async () => {
+    state.showTodoTab(tab("工作", "需求", "a"));
+    state.splitEditor("row", tab("工作", "需求", "a"), true);
+    state.splitEditor("row", tab("工作", "需求", "a"), true);
+    expect(state.readEditorGroups().groups).toHaveLength(1);
+    expect(JSON.parse(await lastWritten()).editorSplit).toBeUndefined();
+  });
+
+  it("文件里分屏的一边没有（认得出的）标签时当作不分屏", async () => {
+    const { api } = await import("./api");
+    vi.resetModules();
+    vi.mocked(api.readUiState).mockResolvedValueOnce(
+      JSON.stringify({
+        openTodos: [{ workspace: "工作", project: "需求", todoId: "a" }],
+        editorSplit: { direction: "row", ratio: 7, tabs: ["乱写的"], focused: 1 },
+      }),
+    );
+    const again: State = await import("./workspaceState");
+    await again.loadUiState();
+    const g = again.readEditorGroups();
+    expect(g.groups).toHaveLength(1);
+    expect(g.focused).toBe(0);
+  });
+
+  it("改名、移动后两边的标签都跟着走，删除后关掉，一边的都没了时这一边消失", () => {
+    state.keepTodoTab(tab("工作", "需求", "a"));
+    state.splitEditor("row", tab("工作", "需求", "a"), true);
+    state.keepTodoTab(tab("工作", "日常", "c"));
+    state.renameProjectState("工作", "需求", "需求池");
+    expect(state.readEditorGroups().groups.map((x) => x.tabs.map((t) => t.project).join(" "))).toEqual(["需求池", "需求池 日常"]);
+    state.forgetTodoState("工作", "需求池", "a");
+    expect(ids(0)).toBe("c");
+    expect(state.readEditorGroups().groups).toHaveLength(1);
+  });
+
+  it("刷新后关掉两边已经不在了的待办", () => {
+    state.keepTodoTab(tab("工作", "需求", "a"));
+    state.splitEditor("row", tab("工作", "需求", "a"), true);
+    state.keepTodoTab(tab("工作", "需求", "gone"));
+    state.pruneTodoTabs("工作", (_p, id) => id !== "gone");
+    expect([ids(0), ids(1)]).toEqual(["a", "a"]);
+  });
+
+  it("编辑位置各边各记：同一条待办两边都开着，一边切走再切回来回到这一边的位置；没打开过的一边用最后动过的", () => {
+    state.writeGroupEditPosition("a", "工作", "需求", "x", position(3));
+    state.writeGroupEditPosition("b", "工作", "需求", "x", position(9));
+    expect(state.readGroupEditPosition("a", "工作", "需求", "x")?.cursor.pos).toBe(3);
+    expect(state.readGroupEditPosition("b", "工作", "需求", "x")?.cursor.pos).toBe(9);
+    // .state.json 里记的是最后动过的那一边的，下次打开（或另一边第一次打开）用它
+    expect(state.readEditPosition("工作", "需求", "x")?.cursor.pos).toBe(9);
+    expect(state.readGroupEditPosition("c", "工作", "需求", "x")?.cursor.pos).toBe(9);
+  });
+
+  it("各边各自的编辑位置跟着改名走；一边消失后不再记它的", () => {
+    state.keepTodoTab(tab("工作", "需求", "x"));
+    state.splitEditor("row", tab("工作", "需求", "x"), true);
+    const [a, b] = state.readEditorGroups().groups.map((g) => g.id);
+    state.writeGroupEditPosition(a, "工作", "需求", "x", position(3));
+    state.writeGroupEditPosition(b, "工作", "需求", "x", position(9));
+    state.renameWorkspaceState("工作", "公司");
+    expect(state.readGroupEditPosition(a, "公司", "需求", "x")?.cursor.pos).toBe(3);
+    state.closeTodoTabs(1, [tab("公司", "需求", "x")]);
+    expect(state.readEditorGroups().groups).toHaveLength(1);
+    expect(state.readGroupEditPosition(b, "公司", "需求", "x")?.cursor.pos).toBe(9);
+    state.writeGroupEditPosition(a, "公司", "需求", "x", position(4));
+    expect(state.readGroupEditPosition(b, "公司", "需求", "x")?.cursor.pos).toBe(4);
+  });
+
+  it("一边消失后它的编辑器才卸载、才来记位置：不再记成那一边的，再分出来的一边用最后动过的", () => {
+    const x = tab("工作", "需求", "x");
+    state.keepTodoTab(x);
+    state.splitEditor("row", x, true);
+    const [a, b] = state.readEditorGroups().groups.map((g) => g.id);
+    state.closeTodoTabs(1, [x]);
+    // 消失了的 b 卸载时记下的旧位置
+    state.writeGroupEditPosition(b, "工作", "需求", "x", position(9));
+    // 留下的 a 接着动
+    state.writeGroupEditPosition(a, "工作", "需求", "x", position(4));
+    state.splitEditor("row", x, true);
+    const fresh = state.readEditorGroups().groups[1].id;
+    expect(fresh).toBe(b);
+    expect(state.readGroupEditPosition(fresh, "工作", "需求", "x")?.cursor.pos).toBe(4);
   });
 });
 

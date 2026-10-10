@@ -19,13 +19,13 @@ import {
   listOptionsKey,
   moveTodoTab,
   pruneTodoTabs,
+  readEditorGroups,
   readJson,
   readListOptions,
-  readOpenTodos,
   readOpenWorkspaces,
   showTodoTab,
   stateGeneration,
-  subscribeOpenTodos,
+  subscribeEditorGroups,
   writeJson,
   writeLastTodo,
   writeLastView,
@@ -176,7 +176,9 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   // 点标签切到的待办（selKey）：正文加载出来后焦点放进正文，接着上次的光标编辑
   const [focusBodyKey, setFocusBodyKey] = useState<string | null>(null);
   // 右侧标签页里打开着的待办（全部工作区的，按顺序）
-  const openTodos = useSyncExternalStore(subscribeOpenTodos, readOpenTodos);
+  const editorGroups = useSyncExternalStore(subscribeEditorGroups, readEditorGroups);
+  const group = editorGroups.focused;
+  const openTodos = editorGroups.groups[group].tabs;
   // 正显示着的待办有没存好的修改（切走时总会存盘，别的标签不会有）
   const [activeDirty, setActiveDirty] = useState(false);
   // 用键盘在左侧列表里移到的选中项：这时焦点留在列表，右侧不自动聚焦输入框
@@ -492,7 +494,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const closeTabs = (closing: readonly TodoRef[]) => {
     if (!closing.length) return;
     const next = activeAfterClose(shownTabs, closing, activeTodo);
-    closeTodoTabs(closing);
+    closeTodoTabs(group, closing);
     if (next === undefined || !activeTodo) return;
     if (next) activateTab(next);
     else setSel({ workspace: activeTodo.workspace, project: activeTodo.project });
@@ -841,8 +843,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
             activeDirty={activeDirty}
             onActivate={activateTab}
             onClose={closeTabs}
-            onKeep={keepTodoTab}
-            onMove={moveTodoTab}
+            onKeep={(t) => keepTodoTab(t, group)}
+            onMove={(moving, target, place) => moveTodoTab(group, moving, target, place)}
           />
         )}
         {main}
