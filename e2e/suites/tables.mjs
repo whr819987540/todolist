@@ -40,12 +40,12 @@ export default async function (t) {
   await blur();
   check("光标不在表格里时显示成渲染后的表格；列表里的显示原文", (await tables()) === 2, await tables());
   const first = await m.ev(`const t = document.querySelector(".cm-md-table");
-    const th = t.querySelector("th"); const row = t.querySelectorAll("tbody tr")[0].querySelectorAll("td");
+    const th = t.querySelector("th"); const cells = t.querySelectorAll("tbody tr")[0].querySelectorAll("td");
     return {
       head: [...t.querySelectorAll("th")].map((e) => e.textContent),
       weight: Number(getComputedStyle(th).fontWeight),
-      align: [...row].map((e) => getComputedStyle(e).textAlign),
-      strong: row[0].querySelector("strong")?.textContent, code: row[2].querySelector("code")?.textContent,
+      align: [...cells].map((e) => getComputedStyle(e).textAlign),
+      strong: cells[0].querySelector("strong")?.textContent, code: cells[2].querySelector("code")?.textContent,
       link: t.querySelector("a")?.textContent, del: t.querySelector("del")?.textContent,
     }`);
   check("表头加粗", first.head.join(",") === "姓名,年龄,备注" && first.weight >= 600, first);
