@@ -111,6 +111,19 @@ const theme = EditorView.theme({
   },
   // 从资源管理器拖进图片时，放下的位置
   ".cm-drop-caret": { borderLeft: "2px solid var(--c-primary)", marginLeft: "-1px" },
+  // 表格（tables.ts）：很宽时在编辑区里横着滚动，不撑破编辑区
+  ".cm-md-table-wrap": { overflowX: "auto", maxWidth: "100%", padding: "6px 0 8px" },
+  ".cm-md-table": { borderCollapse: "collapse", lineHeight: "1.6" },
+  ".cm-md-table th, .cm-md-table td": {
+    border: "1px solid var(--c-border-strong)",
+    padding: "4px 12px",
+    minWidth: "3em",
+    verticalAlign: "top",
+    cursor: "text",
+  },
+  ".cm-md-table th": { fontWeight: "600", backgroundColor: "var(--c-hover)" },
+  ".cm-md-table tbody tr:nth-child(even)": { backgroundColor: "var(--c-fill)" },
+  ".cm-md-table a": { color: "var(--c-primary)" },
 });
 
 const lineDecos = new Map<string, Decoration>();

@@ -12,7 +12,8 @@ import { ImageWidget } from "./images";
 import { linkTarget } from "./links";
 
 // 实时渲染（类似 Typora / Obsidian）：正文始终是原样的 Markdown 文本，只是把 **、#、> 这类标记藏起来，
-// 列表符号、任务框、分隔线、图片换成对应的样子。光标（或选区）碰到的元素显示原文，方便修改（图片按行：光标在那一行时显示原文）。
+// 列表符号、任务框、分隔线、图片换成对应的样子（表格在 tables.ts）。光标（或选区）碰到的元素显示原文，方便修改
+// （图片按行：光标在那一行时显示原文）。
 // 只改显示，不改文本，所以切换模式、保存都不会动文件里的写法。
 
 const BULLETS = ["•", "◦", "▪"];
@@ -224,6 +225,10 @@ function buildPreview(view: EditorView, sel: readonly SelectionRange[] | null): 
           case "HorizontalRule":
             if (!touchesLines(node.from, node.to)) out.push(rule.range(node.from, node.to));
             return;
+
+          case "Table":
+            // 表格整个由 tables.ts 换成渲染后的表格；光标在表格里时整个显示原文，里面的标记也不藏
+            return false;
 
           case "FencedCode": {
             // 光标不在代码块里时藏起 ``` 两行的内容，行本身留作代码块的上下留白

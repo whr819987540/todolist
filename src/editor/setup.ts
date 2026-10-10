@@ -13,6 +13,7 @@ import { ctrlClickLinks } from "./links";
 import { livePreview } from "./livePreview";
 import { trackReadingPos } from "./outline";
 import { type EditPosition, trackPosition } from "./position";
+import { tablePreview } from "./tables";
 
 /** live：实时渲染（隐藏标记，光标处显示原文）；source：源码模式（显示全部标记，只做语法高亮） */
 export type EditorMode = "live" | "source";
@@ -41,7 +42,7 @@ export interface EditorOptions {
 const modeConf = new Compartment();
 const readOnlyConf = new Compartment();
 
-const modeExtension = (mode: EditorMode) => (mode === "live" ? livePreview : []);
+const modeExtension = (mode: EditorMode) => (mode === "live" ? [livePreview, tablePreview] : []);
 
 export const setMode = (mode: EditorMode) => modeConf.reconfigure(modeExtension(mode));
 export const setReadOnly = (readOnly: boolean) => readOnlyConf.reconfigure(EditorState.readOnly.of(readOnly));

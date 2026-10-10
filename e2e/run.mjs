@@ -31,6 +31,7 @@ const SUITES = [
   "conflict",
   "watch",
   "images",
+  "tables",
   "regress",
 ];
 
