@@ -14,7 +14,7 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import { compactPath, isSubProject, parentOf, PROJECT_SEP, projectLabel, projectMoveProblem } from "../projects";
+import { compactPath, parentOf, PROJECT_SEP, projectLabel, projectMoveProblem } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import type { BatchActions } from "./workspaceActions";
@@ -35,7 +35,7 @@ export interface Actions {
   newSubProject(parent: string): void;
   renameProject(project: string): void;
   deleteProject(project: string): void;
-  /** 连同其中的待办（和子项目）移到工作区 targetWorkspace 的顶层，或放进那里的顶层项目 targetParent 成为子项目 */
+  /** 连同其中的待办（和各级子项目）移到工作区 targetWorkspace 的顶层，或放进那里的项目 targetParent（可以是子项目）成为它的子项目 */
   moveProject(project: string, targetWorkspace: string, targetParent?: string): void;
   openProjectFolder(project: string): void;
 
@@ -176,20 +176,19 @@ function moveItems(project: string, targets: readonly MoveTarget[]): NonNullable
 const PROJECT_MOVE_PREFIX = "move-project:";
 
 /**
- * 项目的「移动到」的子菜单：放进别的顶层项目成为子项目，或移到工作区的顶层（子项目移出来、移到别的工作区）。
- * 只显示一个工作区时直接列出；同时显示了几个工作区时按工作区分组（所在的工作区排第一，标上「当前」）。
- * 已经在那里的、放不进去的（它自己、子项目里，有子项目的项目放进别的项目）不列；那里已有同名的列出来但不能点
+ * 项目的「移动到」的子菜单：放进别的项目（哪一级的子项目都行，写成路径）成为它的子项目，或移到工作区的顶层（子项目移出来、
+ * 移到别的工作区）。只显示一个工作区时直接列出；同时显示了几个工作区时按工作区分组（所在的工作区排第一，标上「当前」）。
+ * 已经在那里的、放不进去的（它自己和它自己的子项目）不列；那里已有同名的列出来但不能点
  */
 function projectMoveItems(project: string, targets: readonly MoveTarget[]): NonNullable<MenuProps["items"]> {
   const [own, ...others] = targets;
   if (!own) return [];
-  const from = own.projects.map((name) => ({ name }));
   const parentNow = parentOf(project);
   const choices = (t: MoveTarget) => {
-    const to = t.projects.map((name) => ({ name }));
-    const places = [undefined, ...t.projects.filter((p) => !isSubProject(p))];
+    const places = [undefined, ...t.projects];
     return places.flatMap((parent) => {
-      const problem = projectMoveProblem({ project, from, to, sameWorkspace: t === own, parent });
+      // 同一个数组，projectMoveProblem 只在第一次扫一遍全部项目
+      const problem = projectMoveProblem({ project, to: t.projects, sameWorkspace: t === own, parent });
       if (problem && problem.code !== "taken") return [];
       const top = t === own && parentNow !== undefined ? `顶层（移出「${compactPath(parentNow.split(PROJECT_SEP))}」）` : "顶层";
       const suffix = problem ? "（已有同名的）" : "";

@@ -1,8 +1,8 @@
 // 子项目：项目下可以建子项目，子项目里还能再建（层数不限），存成项目文件夹里的子文件夹；侧栏里每多一级缩进一级、
 // 列在父项目下面、它自己的待办前面，展开着的项目下面有竖线；父项目的统计包括各级子项目；编辑区上方、标签写成
 // 「父项目 / 子项目 / …」，每一级都能点；键盘 ← 回到上一级；父项目改名后下面各级跟着；隐藏全部完成的项目时全部完成的
-// 子项目单独藏；删除、撤销；用户在项目文件夹里建的文件夹也是子项目；拖动项目放进别的项目、有子项目的放不进去，
-// 右键「移动到」把子项目移出来；首页搜索
+// 子项目单独藏；删除、撤销；用户在项目文件夹里建的文件夹也是子项目；拖动项目放进别的项目（有子项目的也行，深处的子项目
+// 也行，它自己的子项目不行），右键「移动到」放进深处的子项目、移出来；层级多时的显示；路径太长时提示；首页搜索
 import { mkdirSync, writeFileSync } from "node:fs";
 
 export const title = "子项目";
@@ -246,19 +246,41 @@ export default async function (t) {
     { confirm, gone },
   );
 
-  // 拖动项目放进别的项目：有子项目的（「日常」里有「外部建的」）放不进去
+  // 拖动项目放进别的项目：有子项目的（「日常」里有「外部建的」）也行，可以放进深处的子项目里，下面各级跟着
   const ghostHint = () => m.ev(`return document.querySelector(".drag-ghost-hint")?.textContent ?? ""`);
   const dropState = (sel) =>
     m.ev(`const b = row(...${JSON.stringify(sel)}).closest("[role=treeitem]");
       return b.classList.contains("drop-target") ? "ok" : b.classList.contains("drop-refused") ? "refused" : ""`);
-  let into = await m.at(["工作", "需求池"]);
+  await m.expandAll();
+  await m.expandAll();
+  let into = await m.at(["工作", "需求池/前端/组件"]);
   await m.drag(await m.at(["工作", "日常"]), into, { release: false });
-  const refused = { hint: await ghostHint(), state: await dropState(["工作", "需求池"]) };
+  const deepDrop = { hint: await ghostHint(), state: await dropState(["工作", "需求池/前端/组件"]) };
   await m.drop(into);
   check(
-    "有子项目的项目拖到别的项目上：标红、说明原因，放不下",
-    refused.state === "refused" && refused.hint.includes("有子项目") && t.exists("工作/日常/D.md"),
-    refused,
+    "有子项目的项目拖到深处的子项目上：那个子项目整块高亮、说明放进去，松开后连同下面各级成了它的子项目",
+    deepDrop.state === "ok" &&
+      deepDrop.hint.includes("放进「需求池 / 前端 / 组件」，成为子项目") &&
+      t.exists("工作/需求池/前端/组件/日常/D.md") &&
+      t.exists("工作/需求池/前端/组件/日常/外部建的/外部.md") &&
+      !t.exists("工作/日常") &&
+      (await t.until(() => m.ev(`return !!row("工作", "需求池/前端/组件/日常/外部建的")`))),
+    deepDrop,
+  );
+
+  // 不能放进它自己的子项目里
+  await m.expandAll();
+  into = await m.at(["工作", "需求池/前端"]);
+  await m.drag(await m.at(["工作", "需求池"]), into, { release: false });
+  const selfDrop = { hint: await ghostHint(), state: await dropState(["工作", "需求池/前端"]) };
+  await m.drop(into);
+  check(
+    "项目拖到它自己的子项目上：不算能放的地方（不高亮），说明原因，松开后不动",
+    selfDrop.state === "" &&
+      selfDrop.hint.includes("不能放进它自己的子项目里") &&
+      t.exists("工作/需求池/前端/组件/日常") &&
+      !t.exists("工作/需求池/前端/需求池"),
+    selfDrop,
   );
 
   await m.invoke("create_project", { workspace: "工作", name: "零散" });
@@ -277,26 +299,44 @@ export default async function (t) {
     ok,
   );
 
-  // 右键子项目「移动到 → 顶层」：移出来
-  await m.click(await m.at(["工作", "需求池/零散"]), { right: true });
-  await t.sleep(300);
-  const title = await m.ev(`const e = [...document.querySelectorAll(".ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-submenu-title")]
-      .find((x) => x.textContent.includes("移动到"));
-    const r = e.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }`);
-  await m.mouse("mouseMoved", title);
-  const moveItems = await t.until(() =>
-    m.ev(`const items = [...document.querySelectorAll(".ant-dropdown-menu-submenu-popup:not(.ant-dropdown-menu-submenu-hidden) .ant-dropdown-menu-item")]
-      .map((e) => e.textContent.trim()); return items.length ? items : null`),
-  );
+  // 右键项目「移动到」：列出顶层和各级项目（写成路径），点了放进去
+  const moveMenu = async (sel) => {
+    await m.click(await m.at(sel), { right: true });
+    await t.sleep(300);
+    const title = await m.ev(`const e = [...document.querySelectorAll(".ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-submenu-title")]
+        .find((x) => x.textContent.includes("移动到"));
+      const r = e.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }`);
+    await m.mouse("mouseMoved", title);
+    return t.until(() =>
+      m.ev(`const items = [...document.querySelectorAll(".ant-dropdown-menu-submenu-popup:not(.ant-dropdown-menu-submenu-hidden) .ant-dropdown-menu-item")]
+        .map((e) => e.textContent.trim()); return items.length ? items : null`),
+    );
+  };
+  const moveItems = await moveMenu(["工作", "需求池/零散"]);
   check(
-    "右键子项目「移动到」：列出顶层（写明从哪个项目移出）和别的顶层项目，不列它现在的父项目",
-    !!moveItems && moveItems.includes("顶层（移出「需求池」）") && moveItems.includes("日常") && !moveItems.includes("需求池"),
+    "右键子项目「移动到」：列出顶层（写明从哪个项目移出）和各级项目（写成「父项目 / 子项目」），不列它现在的父项目和它自己",
+    !!moveItems &&
+      moveItems.includes("顶层（移出「需求池」）") &&
+      moveItems.includes("需求池 / 前端 / 组件") &&
+      moveItems.includes("需求池 / 前端 / 组件 / 日常") &&
+      !moveItems.includes("需求池") &&
+      !moveItems.includes("需求池 / 零散"),
     moveItems,
   );
-  await m.ev(`menuItem("顶层（移出「需求池」）").click(); await sleep(1000); return 1`);
+  await m.ev(`menuItem("需求池 / 前端 / 组件").click(); await sleep(1000); return 1`);
   check(
-    "「移动到 → 顶层」：子项目移出来，变成普通项目",
-    t.exists("工作/零散") && !t.exists("工作/需求池/零散") && (await t.until(() => m.ev(`return !!row("工作", "零散")`))),
+    "「移动到」深处的子项目：放进去成为它的子项目",
+    t.exists("工作/需求池/前端/组件/零散") &&
+      !t.exists("工作/需求池/零散") &&
+      (await t.until(() => m.ev(`return !!row("工作", "需求池/前端/组件/零散")`))),
+  );
+  await moveMenu(["工作", "需求池/前端/组件/零散"]);
+  await m.ev(`menuItem("顶层（移出「需求池 / 前端 / 组件」）").click(); await sleep(1000); return 1`);
+  check(
+    "「移动到 → 顶层」：深处的子项目移出来，变成普通项目",
+    t.exists("工作/零散") &&
+      !t.exists("工作/需求池/前端/组件/零散") &&
+      (await t.until(() => m.ev(`return !!row("工作", "零散")`))),
   );
 
   // 层级多、名字长时路径会超过 Windows 的上限（259 个字符）：新建前提示路径太长，什么都不建。

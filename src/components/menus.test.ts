@@ -3,7 +3,7 @@ import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { TodoSummary, WorkspaceTree } from "../types";
-import { type Actions, moveTargets, todoMenu } from "./menus";
+import { type Actions, moveTargets, projectMenu, todoMenu } from "./menus";
 
 // docs/requirements.md「右键工作区 / 项目 / 待办弹出操作菜单」：待办的「移动到」——只显示一个工作区时列出同一工作区的其他项目；
 // 同时显示了几个工作区时，也列出其他选中工作区的项目，按工作区分组。「子项目」：「移动到」里的项目写成「父项目 / 子项目 / …」，
@@ -35,9 +35,10 @@ const shown = (label: unknown) =>
 const labels = (items: Item[] | undefined) => (items ?? []).map((i) => full(i.label));
 
 function actions() {
-  return { moveTodo: vi.fn(), togglePinned: vi.fn() } as unknown as Actions & {
+  return { moveTodo: vi.fn(), togglePinned: vi.fn(), moveProject: vi.fn() } as unknown as Actions & {
     moveTodo: ReturnType<typeof vi.fn>;
     togglePinned: ReturnType<typeof vi.fn>;
+    moveProject: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -130,6 +131,50 @@ describe("「移动到」里的子项目", () => {
     expect(full(item.label)).toBe("需求 / 前端 / 组件 / 按钮 / 图标");
     click(menu, item.key!);
     expect(a.moveTodo.mock.calls).toEqual([["日常", todo, deep, undefined]]);
+  });
+});
+
+// 「右键项目『移动到』」：和拖动能去的地方一致——各工作区的顶层和其中的各级项目（写成路径）；已经在那里的、
+// 放不进去的（它自己和它自己的子项目）不列，有同名项目的列出来但不能点
+describe("项目右键菜单的「移动到」", () => {
+  const work = tree("工作", "需求", "需求/前端", "需求/前端/组件", "日常", "日常/杂项");
+
+  it("列出顶层和各级项目（写成路径）；不列它现在在的地方", () => {
+    const move = moveItem(projectMenu(actions(), "日常/杂项", moveTargets([work], "工作")));
+    expect(labels(move.children)).toEqual(["顶层（移出「日常」）", "需求", "需求 / 前端", "需求 / 前端 / 组件"]);
+  });
+
+  it("有子项目的项目也能放进别的项目；它自己和它下面的各级不列", () => {
+    const move = moveItem(projectMenu(actions(), "需求", moveTargets([work], "工作")));
+    expect(labels(move.children)).toEqual(["日常", "日常 / 杂项"]);
+    const sub = moveItem(projectMenu(actions(), "需求/前端", moveTargets([work], "工作")));
+    expect(labels(sub.children)).toEqual(["顶层（移出「需求」）", "日常", "日常 / 杂项"]);
+  });
+
+  it("同时显示几个工作区：按工作区分组；那里有同名的列出来但不能点", () => {
+    const life = tree("生活", "前端", "购物", "购物/前端");
+    const move = moveItem(projectMenu(actions(), "需求/前端", moveTargets([work, life], "工作")));
+    const groups = move.children!;
+    expect(groups.map((g) => g.label)).toEqual(["工作（当前）", "生活"]);
+    const other = groups[1].children!;
+    expect(other.map((c) => [full(c.label), !!c.disabled])).toEqual([
+      ["顶层（已有同名的）", true],
+      ["前端", false],
+      ["购物（已有同名的）", true],
+      ["购物 / 前端", false],
+    ]);
+  });
+
+  it("点了放进那个项目（哪一级的都行）或移到顶层", () => {
+    const a = actions();
+    const menu = projectMenu(a, "日常/杂项", moveTargets([work], "工作"));
+    const items = moveItem(menu).children!;
+    click(menu, items[0].key!);
+    click(menu, items[3].key!);
+    expect(a.moveProject.mock.calls).toEqual([
+      ["日常/杂项", "工作", undefined],
+      ["日常/杂项", "工作", "需求/前端/组件"],
+    ]);
   });
 });
 

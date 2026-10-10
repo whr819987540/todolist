@@ -1,12 +1,12 @@
 import { FileTextOutlined, FolderFilled } from "@ant-design/icons";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ancestorsOf, inProject, projectMoveProblem, shortPlaceLabel, shortProjectLabel } from "../projects";
+import { inProject, projectMoveProblem, shortPlaceLabel, shortProjectLabel } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { displayTitle } from "../utils";
 import { parseSelKey } from "./sidebar/tree";
 
 // 拖动移动：在左侧列表或概览里按住待办，拖到左侧的另一个项目上（可以是别的工作区的）松开；
-// 按住项目，拖到左侧的另一个项目上松开放进去成为子项目（指针在子项目上时是放进它的父项目），拖到工作区那一行
+// 按住项目，拖到左侧的另一个项目（哪一级的子项目都行）上松开放进去成为它的子项目，拖到工作区那一行
 // （项目以外的地方）上松开移到那个工作区的顶层。
 // 在同一个项目里把待办拖到另一条待办上（左侧列表或项目概览里），放在它的前面 / 后面，调整顺序（手动排序）。
 // 用鼠标事件自己实现，不用 HTML5 拖放：WebView2 里拖放默认被 Tauri 接管（给拖文件进窗口用），
@@ -27,7 +27,7 @@ export type DragItem =
   | { kind: "project"; workspace: string; project: string };
 
 /**
- * 放下的地方：待办放在项目上；项目放在顶层项目上（project，成为它的子项目）或工作区上（移到顶层）；
+ * 放下的地方：待办放在项目上；项目放在别的项目上（project，可以是子项目，成为它的子项目）或工作区上（移到顶层）；
  * 调整顺序时是同一项目里另一条待办的前面 / 后面
  */
 export interface DropTarget {
@@ -37,7 +37,7 @@ export interface DropTarget {
   place?: "before" | "after";
 }
 
-/** ok：可以放下；refused：指针下的地方放不下（那里已有同名项目、有子项目的放不进别的项目）；none：指针不在能放的地方，或者就在原处 */
+/** ok：可以放下；refused：指针下的地方放不下（那里已有同名项目）；none：指针不在能放的地方，或者就在原处、在它自己里面 */
 export type DropStatus = "ok" | "refused" | "none";
 
 export interface DragState {
@@ -123,9 +123,8 @@ function hitTest(x: number, y: number, item: DragItem): { target: DropTarget | n
   const workspace = wsEl.dataset.dropWs!;
   const collapsed = wsEl.getAttribute("aria-expanded") === "false" ? workspace : undefined;
   const project = el.closest<HTMLElement>("[data-drop-project]")?.dataset.dropProject;
-  // 项目：在某个项目（连同它的各级子项目、待办）上是放进这个顶层项目，在工作区那一行等项目以外的地方是移到顶层
-  if (item.kind === "project")
-    return { target: project === undefined ? { workspace } : { workspace, project: ancestorsOf(project)[0] ?? project }, collapsed };
+  // 项目：在某个项目上（它的行、待办，不在它下面的子项目上）是放进这个项目，在工作区那一行等项目以外的地方是移到顶层
+  if (item.kind === "project") return { target: project === undefined ? { workspace } : { workspace, project }, collapsed };
   return { target: project ? { workspace, project } : null, collapsed };
 }
 
@@ -160,15 +159,14 @@ function judge(
     const same = target.workspace === item.workspace;
     const problem = projectMoveProblem({
       project: item.project,
-      from: trees.find((t) => t.name === item.workspace)?.projects ?? [],
       to: trees.find((t) => t.name === target.workspace)?.projects ?? [],
       sameWorkspace: same,
       parent: target.project,
     });
-    // 那里已有同名的、有子项目的放不进别的项目：标红；已经在那里、放进自己：不算能放的地方
+    // 那里已有同名的：标红；已经在那里、放进它自己或它自己的子项目里：不算能放的地方
     if (problem)
       return {
-        status: problem.code === "taken" || problem.code === "hasSubs" ? "refused" : "none",
+        status: problem.code === "taken" ? "refused" : "none",
         hint: problem.code === "taken" && !target.project ? `「${target.workspace}」里已有同名项目` : problem.reason,
       };
     if (target.project) {

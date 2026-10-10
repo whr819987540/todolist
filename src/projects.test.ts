@@ -178,45 +178,68 @@ describe("多级子项目", () => {
   });
 });
 
-// 「拖动移动项目」「右键项目『移动到』」：项目可以放进别的顶层项目成为子项目，子项目可以移到顶层，都可以跨工作区；
-// 只有一层子项目，有子项目的项目不能放进别的项目；那里已有同名的（不分大小写）不能放
+// 「拖动移动项目」「右键项目『移动到』」：项目可以放进别的任何项目（包括各级子项目）成为它的子项目，子项目可以移到顶层，
+// 都可以跨工作区，有子项目的也行；不能放进它自己或它自己的子项目里；已经在那里的不算；那里已有同名的（不分大小写）不能放
 describe("项目能不能移到那里", () => {
-  const work = [project("需求"), project("需求/前端"), project("日常"), project("杂项"), project("杂项/前端")];
-  const life = [project("购物"), project("购物/日常"), project("旅行")];
+  const work = [
+    project("需求"),
+    project("需求/前端"),
+    project("需求/前端/组件"),
+    project("日常"),
+    project("杂项"),
+    project("杂项/前端"),
+    project("杂项/前端/组件"),
+  ];
+  const life = [project("购物"), project("购物/日常"), project("购物/日常/零食"), project("旅行")];
   const problem = (p: string, parent: string | undefined, to = work) =>
-    projectMoveProblem({ project: p, from: work, to, sameWorkspace: to === work, parent })?.code ?? null;
+    projectMoveProblem({ project: p, to, sameWorkspace: to === work, parent })?.code ?? null;
 
-  it("顶层项目放进同一工作区的别的项目，成为子项目", () => {
+  it("顶层项目放进同一工作区的别的项目、别的项目的子项目、孙项目里", () => {
     expect(problem("日常", "需求")).toBeNull();
+    expect(problem("日常", "需求/前端")).toBeNull();
+    expect(problem("日常", "需求/前端/组件")).toBeNull();
   });
 
-  it("子项目移到顶层、放进别的项目", () => {
-    expect(problem("需求/前端", undefined, life)).toBeNull();
-    expect(problem("需求/前端", "旅行", life)).toBeNull();
+  it("有子项目的项目也能放进别的项目（连同下面各级），也能移到别的工作区", () => {
+    expect(problem("需求", "日常")).toBeNull();
+    expect(problem("需求", "杂项/前端/组件")).toBeNull();
+    expect(problem("需求", "旅行", life)).toBeNull();
+    expect(problem("需求", "购物/日常/零食", life)).toBeNull();
+    expect(problem("需求", undefined, life)).toBeNull();
   });
 
-  it("放进它自己、放进子项目不行", () => {
+  it("深处的子项目移到顶层、放进别的项目（别的工作区的也行）、往上移一级", () => {
+    expect(problem("需求/前端/组件", undefined)).toBeNull();
+    expect(problem("需求/前端/组件", "需求")).toBeNull();
+    expect(problem("需求/前端/组件", "旅行", life)).toBeNull();
+    expect(problem("需求/前端", "日常")).toBeNull();
+  });
+
+  it("不能放进它自己、它自己的子项目或孙项目里", () => {
     expect(problem("日常", "日常")).toBe("self");
-    expect(problem("日常", "需求/前端")).toBe("nested");
+    expect(problem("需求", "需求/前端")).toBe("self");
+    expect(problem("需求", "需求/前端/组件")).toBe("self");
+    expect(problem("需求/前端", "需求/前端/组件")).toBe("self");
+    // 名字开头相同的别的项目不算它自己里面
+    const withTwin = [...work, project("杂项二")];
+    expect(projectMoveProblem({ project: "杂项", to: withTwin, sameWorkspace: true, parent: "杂项二" })).toBeNull();
+    // 别的工作区里同名的项目不是它自己
+    expect(problem("需求", "需求", [project("需求")])).toBeNull();
+    expect(problem("需求", "需求/x", [project("需求"), project("需求/x")])).toBeNull();
   });
 
-  it("已经在那里：顶层项目移到自己工作区的顶层、子项目放进它的父项目", () => {
+  it("已经在那里：顶层项目移到自己工作区的顶层、子项目放进它现在的父项目", () => {
     expect(problem("日常", undefined)).toBe("here");
     expect(problem("需求/前端", "需求")).toBe("here");
-  });
-
-  it("有子项目的项目不能放进别的项目，可以移到别的工作区的顶层", () => {
-    expect(problem("需求", "日常")).toBe("hasSubs");
-    expect(problem("需求", "旅行", life)).toBe("hasSubs");
-    expect(problem("需求", undefined, life)).toBeNull();
+    expect(problem("需求/前端/组件", "需求/前端")).toBe("here");
   });
 
   it("那里已有同名的（不分大小写）不能放", () => {
     expect(problem("需求/前端", "杂项")).toBe("taken");
+    expect(problem("需求/前端/组件", "杂项/前端")).toBe("taken");
     expect(problem("日常", "购物", life)).toBe("taken");
     expect(problem("杂项/前端", undefined, [project("前端")])).toBe("taken");
-    expect(projectMoveProblem({ project: "abc", from: [project("abc")], to: [project("ABC")], sameWorkspace: false })?.code).toBe(
-      "taken",
-    );
+    expect(projectMoveProblem({ project: "abc", to: [project("ABC")], sameWorkspace: false })?.code).toBe("taken");
+    expect(projectMoveProblem({ project: "x/abc", to: [project("p"), project("p/q"), project("p/q/Abc")], sameWorkspace: false, parent: "p/q" })?.code).toBe("taken");
   });
 });

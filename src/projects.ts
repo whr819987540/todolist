@@ -90,36 +90,52 @@ export function deepCounts(projects: readonly ProjectNode[]): Map<string, DeepCo
   return out;
 }
 
-/**
- * 项目为什么不能移到那里：self 放进它自己，nested 放进子项目（只有一层），here 已经在那里，
- * hasSubs 有子项目的不能放进别的项目，taken 那里已有同名的（不分大小写，项目是文件夹）
- */
+/** 各项目下一级子项目的名字（转成小写，比较同名时不分大小写）：父项目路径（顶层项目的是 undefined）→ 名字 */
+type ChildNames = ReadonlyMap<string | undefined, ReadonlySet<string>>;
+
+/** 按项目列表（数组本身）记住算过的 ChildNames：「移动到」列出每个地方、拖动时指针每动一下都要查，不必每次把全部项目扫一遍 */
+const childNamesCache = new WeakMap<object, ChildNames>();
+
+function childNames(projects: readonly { name: string }[] | readonly string[]): ChildNames {
+  const cached = childNamesCache.get(projects);
+  if (cached) return cached;
+  const out = new Map<string | undefined, Set<string>>();
+  for (const p of projects) {
+    const name = typeof p === "string" ? p : p.name;
+    const parent = parentOf(name);
+    const set = out.get(parent);
+    if (set) set.add(leafName(name).toLowerCase());
+    else out.set(parent, new Set([leafName(name).toLowerCase()]));
+  }
+  childNamesCache.set(projects, out);
+  return out;
+}
+
+/** 项目为什么不能移到那里：self 放进它自己或它自己的子项目里，here 已经在那里，taken 那里已有同名的（不分大小写，项目是文件夹） */
 export interface MoveProblem {
-  code: "self" | "nested" | "here" | "hasSubs" | "taken";
+  code: "self" | "here" | "taken";
   reason: string;
 }
 
 /**
- * 项目 project 能不能移到目标工作区的顶层（parent 为 undefined），或放进那里的顶层项目 parent 成为子项目；
- * 可以时返回 null。from 是它所在工作区的全部项目，to 是目标工作区的全部项目（同一个工作区时一样）
+ * 项目 project 能不能移到目标工作区的顶层（parent 为 undefined），或放进那里的项目 parent（可以是哪一级的子项目）里成为
+ * 它的子项目；可以时返回 null。to 是目标工作区的全部项目（项目或路径的数组；同一个数组查第二次起不再扫一遍），
+ * sameWorkspace 是目标工作区就是它所在的工作区
  */
 export function projectMoveProblem(o: {
   project: string;
-  from: readonly { name: string }[];
-  to: readonly { name: string }[];
+  to: readonly { name: string }[] | readonly string[];
   sameWorkspace: boolean;
   parent?: string;
 }): MoveProblem | null {
   const { project, parent, sameWorkspace } = o;
-  if (parent !== undefined && isSubProject(parent)) return { code: "nested", reason: "子项目里不能再放项目" };
-  if (sameWorkspace && parent === project) return { code: "self", reason: "不能放进它自己里面" };
+  if (sameWorkspace && parent !== undefined && inProject(parent, project))
+    return { code: "self", reason: parent === project ? "不能放进它自己里面" : "不能放进它自己的子项目里" };
   if (sameWorkspace && parentOf(project) === parent)
     return { code: "here", reason: parent === undefined ? "已在这个工作区的顶层" : "已在这个项目里" };
-  if (parent !== undefined && o.from.some((p) => parentOf(p.name) === project))
-    return { code: "hasSubs", reason: `「${leafName(project)}」里有子项目，不能放进别的项目（子项目里不能再有子项目）` };
-  const name = leafName(project).toLowerCase();
-  const taken = o.to.some((p) => parentOf(p.name) === parent && leafName(p.name).toLowerCase() === name);
-  if (taken) return { code: "taken", reason: parent === undefined ? "那里已有同名项目" : `「${parent}」里已有同名子项目` };
+  const taken = !!childNames(o.to).get(parent)?.has(leafName(project).toLowerCase());
+  if (taken)
+    return { code: "taken", reason: parent === undefined ? "那里已有同名项目" : `「${shortProjectLabel(parent)}」里已有同名子项目` };
   return null;
 }
 
