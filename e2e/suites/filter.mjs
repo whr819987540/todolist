@@ -177,8 +177,12 @@ export default async function (t) {
   await m.clearToasts();
   await tagMenu("急", "重命名");
   await renameTo("紧急");
-  const renamed = await t.until(() => tagsOf("工作", "需求", "A") === "工作,紧急" && tagsOf("工作", "日常", "D") === "紧急");
-  check("重命名：带这个标签的待办一起改，提示改了几条", renamed && (await m.toast()).includes("改名为「紧急」（2 条）"), {
+  // 提示在重新加载完侧栏之后才出来，比文件改好晚一些：一起等
+  const renamed = await t.until(
+    async () =>
+      tagsOf("工作", "需求", "A") === "工作,紧急" && tagsOf("工作", "日常", "D") === "紧急" && (await m.toast()).includes("改名为「紧急」（2 条）"),
+  );
+  check("重命名：带这个标签的待办一起改，提示改了几条", renamed, {
     A: tagsOf("工作", "需求", "A"),
     D: tagsOf("工作", "日常", "D"),
     toast: await m.toast(),
@@ -190,8 +194,10 @@ export default async function (t) {
   await m.clearToasts();
   await tagMenu("紧急", "重命名");
   await renameTo("工作");
-  const merged = await t.until(() => tagsOf("工作", "需求", "A") === "工作" && tagsOf("工作", "日常", "D") === "工作");
-  check("改成已有的名字就是合并（两个都有的只留一个）", merged && (await m.toast()).includes("合并到「工作」"), {
+  const merged = await t.until(
+    async () => tagsOf("工作", "需求", "A") === "工作" && tagsOf("工作", "日常", "D") === "工作" && (await m.toast()).includes("合并到「工作」"),
+  );
+  check("改成已有的名字就是合并（两个都有的只留一个）", merged, {
     A: tagsOf("工作", "需求", "A"),
     D: tagsOf("工作", "日常", "D"),
     toast: await m.toast(),
