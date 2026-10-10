@@ -13,7 +13,8 @@ import {
   topProjects,
 } from "../projects";
 import { addTags, allTodos, countTags, removeTags } from "../tags";
-import type { TodoSummary, WorkspaceTree } from "../types";
+import { priorityText } from "../priority";
+import type { Priority, TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
 import {
@@ -90,6 +91,8 @@ export interface ActionContext {
 export interface BatchActions {
   setDone(items: TodoAt[], done: boolean): void;
   setPinned(items: TodoAt[], pinned: boolean): void;
+  /** 设成同一个优先级（已经是的不动） */
+  setPriority(items: TodoAt[], priority: Priority): void;
   /** 选几个标签加到每一条上（已经有的不重复加） */
   addTags(items: TodoAt[]): void;
   /** 从选中的待办上有的标签里选几个去掉 */
@@ -360,6 +363,10 @@ export function useWorkspaceActions(ctx: ActionContext) {
         run(async () => {
           patchTodo(ws, project, await api.setTodoPinned(ws, project, t.id, !t.pinned));
         }),
+      setPriority: (project, t, priority) =>
+        run(async () => {
+          patchTodo(ws, project, await api.setTodoPriority(ws, project, t.id, priority));
+        }),
       setTags: (project, t, tags) =>
         run(async () => {
           patchTodo(ws, project, await api.setTodoTags(ws, project, t.id, tags));
@@ -467,6 +474,14 @@ export function useWorkspaceActions(ctx: ActionContext) {
       );
       if (ok) message.success(`已${pinned ? "置顶" : "取消置顶"} ${ok} 条`);
       else if (!todo.length) message.info(`选中的都已经${pinned ? "置顶" : "没有置顶"}`);
+    },
+    setPriority: async (items, priority) => {
+      const todo = items.filter((x) => x.todo.priority !== priority);
+      const ok = await each(todo, async ({ workspace, project, todo: t }) =>
+        patchTodo(workspace, project, await api.setTodoPriority(workspace, project, t.id, priority)),
+      );
+      if (ok) message.success(`已把 ${ok} 条设为${priorityText(priority)}`);
+      else if (!todo.length) message.info(`选中的都已经是${priorityText(priority)}`);
     },
     addTags: (items) =>
       openTagDialog({

@@ -299,3 +299,12 @@ describe("各工作区的隐藏已完成", () => {
     expect(state.readListOptions("公司").hideDoneProjects).toBe(true);
   });
 });
+
+describe("各工作区的排序", () => {
+  it("按优先级排序也记得住，认不出的退回按创建时间", () => {
+    localStorage.setItem("listOptions:工作", JSON.stringify({ sortKey: "priority", hideDone: false }));
+    expect(state.readListOptions("工作").sortKey).toBe("priority");
+    localStorage.setItem("listOptions:工作", JSON.stringify({ sortKey: "importance", hideDone: false }));
+    expect(state.readListOptions("工作").sortKey).toBe("created");
+  });
+});

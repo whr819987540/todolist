@@ -16,7 +16,7 @@ import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime
 import { type DragMove, isDraggingProject, isDraggingTodo, reorderMark } from "./DragMove";
 import { selKey } from "./sidebar/tree";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
-import { TagChips } from "./TodoMarks";
+import { PriorityFlag, TagChips } from "./TodoMarks";
 
 /** 项目概览的待办列表里，标题后面最多显示几个标签，多的显示成「+N」 */
 const LIST_TAGS = 3;
@@ -220,6 +220,7 @@ export function ProjectOverview(p: {
           </span>
           <span className={`list-title with-marks${fromContent ? " from-content" : ""}`}>
             {t.pinned && <PushpinFilled className="pin-mark" />}
+            <PriorityFlag priority={t.priority} />
             <span className="list-title-text">{text}</span>
             <TagChips tags={t.tags} max={LIST_TAGS} />
           </span>

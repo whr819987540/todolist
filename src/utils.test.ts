@@ -124,6 +124,30 @@ describe("排序（sortTodos）", () => {
     expect(ids(sortTodos([x, y, p, d], "manual"))).toEqual(["p", "y", "x", "d"]);
   });
 
+  it("按优先级：高的在前，同一档里创建时间新的在前，无优先级的在最后", () => {
+    const h1 = todo({ id: "h1", priority: 3, createdAt: 1 });
+    const h2 = todo({ id: "h2", priority: 3, createdAt: 2 });
+    const m = todo({ id: "m", priority: 2, createdAt: 9 });
+    const l = todo({ id: "l", priority: 1, createdAt: 9 });
+    const n = todo({ id: "n", priority: 0, createdAt: 10 });
+    expect(ids(sortTodos([n, l, h1, m, h2], "priority"))).toEqual(["h2", "h1", "m", "l", "n"]);
+  });
+
+  it("按优先级时仍是置顶的在前、已完成的沉底", () => {
+    const high = todo({ id: "high", priority: 3 });
+    const pinnedLow = todo({ id: "pinnedLow", priority: 1, pinned: true });
+    const doneHigh = todo({ id: "doneHigh", priority: 3, done: true });
+    const none = todo({ id: "none" });
+    expect(ids(sortTodos([doneHigh, none, high, pinnedLow], "priority"))).toEqual(["pinnedLow", "high", "none", "doneHigh"]);
+  });
+
+  it("别的排序不看优先级", () => {
+    const old = todo({ id: "old", priority: 3, createdAt: 1, updatedAt: 1 });
+    const fresh = todo({ id: "fresh", createdAt: 2, updatedAt: 2 });
+    expect(ids(sortTodos([old, fresh], "created"))).toEqual(["fresh", "old"]);
+    expect(ids(sortTodos([old, fresh], "updated"))).toEqual(["fresh", "old"]);
+  });
+
   it("不改原来的数组", () => {
     const list = [a, b, c];
     sortTodos(list, "title");

@@ -152,3 +152,38 @@ describe("批量菜单的「添加标签」「移除标签」", () => {
     expect(b.removeTags).toHaveBeenCalledWith(items);
   });
 });
+
+describe("待办右键菜单的「优先级」", () => {
+  type PItem = Item & { extra?: unknown };
+  const sub = (t: TodoSummary) => ((todoMenu(actions(), "需求", t, []).items as Item[]).find((i) => i?.key === "priority")!.children ?? []) as PItem[];
+
+  it("子菜单从高到低列出四档，现在的那一档打勾", () => {
+    const items = sub({ ...todo, priority: 2 });
+    expect(items).toHaveLength(4);
+    expect(items.map((i) => !!i.extra)).toEqual([false, true, false, false]);
+    expect(sub(todo).map((i) => !!i.extra)).toEqual([false, false, false, true]);
+  });
+
+  it("点了交给 setPriority", () => {
+    const a = { setPriority: vi.fn() } as unknown as Actions & { setPriority: ReturnType<typeof vi.fn> };
+    const menu = todoMenu(a, "需求", todo, []);
+    const [high, , , none] = (menu.items as Item[]).find((i) => i?.key === "priority")!.children!;
+    click(menu, high.key!);
+    click(menu, none.key!);
+    expect(a.setPriority.mock.calls).toEqual([
+      ["需求", todo, 3],
+      ["需求", todo, 0],
+    ]);
+  });
+});
+
+describe("批量菜单的「设置优先级」", () => {
+  it("作用于选中的这些待办", () => {
+    const items: TodoAt[] = [{ workspace: "工作", project: "需求", todo }];
+    const b = { setPriority: vi.fn() } as unknown as BatchActions & { setPriority: ReturnType<typeof vi.fn> };
+    const menu = batchMenu(items, [], b, () => {});
+    const low = (menu.items as Item[]).find((i) => i?.key === "priority")!.children![2];
+    click(menu, low.key!);
+    expect(b.setPriority).toHaveBeenCalledWith(items, 1);
+  });
+});

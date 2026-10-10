@@ -2,6 +2,7 @@ import {
   CheckCircleOutlined,
   CloseOutlined,
   DeleteOutlined,
+  FlagOutlined,
   PushpinOutlined,
   SwapOutlined,
   TagOutlined,
@@ -12,8 +13,8 @@ import { Button, Dropdown } from "antd";
 import { projectLabel } from "../projects";
 import { displayTitle } from "../utils";
 import type { TodoAt } from "./DragMove";
-import { batchMoveMenu, type MoveTarget } from "./menus";
-import { TagChips } from "./TodoMarks";
+import { batchMoveMenu, batchPriorityMenu, type MoveTarget } from "./menus";
+import { PriorityFlag, TagChips } from "./TodoMarks";
 import type { BatchActions } from "./workspaceActions";
 
 /** 一条待办在列表里显示的位置：同时显示了几个工作区时带上工作区 */
@@ -64,6 +65,9 @@ export default function BatchPanel({
         <Button icon={<PushpinOutlined />} onClick={() => a.setPinned(items, pinned < items.length)}>
           {pinned < items.length ? "置顶" : "取消置顶"}
         </Button>
+        <Dropdown menu={batchPriorityMenu((p) => a.setPriority(items, p))} trigger={["click"]}>
+          <Button icon={<FlagOutlined />}>设置优先级</Button>
+        </Dropdown>
         <Button icon={<TagsOutlined />} onClick={() => a.addTags(items)}>
           添加标签
         </Button>
@@ -85,6 +89,7 @@ export default function BatchPanel({
           return (
             <div key={`${x.workspace}/${x.project}/${x.todo.id}`} className={`list-row${x.todo.done ? " done" : ""}`}>
               <span className={`list-title with-marks${fromContent ? " from-content" : ""}`}>
+                <PriorityFlag priority={x.todo.priority} />
                 <span className="list-title-text">{text}</span>
                 <TagChips tags={x.todo.tags} max={3} />
               </span>

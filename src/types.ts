@@ -125,8 +125,8 @@ export interface ImageFile {
   modified: number;
 }
 
-/** 排序：按创建时间（新的在前）、修改时间（新的在前）、标题，或手动排序（拖动调整） */
-export type SortKey = "created" | "updated" | "title" | "manual";
+/** 排序：按创建时间（新的在前）、修改时间（新的在前）、标题、优先级（高的在前），或手动排序（拖动调整） */
+export type SortKey = "created" | "updated" | "title" | "priority" | "manual";
 
 export type ShortcutAction = "toggleWindow" | "quickCapture" | "toggleDone" | "openExternal";
 

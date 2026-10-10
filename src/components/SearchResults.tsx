@@ -7,7 +7,7 @@ import type { ProjectNode, TodoSummary, WorkspaceInfo, WorkspaceTree } from "../
 import { displayTitle, fullTime, relativeTime, useNow } from "../utils";
 import Highlight from "./Highlight";
 import type { Selection } from "./sidebar/tree";
-import { TagChips } from "./TodoMarks";
+import { PriorityFlag, TagChips } from "./TodoMarks";
 
 /** 搜索结果里待办的标题后面最多显示几个标签 */
 const RESULT_TAGS = 3;
@@ -133,6 +133,7 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
                       <span className={`check static${t.done ? " checked" : ""}`}>{t.done && <CheckOutlined />}</span>
                       <div className="list-main">
                         <div className={`list-title with-marks${fromContent ? " from-content" : ""}`}>
+                          <PriorityFlag priority={t.priority} />
                           <span className="list-title-text">
                             <Highlight text={text} kw={textKw} />
                           </span>

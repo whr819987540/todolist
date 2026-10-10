@@ -3,6 +3,7 @@ import { Dropdown, type MenuProps } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { type OpenTodo, sameTodo, type TodoRef } from "../tabs";
 import type { TodoSummary } from "../types";
+import { PRIORITY_LABELS } from "../priority";
 import { projectLabel } from "../projects";
 import { displayTitle } from "../utils";
 import { swallowClick } from "./DragMove";
@@ -215,6 +216,7 @@ export default function EditorTabs({ tabs, active, activeDirty, onActivate, onCl
               className={cls.filter(Boolean).join(" ")}
               title={[
                 `${t.workspace} / ${projectLabel(t.project)} / ${text}`,
+                t.todo.priority > 0 && `优先级：${PRIORITY_LABELS[t.todo.priority]}`,
                 t.todo.tags.length > 0 && `标签：${t.todo.tags.join("、")}`,
                 dirty && DIRTY_HINT,
                 t.preview && PREVIEW_HINT,

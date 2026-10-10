@@ -47,7 +47,7 @@ import { type Leftover, leaveProblem, type LeaveProblem, type ProjectAt, rescueA
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TagCount } from "../tags";
-import type { SavedImage, TextEncoding, TodoDetail, TodoSummary } from "../types";
+import type { Priority, SavedImage, TextEncoding, TodoDetail, TodoSummary } from "../types";
 import {
   displayTitle,
   formatDuration,
@@ -71,7 +71,7 @@ import {
 } from "../workspaceState";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 import Outline from "./Outline";
-import { TagEditor } from "./TodoMarks";
+import { PrioritySelect, TagEditor } from "./TodoMarks";
 
 export interface EditorHandle {
   /**
@@ -99,6 +99,7 @@ interface Props {
   menu: MenuProps;
   onSummary: (s: TodoSummary) => void;
   onToggleDone: () => void;
+  onPriority: (p: Priority) => void;
   /** 侧栏里显示的工作区用过的标签：输入标签时联想 */
   allTags: readonly TagCount[];
   /** 改标签（全部标签）；存好了返回 true */
@@ -941,6 +942,7 @@ export default function TodoEditor(props: Props) {
                 已置顶
               </Tag>
             )}
+            <PrioritySelect value={summary.priority} onChange={props.onPriority} />
             <TagEditor tags={summary.tags} allTags={props.allTags} onChange={props.onTags} />
             <span className="sep">|</span>
             <span title={fullTime(summary.createdAt)}>创建于 {fullTime(summary.createdAt).slice(0, 16)}</span>

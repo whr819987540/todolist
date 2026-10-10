@@ -17,7 +17,7 @@ import { avatarColor, compactTime, displayTitle, firstChar, relativeTime, sortTo
 import { type DragItem, type DragState, dragConcerns, dropClass, isDraggingProject, reorderMark } from "../DragMove";
 import Highlight from "../Highlight";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "../menus";
-import { TagChips } from "../TodoMarks";
+import { PriorityFlag, TagChips } from "../TodoMarks";
 import { type Collapsed, countAll, countDone, hiddenDoneProjects, type Selection, selKey, WS_KEY } from "./tree";
 
 /** 子项目比父项目多缩进这么多（px） */
@@ -467,6 +467,7 @@ const TodoRow = memo(function TodoRow(p: TodoRowProps) {
       <div className="todo-main">
         <div className={`todo-title${fromContent ? " from-content" : ""}`}>
           {t.pinned && <PushpinFilled className="pin-mark" />}
+          <PriorityFlag priority={t.priority} />
           <span className="todo-title-text">
             <Highlight text={text} kw={kw} />
           </span>

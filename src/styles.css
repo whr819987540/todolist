@@ -823,6 +823,35 @@ mark {
   word-break: break-all;
 }
 
+/* ---------------- 优先级 ---------------- */
+
+/* 标题前面的小旗子：高红、中橙、低蓝；无优先级（选的时候）是空心的灰旗子 */
+.prio-flag {
+  flex: none;
+  margin-right: 4px;
+  font-size: 0.85em;
+}
+.prio-3 { color: #f5222d; }
+.prio-2 { color: #fa8c16; }
+.prio-1 { color: #1677ff; }
+.prio-0 { color: var(--c-text-3); }
+:root[data-theme="dark"] .prio-3 { color: #ff6b6b; }
+:root[data-theme="dark"] .prio-2 { color: #ffa940; }
+:root[data-theme="dark"] .prio-1 { color: #4096ff; }
+.prio-label {
+  display: inline-flex;
+  align-items: center;
+}
+/* 编辑区上方的优先级下拉：和旁边的字一样大 */
+.prio-select {
+  margin-right: 6px;
+  font-size: 12px;
+}
+.prio-select .ant-select-selection-item,
+.prio-select .ant-select-content {
+  font-size: 12px;
+}
+
 /* ---------------- 待办的标签（tag） ---------------- */
 
 /* 颜色按标签名固定地取一种（tags.ts 的 tagColor）：浅色模式下浅底深字，深色模式下深底亮字 */

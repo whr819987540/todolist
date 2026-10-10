@@ -1,9 +1,11 @@
 import {
   CheckCircleOutlined,
+  CheckOutlined,
   CloseOutlined,
   DeleteOutlined,
   EditOutlined,
   ExportOutlined,
+  FlagOutlined,
   FolderAddOutlined,
   FolderOpenOutlined,
   FolderOutlined,
@@ -16,9 +18,11 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
+import { PRIORITIES } from "../priority";
 import { isSubProject, parentOf, projectLabel, projectMoveProblem } from "../projects";
-import type { TodoSummary, WorkspaceTree } from "../types";
+import type { Priority, TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
+import { PriorityLabel } from "./TodoMarks";
 import type { BatchActions } from "./workspaceActions";
 
 /** 工作区视图里所有可触发的操作，由 WorkspaceView 实现，侧栏、概览、编辑器共用。项目都是路径（子项目是「父项目/子项目」） */
@@ -47,6 +51,8 @@ export interface Actions {
   toggleDone(project: string, t: TodoSummary, notify?: boolean): void;
   /** 置顶 / 取消置顶 */
   togglePinned(project: string, t: TodoSummary): void;
+  /** 设置优先级 */
+  setPriority(project: string, t: TodoSummary, priority: Priority): void;
   /** 改标签（tags 是全部标签）；返回是否存好了（没存好的已经提示过） */
   setTags(project: string, t: TodoSummary, tags: string[]): Promise<boolean>;
   /** 打开选标签的对话框（右键「标签…」） */
@@ -204,6 +210,19 @@ function projectMoveItems(project: string, targets: readonly MoveTarget[]): NonN
     .map((g) => ({ type: "group" as const, key: `group:${g.workspace}`, label: g.label, children: g.children }));
 }
 
+const PRIORITY_PREFIX = "priority:";
+
+/** 「优先级」子菜单的几项（从高到低，小旗子和文字）；current 是现在的，后面打勾 */
+function priorityItems(prefix: string, current?: Priority): NonNullable<MenuProps["items"]> {
+  return PRIORITIES.map((p) => ({
+    key: prefix + p,
+    label: <PriorityLabel priority={p} />,
+    extra: p === current ? <CheckOutlined /> : undefined,
+  }));
+}
+
+const priorityOf = (key: string, prefix: string) => Number(key.slice(prefix.length)) as Priority;
+
 /** targets：可以移到的项目（moveTargets），第一组是待办所在的工作区 */
 export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: readonly MoveTarget[]): MenuProps {
   const move = moveItems(project, targets);
@@ -217,6 +236,7 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: r
         label: t.done ? "标记为未完成" : "标记为已完成",
       },
       { key: "pin", icon: <PushpinOutlined />, label: t.pinned ? "取消置顶" : "置顶" },
+      { key: "priority", icon: <FlagOutlined />, label: "优先级", children: priorityItems(PRIORITY_PREFIX, t.priority) },
       { key: "tags", icon: <TagsOutlined />, label: "标签…" },
       {
         key: "move",
@@ -235,7 +255,8 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: r
       if (key.startsWith(MOVE_PREFIX)) {
         const [workspace, target] = JSON.parse(key.slice(MOVE_PREFIX.length)) as [string, string];
         a.moveTodo(project, t, target, workspace === ownWorkspace ? undefined : workspace);
-      } else if (key === "open") a.openExternal(project, t);
+      } else if (key.startsWith(PRIORITY_PREFIX)) a.setPriority(project, t, priorityOf(key, PRIORITY_PREFIX));
+      else if (key === "open") a.openExternal(project, t);
       else if (key === "done") a.toggleDone(project, t);
       else if (key === "pin") a.togglePinned(project, t);
       else if (key === "tags") a.editTags(project, t);
@@ -246,6 +267,18 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: r
 }
 
 const BATCH_MOVE_PREFIX = "batch-move:";
+const BATCH_PRIORITY_PREFIX = "batch-priority:";
+
+/** 批量「设置优先级」的菜单 */
+export function batchPriorityMenu(onSet: (p: Priority) => void): MenuProps {
+  return {
+    items: priorityItems(BATCH_PRIORITY_PREFIX),
+    onClick: ({ key, domEvent }) => {
+      domEvent.stopPropagation();
+      onSet(priorityOf(key, BATCH_PRIORITY_PREFIX));
+    },
+  };
+}
 
 
 /** 「移动到」的菜单：侧栏里显示的各工作区的项目，按工作区分组（只显示一个工作区时不分组） */
@@ -281,6 +314,7 @@ export function batchMenu(items: TodoAt[], targets: readonly MoveTarget[], a: Ba
       { key: "undone", icon: <UndoOutlined />, label: "标记为未完成" },
       { key: "pin", icon: <PushpinOutlined />, label: "置顶" },
       { key: "unpin", icon: <PushpinOutlined />, label: "取消置顶" },
+      { key: "priority", icon: <FlagOutlined />, label: "设置优先级", children: priorityItems(BATCH_PRIORITY_PREFIX) },
       { key: "add-tags", icon: <TagsOutlined />, label: "添加标签…" },
       { key: "remove-tags", icon: <TagOutlined />, label: "移除标签…" },
       { key: "move", icon: <SwapOutlined />, label: "移动到", children: move.items, popupClassName: "move-menu" },
@@ -292,6 +326,7 @@ export function batchMenu(items: TodoAt[], targets: readonly MoveTarget[], a: Ba
       info.domEvent.stopPropagation();
       const { key } = info;
       if (key.startsWith(BATCH_MOVE_PREFIX)) move.onClick?.(info);
+      else if (key.startsWith(BATCH_PRIORITY_PREFIX)) a.setPriority(items, priorityOf(key, BATCH_PRIORITY_PREFIX));
       else if (key === "done" || key === "undone") a.setDone(items, key === "done");
       else if (key === "pin" || key === "unpin") a.setPinned(items, key === "pin");
       else if (key === "add-tags") a.addTags(items);
