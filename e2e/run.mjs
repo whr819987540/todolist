@@ -22,6 +22,7 @@ const SUITES = [
   "quick",
   "shortcuts",
   "pin",
+  "tags",
   "reorder",
   "batch",
   "recycle",

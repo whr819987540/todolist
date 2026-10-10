@@ -2,11 +2,15 @@ import { CheckOutlined, FolderFilled } from "@ant-design/icons";
 import { Empty, Spin, Tooltip } from "antd";
 import { useMemo } from "react";
 import { deepTodos, leafName, parentOf, projectLabel, sortProjects } from "../projects";
-import { type ContentHits, hitKey, searchSnippet } from "../search";
+import { type ContentHits, hitKey, matchTodo, searchSnippet, tagQuery, textKeyword } from "../search";
 import type { ProjectNode, TodoSummary, WorkspaceInfo, WorkspaceTree } from "../types";
-import { displayTitle, fullTime, matchTodo, relativeTime, useNow } from "../utils";
+import { displayTitle, fullTime, relativeTime, useNow } from "../utils";
 import Highlight from "./Highlight";
 import type { Selection } from "./sidebar/tree";
+import { TagChips } from "./TodoMarks";
+
+/** 搜索结果里待办的标题后面最多显示几个标签 */
+const RESULT_TAGS = 3;
 
 interface Props {
   kw: string;
@@ -20,10 +24,13 @@ interface Props {
   onEnter: (workspace: string, sel?: Omit<Selection, "workspace">) => void;
 }
 
-/** 首页搜索：跨全部工作区查找工作区、项目和待办（标题和正文全文） */
+/** 首页搜索：跨全部工作区查找工作区、项目和待办（标题、正文全文和标签）；#标签名 只按标签找 */
 export default function SearchResults({ kw, workspaces, trees, hits, renderCard, onEnter }: Props) {
   const now = useNow();
-  const k = kw.toLowerCase();
+  // 只按标签找时项目名不算命中，标题不高亮
+  const textKw = textKeyword(kw);
+  const k = textKw.toLowerCase();
+  const tag = tagQuery(kw);
 
   const { projects, todos } = useMemo(() => {
     // 项目按自己的名字匹配（子项目不看父项目的名字），数目包括子项目里的待办
@@ -32,7 +39,7 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
     for (const tree of trees ?? []) {
       const found = hits?.get(tree.name);
       for (const p of sortProjects(tree.projects)) {
-        if (leafName(p.name).toLowerCase().includes(k))
+        if (k && leafName(p.name).toLowerCase().includes(k))
           projects.push({ workspace: tree.name, project: p, todos: deepTodos(tree.projects, p.name) });
         for (const t of p.todos) {
           const hit = found?.get(hitKey(p.name, t.id));
@@ -68,7 +75,16 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
           <Spin />
         </div>
       ) : nothing ? (
-        <Empty className="home-empty" description={`没有找到包含“${kw}”的工作区、项目或待办`} />
+        <Empty
+          className="home-empty"
+          description={
+            tag === null
+              ? `没有找到包含“${kw}”的工作区、项目或待办`
+              : tag
+                ? `没有找到带标签「${tag}」的待办`
+                : "没有带标签的待办"
+          }
+        />
       ) : (
         <>
           {projects.length > 0 && (
@@ -87,7 +103,7 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
                     >
                       <FolderFilled className="project-icon" />
                       <span className="list-title">
-                        <Highlight text={leafName(project.name)} kw={kw} />
+                        <Highlight text={leafName(project.name)} kw={textKw} />
                       </span>
                       <span className="list-path" title={where}>
                         {where}
@@ -116,12 +132,15 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
                     >
                       <span className={`check static${t.done ? " checked" : ""}`}>{t.done && <CheckOutlined />}</span>
                       <div className="list-main">
-                        <div className={`list-title${fromContent ? " from-content" : ""}`}>
-                          <Highlight text={text} kw={kw} />
+                        <div className={`list-title with-marks${fromContent ? " from-content" : ""}`}>
+                          <span className="list-title-text">
+                            <Highlight text={text} kw={textKw} />
+                          </span>
+                          <TagChips tags={t.tags} max={RESULT_TAGS} keyword={kw} />
                         </div>
                         {snip && (
                           <div className="list-snippet">
-                            <Highlight text={snip} kw={kw} />
+                            <Highlight text={snip} kw={textKw} />
                           </div>
                         )}
                       </div>

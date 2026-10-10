@@ -23,7 +23,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { useAppEvent, useWindowFocus } from "../hooks";
-import { useContentSearch } from "../search";
+import { tagQuery, textKeyword, useContentSearch } from "../search";
 import { eventShortcut, isRefreshShortcut } from "../shortcuts";
 import { ThemeButton } from "../theme";
 import type { WorkspaceInfo, WorkspaceTree } from "../types";
@@ -189,7 +189,7 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
             </span>
             <div className="card-title">
               <div className="card-name" title={ws.name}>
-                <Highlight text={ws.name} kw={kw} />
+                <Highlight text={ws.name} kw={textKeyword(kw)} />
               </div>
               <div className="muted small">
                 {ws.projectCount} 个项目 · {ws.todoCount} 条待办
@@ -274,7 +274,8 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
         ) : searching ? (
           <SearchResults
             kw={kw}
-            workspaces={list.filter((ws) => ws.name.toLowerCase().includes(kw.toLowerCase()))}
+            // 只按标签找（#标签名）时工作区名不算命中
+            workspaces={tagQuery(kw) === null ? list.filter((ws) => ws.name.toLowerCase().includes(kw.toLowerCase())) : []}
             trees={trees}
             hits={hits}
             renderCard={renderCard}

@@ -11,6 +11,8 @@ import {
   PlusOutlined,
   PushpinOutlined,
   SwapOutlined,
+  TagOutlined,
+  TagsOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
@@ -45,6 +47,10 @@ export interface Actions {
   toggleDone(project: string, t: TodoSummary, notify?: boolean): void;
   /** 置顶 / 取消置顶 */
   togglePinned(project: string, t: TodoSummary): void;
+  /** 改标签（tags 是全部标签）；返回是否存好了（没存好的已经提示过） */
+  setTags(project: string, t: TodoSummary, tags: string[]): Promise<boolean>;
+  /** 打开选标签的对话框（右键「标签…」） */
+  editTags(project: string, t: TodoSummary): void;
   deleteTodo(project: string, t: TodoSummary): void;
   /** 移到另一个项目；targetWorkspace 不填时是同一工作区里的 */
   moveTodo(project: string, t: TodoSummary, target: string, targetWorkspace?: string): void;
@@ -211,6 +217,7 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: r
         label: t.done ? "标记为未完成" : "标记为已完成",
       },
       { key: "pin", icon: <PushpinOutlined />, label: t.pinned ? "取消置顶" : "置顶" },
+      { key: "tags", icon: <TagsOutlined />, label: "标签…" },
       {
         key: "move",
         icon: <SwapOutlined />,
@@ -231,6 +238,7 @@ export function todoMenu(a: Actions, project: string, t: TodoSummary, targets: r
       } else if (key === "open") a.openExternal(project, t);
       else if (key === "done") a.toggleDone(project, t);
       else if (key === "pin") a.togglePinned(project, t);
+      else if (key === "tags") a.editTags(project, t);
       else if (key === "reveal") a.revealTodo(project, t);
       else if (key === "delete") a.deleteTodo(project, t);
     }),
@@ -273,6 +281,8 @@ export function batchMenu(items: TodoAt[], targets: readonly MoveTarget[], a: Ba
       { key: "undone", icon: <UndoOutlined />, label: "标记为未完成" },
       { key: "pin", icon: <PushpinOutlined />, label: "置顶" },
       { key: "unpin", icon: <PushpinOutlined />, label: "取消置顶" },
+      { key: "add-tags", icon: <TagsOutlined />, label: "添加标签…" },
+      { key: "remove-tags", icon: <TagOutlined />, label: "移除标签…" },
       { key: "move", icon: <SwapOutlined />, label: "移动到", children: move.items, popupClassName: "move-menu" },
       { type: "divider" },
       { key: "clear", icon: <CloseOutlined />, label: "取消选择" },
@@ -284,6 +294,8 @@ export function batchMenu(items: TodoAt[], targets: readonly MoveTarget[], a: Ba
       if (key.startsWith(BATCH_MOVE_PREFIX)) move.onClick?.(info);
       else if (key === "done" || key === "undone") a.setDone(items, key === "done");
       else if (key === "pin" || key === "unpin") a.setPinned(items, key === "pin");
+      else if (key === "add-tags") a.addTags(items);
+      else if (key === "remove-tags") a.removeTags(items);
       else if (key === "delete") a.remove(items);
       else if (key === "clear") clear();
     },

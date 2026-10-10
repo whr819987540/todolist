@@ -16,6 +16,10 @@ import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime
 import { type DragMove, isDraggingProject, isDraggingTodo, reorderMark } from "./DragMove";
 import { selKey } from "./sidebar/tree";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
+import { TagChips } from "./TodoMarks";
+
+/** 项目概览的待办列表里，标题后面最多显示几个标签，多的显示成「+N」 */
+const LIST_TAGS = 3;
 
 const percent = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0);
 
@@ -214,9 +218,10 @@ export function ProjectOverview(p: {
           >
             {t.done && <CheckOutlined />}
           </span>
-          <span className={`list-title${fromContent ? " from-content" : ""}`}>
+          <span className={`list-title with-marks${fromContent ? " from-content" : ""}`}>
             {t.pinned && <PushpinFilled className="pin-mark" />}
-            {text}
+            <span className="list-title-text">{text}</span>
+            <TagChips tags={t.tags} max={LIST_TAGS} />
           </span>
           <Tooltip title={`创建时间：${fullTime(t.createdAt)}`}>
             <span className="list-time">创建 {shortTime(t.createdAt, now)}</span>

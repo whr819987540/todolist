@@ -751,12 +751,19 @@ mark {
   flex: 1;
   min-width: 0;
 }
+/* 标题一行：图钉、标题（太长时截短）、后面的标签 */
 .todo-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   font-size: calc(var(--fs-sidebar) - 0.5px); /* 13.5px */
   line-height: calc(var(--fs-sidebar) + 6px); /* 20px */
+  white-space: nowrap;
+}
+.todo-title-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 /* 置顶的待办：标题前的图钉 */
 .pin-mark {
@@ -773,8 +780,14 @@ mark {
 }
 .todo-row.done .todo-title {
   color: var(--c-text-3);
-  text-decoration: line-through;
   font-weight: normal;
+}
+/* 删除线只划标题：划在 .todo-title 上会连标签一起划掉 */
+.todo-row.done .todo-title-text {
+  text-decoration: line-through;
+}
+.todo-row.done .tag-chip {
+  opacity: 0.6;
 }
 .todo-meta {
   font-size: max(11px, calc(var(--fs-sidebar) - 2px)); /* 12px */
@@ -805,6 +818,128 @@ mark {
 .todo-tip-hint {
   opacity: 0.6;
   margin-top: 2px;
+}
+.todo-tip-tags {
+  word-break: break-all;
+}
+
+/* ---------------- 待办的标签（tag） ---------------- */
+
+/* 颜色按标签名固定地取一种（tags.ts 的 tagColor）：浅色模式下浅底深字，深色模式下深底亮字 */
+.tag-c0 { --tag-bg: #e6f4ff; --tag-bd: #91caff; --tag-fg: #0958d9; }
+.tag-c1 { --tag-bg: #f6ffed; --tag-bd: #b7eb8f; --tag-fg: #237804; }
+.tag-c2 { --tag-bg: #fff7e6; --tag-bd: #ffd591; --tag-fg: #ad4e00; }
+.tag-c3 { --tag-bg: #f9f0ff; --tag-bd: #d3adf7; --tag-fg: #531dab; }
+.tag-c4 { --tag-bg: #e6fffb; --tag-bd: #87e8de; --tag-fg: #006d75; }
+.tag-c5 { --tag-bg: #fff0f6; --tag-bd: #ffadd2; --tag-fg: #c41d7f; }
+.tag-c6 { --tag-bg: #fffbe6; --tag-bd: #ffe58f; --tag-fg: #ad6800; }
+.tag-c7 { --tag-bg: #f0f5ff; --tag-bd: #adc6ff; --tag-fg: #1d39c4; }
+.tag-c8 { --tag-bg: #fcffe6; --tag-bd: #d3f261; --tag-fg: #5b8c00; }
+:root[data-theme="dark"] .tag-c0 { --tag-bg: #111a2c; --tag-bd: #15325b; --tag-fg: #65a9f3; }
+:root[data-theme="dark"] .tag-c1 { --tag-bg: #162312; --tag-bd: #274916; --tag-fg: #8fd460; }
+:root[data-theme="dark"] .tag-c2 { --tag-bg: #2b1d11; --tag-bd: #593815; --tag-fg: #f3b765; }
+:root[data-theme="dark"] .tag-c3 { --tag-bg: #1a1325; --tag-bd: #301c4d; --tag-fg: #ab7ae0; }
+:root[data-theme="dark"] .tag-c4 { --tag-bg: #112123; --tag-bd: #144848; --tag-fg: #58d1c9; }
+:root[data-theme="dark"] .tag-c5 { --tag-bg: #291321; --tag-bd: #551c3b; --tag-fg: #e0529c; }
+:root[data-theme="dark"] .tag-c6 { --tag-bg: #2b2111; --tag-bd: #594214; --tag-fg: #f3cc62; }
+:root[data-theme="dark"] .tag-c7 { --tag-bg: #131629; --tag-bd: #1c2755; --tag-fg: #7f9ef3; }
+:root[data-theme="dark"] .tag-c8 { --tag-bg: #1f2611; --tag-bd: #3e4f13; --tag-fg: #c9e75d; }
+
+/* 标题后面的标签：放不下时先截短标题，标签最多占一行的六成（再多的截掉） */
+.tag-list {
+  display: inline-flex;
+  flex: none;
+  max-width: 60%;
+  gap: 3px;
+  margin-left: 6px;
+  overflow: hidden;
+}
+.tag-chip {
+  display: inline-block;
+  flex: none;
+  max-width: 8em;
+  padding: 0 5px;
+  border: 1px solid var(--tag-bd, var(--c-border-strong));
+  border-radius: 4px;
+  background: var(--tag-bg, var(--c-fill));
+  color: var(--tag-fg, var(--c-text-2));
+  font-size: 11px;
+  font-weight: normal;
+  font-style: normal;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.tree .tag-chip {
+  font-size: max(11px, calc(var(--fs-sidebar) - 3px));
+  line-height: calc(var(--fs-sidebar) + 2px);
+}
+/* 放不下的几个：「+N」，悬停看全部 */
+.tag-more {
+  color: var(--c-text-3);
+}
+/* 搜索时命中的标签：描边画在里面（外面会被 .tag-list 截掉） */
+.tag-chip.hit {
+  border-color: var(--c-warning, #faad14);
+  box-shadow: inset 0 0 0 1px var(--c-warning, #faad14);
+}
+
+/* 编辑区上方元信息一行里的标签：× 去掉，「+ 标签」输入 */
+.tag-editor {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.tag-editor .tag-chip,
+.tag-select .tag-chip {
+  font-size: 12px;
+  line-height: 20px;
+  max-width: 14em;
+}
+.tag-chip.closable {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding-right: 3px;
+}
+.tag-close {
+  font-size: 10px;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.tag-close:hover {
+  opacity: 1;
+}
+.tag-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: 4px;
+  line-height: 20px;
+  color: var(--c-text-3);
+  cursor: pointer;
+}
+.tag-add:hover {
+  color: var(--c-primary);
+  border-color: var(--c-primary);
+}
+.tag-input {
+  width: 160px;
+}
+/* 选标签的对话框：下拉里的一项（标签、几条），选择框里选着的 */
+.tag-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.select-chip {
+  margin: 2px 4px 2px 0;
 }
 
 /* 侧栏待办行共用的悬停提示、右键菜单的锚点：盖在那一行上（提示）或指针处（菜单），不挡鼠标 */
@@ -1056,6 +1191,25 @@ body.drag-moving .tree-row:hover .row-count {
 .list-row.done .list-title {
   color: var(--c-text-3);
   text-decoration: line-through;
+}
+/* 标题后面有标签等标记的：标题太长时截短标题，删除线只划标题 */
+.list-title.with-marks {
+  display: flex;
+  align-items: center;
+}
+.list-title.with-marks .list-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.list-row.done .list-title.with-marks {
+  text-decoration: none;
+}
+.list-row.done .list-title.with-marks .list-title-text {
+  text-decoration: line-through;
+}
+.list-row.done .tag-chip {
+  opacity: 0.6;
 }
 .list-time {
   flex: none;

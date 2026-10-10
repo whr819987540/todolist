@@ -10,6 +10,7 @@ export default function TodoTip({ t }: { t: TodoSummary }) {
         状态：{t.done ? "已完成" : "未完成"}
         {t.pinned && "，已置顶"}
       </div>
+      {t.tags.length > 0 && <div className="todo-tip-tags">标签：{t.tags.join("、")}</div>}
       <div>创建时间：{fullTime(t.createdAt)}</div>
       <div>修改时间：{fullTime(t.updatedAt)}</div>
       {t.done && t.doneAt && <div>完成时间：{fullTime(t.doneAt)}</div>}

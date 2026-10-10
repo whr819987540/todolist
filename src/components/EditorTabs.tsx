@@ -213,7 +213,14 @@ export default function EditorTabs({ tabs, active, activeDirty, onActivate, onCl
               aria-selected={isActive}
               data-tab={key}
               className={cls.filter(Boolean).join(" ")}
-              title={`${t.workspace} / ${projectLabel(t.project)} / ${text}${dirty ? `\n${DIRTY_HINT}` : ""}${t.preview ? `\n${PREVIEW_HINT}` : ""}`}
+              title={[
+                `${t.workspace} / ${projectLabel(t.project)} / ${text}`,
+                t.todo.tags.length > 0 && `标签：${t.todo.tags.join("、")}`,
+                dirty && DIRTY_HINT,
+                t.preview && PREVIEW_HINT,
+              ]
+                .filter(Boolean)
+                .join("\n")}
               onClick={() => onActivate(t)}
               onDoubleClick={() => t.preview && onKeep(t)}
               // 左键按住拖动；中键按下时不让 WebView 进入自动滚动，松开时关掉

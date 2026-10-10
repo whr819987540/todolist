@@ -1,7 +1,9 @@
 import type { MenuProps } from "antd";
 import { describe, expect, it, vi } from "vitest";
 import type { TodoSummary, WorkspaceTree } from "../types";
-import { type Actions, moveTargets, todoMenu } from "./menus";
+import type { TodoAt } from "./DragMove";
+import { type Actions, batchMenu, moveTargets, todoMenu } from "./menus";
+import type { BatchActions } from "./workspaceActions";
 
 // docs/requirements.md「右键工作区 / 项目 / 待办弹出操作菜单」：待办的「移动到」——只显示一个工作区时列出同一工作区的其他项目；
 // 同时显示了几个工作区时，也列出其他选中工作区的项目，按工作区分组
@@ -119,5 +121,34 @@ describe("待办右键菜单的「置顶」", () => {
     const a = actions();
     click(todoMenu(a, "需求", todo, []), "pin");
     expect(a.togglePinned).toHaveBeenCalledWith("需求", todo);
+  });
+});
+
+describe("待办右键菜单的「标签…」", () => {
+  it("点了打开选标签的对话框", () => {
+    const a = { editTags: vi.fn() } as unknown as Actions & { editTags: ReturnType<typeof vi.fn> };
+    const menu = todoMenu(a, "需求", todo, []);
+    expect((menu.items as Item[]).find((i) => i?.key === "tags")?.label).toBe("标签…");
+    click(menu, "tags");
+    expect(a.editTags).toHaveBeenCalledWith("需求", todo);
+  });
+});
+
+describe("批量菜单的「添加标签」「移除标签」", () => {
+  it("作用于选中的这些待办", () => {
+    const items: TodoAt[] = [
+      { workspace: "工作", project: "需求", todo },
+      { workspace: "生活", project: "杂事", todo: { ...todo, id: "b" } },
+    ];
+    const b = { addTags: vi.fn(), removeTags: vi.fn() } as unknown as BatchActions & {
+      addTags: ReturnType<typeof vi.fn>;
+      removeTags: ReturnType<typeof vi.fn>;
+    };
+    const menu = batchMenu(items, [], b, () => {});
+    expect(labels(menu.items as Item[])).toEqual(expect.arrayContaining(["添加标签…", "移除标签…"]));
+    click(menu, "add-tags");
+    click(menu, "remove-tags");
+    expect(b.addTags).toHaveBeenCalledWith(items);
+    expect(b.removeTags).toHaveBeenCalledWith(items);
   });
 });

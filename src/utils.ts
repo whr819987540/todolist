@@ -123,12 +123,6 @@ export function reorderedIds(sorted: readonly TodoSummary[], id: string, target:
   return ids;
 }
 
-export function matchTodo(t: TodoSummary, keyword: string): boolean {
-  if (!keyword) return true;
-  const k = keyword.toLowerCase();
-  return t.title.toLowerCase().includes(k) || t.preview.toLowerCase().includes(k);
-}
-
 /** 和正则 \s 一样的空白字符（UTF-16 码元） */
 function isSpace(c: number): boolean {
   if (c <= 0x20) return c === 0x20 || (c >= 0x09 && c <= 0x0d);

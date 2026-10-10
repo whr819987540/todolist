@@ -12,6 +12,7 @@ import {
   subProjectsOf,
   topProjects,
 } from "../projects";
+import { addTags, allTodos, countTags, removeTags } from "../tags";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
@@ -28,6 +29,7 @@ import {
 } from "../workspaceState";
 import type { Actions } from "./menus";
 import type { useNameDialog } from "./NameDialog";
+import type { TagOption, useTagDialog } from "./TagDialog";
 import { type Collapsed, type Selection, WS_KEY } from "./sidebar/tree";
 import type { EditorHandle } from "./TodoEditor";
 import { useUndoDelete } from "./undo";
@@ -68,6 +70,8 @@ export interface ActionContext {
   flushEditor: () => Promise<boolean>;
   editorRef: React.RefObject<EditorHandle | null>;
   openDialog: ReturnType<typeof useNameDialog>[1];
+  /** 选标签的对话框（右键「标签…」、批量添加 / 移除标签） */
+  openTagDialog: ReturnType<typeof useTagDialog>[1];
   collapsed: PerWorkspace<Collapsed>;
   listOptions: PerWorkspace<ListOptions>;
   /** 展开工作区（WS_KEY）或项目 */
@@ -86,6 +90,10 @@ export interface ActionContext {
 export interface BatchActions {
   setDone(items: TodoAt[], done: boolean): void;
   setPinned(items: TodoAt[], pinned: boolean): void;
+  /** 选几个标签加到每一条上（已经有的不重复加） */
+  addTags(items: TodoAt[]): void;
+  /** 从选中的待办上有的标签里选几个去掉 */
+  removeTags(items: TodoAt[]): void;
   /** 移到 targetWs 的项目 target；已经在那里的不动 */
   move(items: TodoAt[], target: string, targetWs: string): void;
   /** 确认后删除 */
@@ -118,6 +126,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
     flushEditor,
     editorRef,
     openDialog,
+    openTagDialog,
     collapsed,
     listOptions,
     expand,
@@ -173,6 +182,13 @@ export function useWorkspaceActions(ctx: ActionContext) {
       return false;
     }
   };
+
+  /** 选标签时下拉里列出的：侧栏里显示的工作区用过的标签，用得多的在前，后面写着几条 */
+  const tagOptions = (): TagOption[] =>
+    countTags(allTodos(workspaces.map(treeOf).filter((t) => t !== undefined))).map((c) => ({
+      name: c.name,
+      note: `${c.count} 条`,
+    }));
 
   const confirmDelete = (title: string, content: string, onOk: () => Promise<void>) =>
     modal.confirm({
@@ -344,6 +360,21 @@ export function useWorkspaceActions(ctx: ActionContext) {
         run(async () => {
           patchTodo(ws, project, await api.setTodoPinned(ws, project, t.id, !t.pinned));
         }),
+      setTags: (project, t, tags) =>
+        run(async () => {
+          patchTodo(ws, project, await api.setTodoTags(ws, project, t.id, tags));
+        }),
+      editTags: (project, t) =>
+        openTagDialog({
+          title: "标签",
+          label: `「${displayTitle(t).text}」的标签`,
+          initial: t.tags,
+          options: tagOptions(),
+          creatable: true,
+          onSubmit: async (tags) => {
+            patchTodo(ws, project, await api.setTodoTags(ws, project, t.id, tags));
+          },
+        }),
       deleteTodo: (project, t) =>
         confirmDelete(`删除待办「${displayTitle(t).text}」？`, "将被移到回收站，可以在回收站里恢复。", async () => {
           const isSel = isSelTodo(project, t.id);
@@ -436,6 +467,47 @@ export function useWorkspaceActions(ctx: ActionContext) {
       );
       if (ok) message.success(`已${pinned ? "置顶" : "取消置顶"} ${ok} 条`);
       else if (!todo.length) message.info(`选中的都已经${pinned ? "置顶" : "没有置顶"}`);
+    },
+    addTags: (items) =>
+      openTagDialog({
+        title: `给选中的 ${items.length} 条待办添加标签`,
+        label: "加到每一条上，已经有的不重复加",
+        initial: [],
+        options: tagOptions(),
+        creatable: true,
+        required: true,
+        okText: "添加",
+        onSubmit: async (tags) => {
+          const todo = items.filter((x) => addTags(x.todo.tags, tags) !== x.todo.tags);
+          const ok = await each(todo, async ({ workspace, project, todo: t }) =>
+            patchTodo(workspace, project, await api.setTodoTags(workspace, project, t.id, [...addTags(t.tags, tags)])),
+          );
+          if (ok) message.success(`已给 ${ok} 条添加标签「${tags.join("、")}」`);
+          else if (!todo.length) message.info("选中的都已经有这些标签");
+        },
+      }),
+    removeTags: (items) => {
+      const used = countTags(items.map((x) => x.todo));
+      if (!used.length) {
+        message.info("选中的待办都没有标签");
+        return;
+      }
+      openTagDialog({
+        title: `从选中的 ${items.length} 条待办上移除标签`,
+        label: "待办本身不删除",
+        initial: [],
+        options: used.map((c) => ({ name: c.name, note: `${c.count} 条有` })),
+        creatable: false,
+        required: true,
+        okText: "移除",
+        onSubmit: async (tags) => {
+          const todo = items.filter((x) => removeTags(x.todo.tags, tags) !== x.todo.tags);
+          const ok = await each(todo, async ({ workspace, project, todo: t }) =>
+            patchTodo(workspace, project, await api.setTodoTags(workspace, project, t.id, [...removeTags(t.tags, tags)])),
+          );
+          if (ok) message.success(`已从 ${ok} 条上移除标签「${tags.join("、")}」`);
+        },
+      });
     },
     move: async (items, target, targetWs) => {
       const todo = items.filter((x) => x.workspace !== targetWs || x.project !== target);

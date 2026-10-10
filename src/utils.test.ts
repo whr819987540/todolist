@@ -4,7 +4,6 @@ import {
   compactTime,
   displayTitle,
   formatDuration,
-  matchTodo,
   myVersionTitle,
   relativeTime,
   shortTime,
@@ -129,16 +128,6 @@ describe("排序（sortTodos）", () => {
     const list = [a, b, c];
     sortTodos(list, "title");
     expect(ids(list)).toEqual(["a", "b", "c"]);
-  });
-});
-
-describe("搜索匹配（matchTodo）", () => {
-  it("标题和正文开头，不分大小写", () => {
-    const t = todo({ title: "Weekly Report", preview: "整理会议纪要" });
-    expect(matchTodo(t, "weekly")).toBe(true);
-    expect(matchTodo(t, "纪要")).toBe(true);
-    expect(matchTodo(t, "预算")).toBe(false);
-    expect(matchTodo(t, "")).toBe(true);
   });
 });
 
