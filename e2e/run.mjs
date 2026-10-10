@@ -38,6 +38,7 @@ const SUITES = [
   "tables",
   "backup",
   "history",
+  "export",
   "regress",
 ];
 

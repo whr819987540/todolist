@@ -2,7 +2,7 @@ import type { MenuProps } from "antd";
 import { describe, expect, it, vi } from "vitest";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
-import { type Actions, batchMenu, moveTargets, todoMenu } from "./menus";
+import { type Actions, batchMenu, moveTargets, projectMenu, todoMenu, workspaceMenu } from "./menus";
 import type { BatchActions } from "./workspaceActions";
 
 // docs/requirements.md「右键工作区 / 项目 / 待办弹出操作菜单」：待办的「移动到」——只显示一个工作区时列出同一工作区的其他项目；
@@ -32,9 +32,18 @@ const moveItem = (menu: MenuProps) => (menu.items as Item[]).find((i) => i?.key 
 const labels = (items: Item[] | undefined) => (items ?? []).map((i) => i.label);
 
 function actions() {
-  return { moveTodo: vi.fn(), togglePinned: vi.fn() } as unknown as Actions & {
+  return {
+    moveTodo: vi.fn(),
+    togglePinned: vi.fn(),
+    exportTodo: vi.fn(),
+    exportProject: vi.fn(),
+    exportWorkspace: vi.fn(),
+  } as unknown as Actions & {
     moveTodo: ReturnType<typeof vi.fn>;
     togglePinned: ReturnType<typeof vi.fn>;
+    exportTodo: ReturnType<typeof vi.fn>;
+    exportProject: ReturnType<typeof vi.fn>;
+    exportWorkspace: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -186,5 +195,34 @@ describe("批量菜单的「设置优先级」", () => {
     const low = (menu.items as Item[]).find((i) => i?.key === "priority")!.children![2];
     click(menu, low.key!);
     expect(b.setPriority).toHaveBeenCalledWith(items, 1);
+  });
+});
+
+// docs/requirements.md「导出」：待办、项目（包括子项目）、工作区的菜单里「导出」→「导出为 HTML」
+describe("菜单里的「导出」", () => {
+  const exportItem = (menu: MenuProps) => (menu.items as Item[]).find((i) => i?.key === "export")!;
+
+  it("待办、项目、子项目、工作区的菜单里都有，子菜单是「导出为 HTML」", () => {
+    for (const menu of [
+      todoMenu(actions(), "需求", todo, []),
+      projectMenu(actions(), "需求", []),
+      projectMenu(actions(), "需求/前端", []),
+      workspaceMenu(actions()),
+    ]) {
+      const item = exportItem(menu);
+      expect(item.label).toBe("导出");
+      expect(labels(item.children)).toEqual(["导出为 HTML"]);
+    }
+  });
+
+  it("点了交给对应的导出：这条待办、这个项目、这个工作区", () => {
+    const a = actions();
+    const pick = (menu: MenuProps) => click(menu, exportItem(menu).children![0].key!);
+    pick(todoMenu(a, "需求", todo, []));
+    pick(projectMenu(a, "需求/前端", []));
+    pick(workspaceMenu(a));
+    expect(a.exportTodo).toHaveBeenCalledWith("需求", todo, "html");
+    expect(a.exportProject).toHaveBeenCalledWith("需求/前端", "html");
+    expect(a.exportWorkspace).toHaveBeenCalledWith("html");
   });
 });

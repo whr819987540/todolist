@@ -554,6 +554,18 @@ mark {
   font-weight: 500;
 }
 
+/* 导出：确认框里的数目和「包含已完成的待办」，导出完的提示（路径长时折行） */
+.export-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.export-done {
+  overflow-wrap: anywhere;
+}
+
 /* 回收站 */
 .recycle-search {
   margin-bottom: 12px;

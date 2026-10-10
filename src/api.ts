@@ -6,6 +6,9 @@ import type {
   DataRestoreDone,
   DoneTodo,
   EditorBackground,
+  Exported,
+  ExportFormat,
+  ExportRequest,
   FontArea,
   ImageFile,
   Priority,
@@ -264,6 +267,20 @@ export const api = {
   /** 选备份目录的对话框，返回选中的文件夹；取消时返回 null */
   pickBackupDir: () => invoke<string | null>("pick_backup_dir"),
   openBackupDir: () => invoke<void>("open_backup_dir"),
+
+  // 导出成 HTML
+
+  /**
+   * 弹出「另存为」对话框选导出到哪里，返回路径；取消时返回 null。默认文件名是待办（todo）的标题、项目名或工作区名；
+   * 从 dir（上次导出到的目录）打开，没有或不在了时从「文档」打开
+   */
+  pickExportTarget: (format: ExportFormat, workspace: string, project: string | null, todo: string | null, dir: string | null) =>
+    invoke<string | null>("pick_export_target", { format, workspace, project, todo, dir }),
+  /** 按排好的顺序导出（后台做，数据多时要几秒） */
+  exportTodos: (request: ExportRequest) => invoke<Exported>("export_todos", { request }),
+  /** 用默认程序打开导出的文件（只认这次运行期间导出过的） */
+  openExported: (path: string) => invoke<void>("open_exported", { path }),
+  revealExported: (path: string) => invoke<void>("reveal_exported", { path }),
 };
 
 /** invoke 失败时 reject 的是 Rust 端返回的中文错误字符串 */
