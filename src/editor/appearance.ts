@@ -94,13 +94,12 @@ const theme = EditorView.theme({
   // 显示原文时也一样，正文不左右跳。格子里不用行上的悬挂缩进；字号总是正文字号（列表项是标题时也不跟着放大）
   ".cm-md-li-bullet": {
     display: "inline-block",
-    paddingRight: "calc(var(--fs-editor) * 0.45)",
-    boxSizing: "border-box",
     textAlign: "right",
     textIndent: "0",
     fontSize: "var(--fs-editor)",
-    color: "var(--c-text-2)",
   },
+  // 符号后面到正文的空当是字间距（不是内边距），整段划掉时删除线从符号一直画到正文
+  ".cm-md-li-glyph": { letterSpacing: "calc(var(--fs-editor) * 0.45)", color: "var(--c-text-2)" },
   ".cm-md-li-num": {
     display: "inline-block",
     textAlign: "right",
@@ -118,6 +117,8 @@ const theme = EditorView.theme({
   },
   // 原文里有任务框的（"- [X] "、有序任务的 "[X] "）比一格略宽，字距收紧一点放进去
   ".cm-md-li-mark-task": { letterSpacing: "-0.05em" },
+  // 整段划掉的项：列表符号、序号连同后面的空当也划掉（删除线用这一行文字的颜色）
+  ".cm-md-li-struck": { textDecoration: "line-through" },
   ".cm-md-li-taskmark": {
     display: "inline-block",
     minWidth: "var(--md-task)",

@@ -116,6 +116,59 @@ describe("列表符号和正文的开头", () => {
   });
 });
 
+describe("整段划掉的项，列表符号也一起划掉", () => {
+  // docs/requirements.md：列表项开头那一段里不是空白的字都在 ~~…~~ 里时，列表符号 / 序号（连同到正文的空当）也画删除线；
+  // 只划掉一部分的不画；任务列表的项不画；只看开头这一段，后面的段落、子项不管；文件里照原样
+  const struck = (doc: string) => {
+    const state = makeState(doc);
+    const tree = ensureSyntaxTree(state, state.doc.length, 1000)!;
+    const out: string[] = [];
+    for (let n = 1; n <= state.doc.lines; n++) {
+      const m = listLine(state, state.doc.line(n), tree)?.markers[0];
+      if (m) out.push(`${state.sliceDoc(m.from, m.to)}${m.struck ? " 划" : ""}`);
+    }
+    return out;
+  };
+
+  it("整段在 ~~…~~ 里：有序、无序列表的符号都划掉", () => {
+    expect(struck("9. ~~C（回复预取）的残余：C 默认关，不急。~~")).toEqual(["9. 划"]);
+    expect(struck("- ~~甲~~\n* ~~乙~~")).toEqual(["- 划", "* 划"]);
+  });
+
+  it("前后的空白、几段 ~~…~~ 之间只隔着空白也算", () => {
+    expect(struck("1.   ~~甲~~  \n2. ~~甲~~ ~~乙~~")).toEqual(["1. 划", "2. 划"]);
+  });
+
+  it("只划掉一部分的不算：前面、后面、中间还有没划掉的字", () => {
+    expect(struck("1. ~~甲~~ 乙\n2. 甲 ~~乙~~\n3. ~~甲~~ 乙 ~~丙~~\n4. 没划\n5. ")).toEqual(["1.", "2.", "3.", "4.", "5."]);
+  });
+
+  it("~~…~~ 外面还有别的格式标记的不算", () => {
+    expect(struck("- *~~甲~~*\n- [~~甲~~](https://a.cn)")).toEqual(["-", "-"]);
+  });
+
+  it("一段写成几行：每一行都划掉了才算", () => {
+    expect(struck("1. ~~甲~~\n   ~~甲的续行~~\n2. ~~乙~~\n   乙的续行")).toEqual(["1. 划", "2."]);
+  });
+
+  it("只看开头这一段：后面的段落没划掉也算；子项各算各的", () => {
+    expect(struck("- ~~甲~~\n\n  第二段没划")).toEqual(["- 划"]);
+    expect(struck("- ~~父项~~\n  - 子项\n- 父项\n  - ~~子项~~")).toEqual(["- 划", "-", "-", "- 划"]);
+  });
+
+  it("任务列表的项不画（任务框是控件）", () => {
+    expect(struck("- [ ] ~~甲~~\n1. [x] ~~乙~~")).toEqual(["-", "1."]);
+  });
+
+  it("开头不是段落的不算", () => {
+    expect(struck("- # ~~标题~~")).toEqual(["-"]);
+  });
+
+  it("引用里的列表照样算，续行行首的 > 不算没划掉的字", () => {
+    expect(struck("> - ~~甲~~\n> 1. ~~乙~~\n>    ~~乙的续行~~")).toEqual(["- 划", "1. 划"]);
+  });
+});
+
 describe("续行、第二段和代码块对齐到正文", () => {
   it("缩进到正文的续行属于这一项（多缩进的空格也藏起来）", () => {
     expect(layout("- 甲\n  - 乙\n    乙的续行\n      多缩进了两格\n  甲的第二段")).toEqual([

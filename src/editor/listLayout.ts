@@ -33,6 +33,8 @@ export interface ListMarker {
   bulletLevel: number;
   /** 放列表符号 / 序号的那一格有多宽（em）：一级缩进；有序列表里有三位数以上的序号时，整个列表一起加宽到放得下 */
   slot: number;
+  /** 这一项整段划掉了，列表符号 / 序号连同后面的空当也画上删除线（见 struckThrough） */
+  struck: boolean;
 }
 
 export interface ListLine {
@@ -104,6 +106,32 @@ function slotOf(item: SyntaxNode, tree: Tree): number {
   return Math.max(INDENT, digits * DIGIT + NUMBER_GAP);
 }
 
+/**
+ * 列表项开头的那一段整段划掉了：这一段里不是空白的字都在 ~~…~~ 里（几段 ~~…~~ 之间只隔着空白也算；
+ * 续行行首的引用标记 > 不算），列表符号就一起划掉，看上去像 ~~9. 甲~~。只划掉一部分、~~…~~ 外面还有别的字
+ * （包括 *、[ ] 这类标记）的不算；开头不是段落的（标题、代码块等）和任务列表的项不算（任务框是控件，不画删除线）。
+ * 只看开头这一段：后面的段落、子项划没划掉不管
+ */
+function struckThrough(state: EditorState, mark: SyntaxNode): boolean {
+  const para = mark.nextSibling;
+  if (para?.name !== "Paragraph") return false;
+  // 划掉的范围和引用标记：嵌在别的格式里的 ~~…~~ 外面总还有那个格式的标记，只看直接的子节点就够了
+  const covered: TextRange[] = [];
+  let struck = false;
+  for (let c = para.firstChild; c; c = c.nextSibling) {
+    if (c.name === "Strikethrough") struck = true;
+    if (c.name === "Strikethrough" || c.name === "QuoteMark") covered.push({ from: c.from, to: c.to });
+  }
+  if (!struck) return false;
+  const text = state.sliceDoc(para.from, para.to);
+  let at = 0;
+  for (const c of covered) {
+    if (/\S/.test(text.slice(at, c.from - para.from))) return false;
+    at = c.to - para.from;
+  }
+  return !/\S/.test(text.slice(at));
+}
+
 function markerOf(state: EditorState, item: SyntaxNode, tree: Tree): ListMarker | null {
   const mark = item.getChild("ListMark");
   if (!mark) return null;
@@ -118,7 +146,8 @@ function markerOf(state: EditorState, item: SyntaxNode, tree: Tree): ListMarker 
   }
   let bulletLevel = 0;
   for (let p = item.parent?.parent; p; p = p.parent) if (p.name === "BulletList") bulletLevel++;
-  return { from: mark.from, to: mark.to, ordered, task, contentFrom, bulletLevel, slot: slotOf(item, tree) };
+  const struck = !task && struckThrough(state, mark);
+  return { from: mark.from, to: mark.to, ordered, task, contentFrom, bulletLevel, slot: slotOf(item, tree), struck };
 }
 
 /** 列表项的正文紧接着从 types 这种块开始（同一行）时返回这个块 */

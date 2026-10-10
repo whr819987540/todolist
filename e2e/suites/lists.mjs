@@ -59,6 +59,11 @@ const DOC = [
   `  ${CODE}`,
   `      ${CODE}`,
   "  ```",
+  "",
+  "8. ~~整项划掉的有序项~~",
+  "9. ~~前一半划掉~~ 后一半没有",
+  "- ~~整项划掉的无序项~~",
+  "- 一部分 ~~划掉~~ 的无序项",
 ].join("\n");
 
 /**
@@ -172,6 +177,10 @@ export default async function (t) {
     qInner: lineNo(">   > 引用里列表里的引用"),
     code1: lineNo(`  ${CODE.slice(0, 10)}`),
     code2: lineNo(`      ${CODE.slice(0, 10)}`),
+    sOrdered: lineNo("8. ~~"),
+    pOrdered: lineNo("9. ~~"),
+    sBullet: lineNo("- ~~整项"),
+    pBullet: lineNo("- 一部分"),
   };
   const WRAPPED = ["one", "two", "cont", "three", "n10", "task", "subTask", "oTask", "q1", "q2", "para2", "qItem", "qItem2", "n100", "nested", "quote", "code1"];
   const near = (a, b) => Math.abs(a - b) <= 1;
@@ -202,6 +211,32 @@ export default async function (t) {
   check("有三位数的序号时整个列表的那一格一起加宽：正文对齐", near(x("n98"), x("n100")) && x("n100") > x("one"), { n98: x("n98"), n100: x("n100") });
   check("同一行里套着子项（- - 甲）：正文和子项的续行对齐", near(x("nested"), x("nestedCont")) && near(x("nested") - x("one"), 2 * r.fs));
   check("列表项本身是标题（10. # 标题）时，正文和同一列表的别的项对齐", near(x("h10"), x("h9")));
+
+  // 整段划掉（~~…~~）的项：序号、列表符号也画删除线，只划掉一部分的不画
+  const decoration = (keys) =>
+    m.ev(`const v = view(); const out = {};
+      for (const [k, n] of ${JSON.stringify(keys.map((k) => [k, L[k]]))}) {
+        const block = v.lineBlockAt(v.state.doc.line(n).from);
+        v.scrollDOM.scrollTop = block.top - 20;
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const at = v.domAtPos(v.state.doc.line(n).from).node;
+        const mark = (at.nodeType === 3 ? at.parentElement : at).closest(".cm-line").querySelector(".cm-md-li-num, .cm-md-li-mark, .cm-md-li-bullet");
+        out[k] = mark ? getComputedStyle(mark).textDecorationLine : "没找到列表符号";
+      }
+      return out;`);
+  const struck = (d) => /line-through/.test(d);
+  let deco = await decoration(["sOrdered", "sBullet", "pOrdered", "pBullet"]);
+  check("整段划掉的列表项，序号、列表符号也画上删除线（有序、无序）", struck(deco.sOrdered) && struck(deco.sBullet), deco);
+  check("只划掉一部分的列表项，序号、列表符号不画删除线", !struck(deco.pOrdered) && !struck(deco.pBullet), deco);
+  // 光标在划掉的文字里（显示出 ~~）时序号照样划掉
+  await m.ev(`const v = view(); v.focus(); const line = v.state.doc.line(${L.sOrdered}); v.dispatch({ selection: { anchor: line.from + 7 }, scrollIntoView: true }); return 1`);
+  await m.press("ArrowRight");
+  await t.sleep(80);
+  const shown = await m.ev(`const v = view(); const at = v.domAtPos(v.state.doc.line(${L.sOrdered}).from).node;
+    return (at.nodeType === 3 ? at.parentElement : at).closest(".cm-line").textContent`);
+  deco = await decoration(["sOrdered"]);
+  check("光标在这一行、显示原文（~~）时，序号照样划掉", struck(deco.sOrdered) && shown.includes("~~"), { deco, shown });
+  await m.ev(`view().contentDOM.blur(); await sleep(200); return 1`);
 
   // 光标碰到列表符号时显示原文，正文不动
   const before = r;

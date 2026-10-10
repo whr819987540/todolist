@@ -24,21 +24,34 @@ const BULLETS = ["•", "◦", "▪"];
 const emWidth = (n: number) => `calc(var(--fs-editor) * ${n})`;
 
 class BulletWidget extends WidgetType {
-  /** slot：放在行首那一格里的列表符号，是那一格的宽度（em）；0 是同一行里排不进格子的列表符号，照原来的宽度排 */
+  /**
+   * slot：放在行首那一格里的列表符号，是那一格的宽度（em）；0 是同一行里排不进格子的列表符号，照原来的宽度排。
+   * struck：这一项整段划掉了，符号连同后面到正文的空当一起划掉
+   */
   constructor(
     readonly level: number,
     readonly slot: number,
+    readonly struck = false,
   ) {
     super();
   }
   eq(other: BulletWidget) {
-    return other.level === this.level && other.slot === this.slot;
+    return other.level === this.level && other.slot === this.slot && other.struck === this.struck;
   }
   toDOM() {
     const el = document.createElement("span");
-    el.className = this.slot ? "cm-md-li-bullet" : "cm-md-bullet";
-    if (this.slot) el.style.width = emWidth(this.slot);
-    el.textContent = BULLETS[this.level % BULLETS.length];
+    const bullet = BULLETS[this.level % BULLETS.length];
+    if (!this.slot) {
+      el.className = "cm-md-bullet";
+      el.textContent = bullet;
+      return el;
+    }
+    // 符号后面到正文的空当用字间距而不是内边距，删除线才画得过去
+    el.className = this.struck ? "cm-md-li-bullet cm-md-li-struck" : "cm-md-li-bullet";
+    el.style.width = emWidth(this.slot);
+    const glyph = el.appendChild(document.createElement("span"));
+    glyph.className = "cm-md-li-glyph";
+    glyph.textContent = bullet;
     return el;
   }
   // 点列表符号时照常放置光标
@@ -47,20 +60,21 @@ class BulletWidget extends WidgetType {
   }
 }
 
-/** 有序列表的序号（光标没碰到时）：看上去和原文一样，靠右放在那一格里 */
+/** 有序列表的序号（光标没碰到时）：看上去和原文一样，靠右放在那一格里；struck：这一项整段划掉了，序号也划掉 */
 class NumberWidget extends WidgetType {
   constructor(
     readonly text: string,
     readonly slot: number,
+    readonly struck = false,
   ) {
     super();
   }
   eq(other: NumberWidget) {
-    return other.text === this.text && other.slot === this.slot;
+    return other.text === this.text && other.slot === this.slot && other.struck === this.struck;
   }
   toDOM() {
     const el = document.createElement("span");
-    el.className = "cm-md-li-num";
+    el.className = this.struck ? "cm-md-li-num cm-md-li-struck" : "cm-md-li-num";
     el.style.width = emWidth(this.slot);
     const num = el.appendChild(document.createElement("span"));
     num.className = "cm-md-li-numtext";
@@ -194,11 +208,14 @@ function cachedDeco(key: string, make: () => Decoration) {
   return d;
 }
 
-/** 显示原文时的列表符号 / 序号：仍占行首那一格，正文不左右跳。task：原文里有任务框（"- [x] "），字距收紧一点才放得下 */
-const markSlot = (slot: number, task: boolean) =>
-  cachedDeco(`mark ${slot} ${task}`, () =>
+/**
+ * 显示原文时的列表符号 / 序号：仍占行首那一格，正文不左右跳。task：原文里有任务框（"- [x] "），字距收紧一点才放得下；
+ * struck：这一项整段划掉了，原文的符号也划掉
+ */
+const markSlot = (slot: number, task: boolean, struck: boolean) =>
+  cachedDeco(`mark ${slot} ${task} ${struck}`, () =>
     Decoration.mark({
-      class: task ? "cm-md-li-mark cm-md-li-mark-task" : "cm-md-li-mark",
+      class: ["cm-md-li-mark", task && "cm-md-li-mark-task", struck && "cm-md-li-struck"].filter(Boolean).join(" "),
       attributes: { style: `min-width: ${emWidth(slot)}` },
     }),
   );
@@ -251,10 +268,11 @@ function buildPreview(view: EditorView, sel: readonly SelectionRange[] | null): 
   const marker = (m: ListMarker) => {
     lineMarks.add(m.from);
     for (const p of markerParts(m, touches)) {
-      if (p.kind === "bullet") out.push(Decoration.replace({ widget: new BulletWidget(m.bulletLevel, m.slot) }).range(p.from, p.to));
+      if (p.kind === "bullet")
+        out.push(Decoration.replace({ widget: new BulletWidget(m.bulletLevel, m.slot, m.struck) }).range(p.from, p.to));
       else if (p.kind === "number")
-        out.push(Decoration.replace({ widget: new NumberWidget(doc.sliceString(m.from, m.to), m.slot) }).range(p.from, p.to));
-      else if (p.kind === "raw") outer.push(markSlot(m.slot, !!m.task && !m.ordered).range(p.from, p.to));
+        out.push(Decoration.replace({ widget: new NumberWidget(doc.sliceString(m.from, m.to), m.slot, m.struck) }).range(p.from, p.to));
+      else if (p.kind === "raw") outer.push(markSlot(m.slot, !!m.task && !m.ordered, m.struck).range(p.from, p.to));
       else if (p.kind === "box") out.push(Decoration.replace({ widget: new TaskWidget(!!m.task?.checked, !m.ordered) }).range(p.from, p.to));
       else if (p.kind === "rawBox") outer.push(taskSlot.range(p.from, p.to));
       else if (p.kind === "hide") hide(p.from, p.to);
