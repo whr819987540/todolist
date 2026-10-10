@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use store::{
-    RecycleEntry, RestoreResult, SaveResult, SearchHit, Store, TodoDetail, TodoSummary, WorkspaceInfo,
-    WorkspaceProjects, WorkspaceTree, RECYCLE_KEEP_DAYS,
+    PurgeResult, RecycleEntry, RestoreResult, SaveResult, SearchHit, Store, TodoDetail, TodoSummary,
+    WorkspaceInfo, WorkspaceProjects, WorkspaceTree, RECYCLE_KEEP_DAYS,
 };
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -266,15 +266,15 @@ async fn restore_recycled(app: AppHandle, store: State<'_, Store>, ids: Vec<Stri
     Ok(result)
 }
 
-/// 彻底删除：移到系统回收站，返回移走了几项
+/// 彻底删除：移到系统回收站，返回移走了几项、几项路径太长留在了软件的回收站里
 #[tauri::command]
-async fn purge_recycled(store: State<'_, Store>, ids: Vec<String>) -> Cmd<usize> {
+async fn purge_recycled(store: State<'_, Store>, ids: Vec<String>) -> Cmd<PurgeResult> {
     store.purge(&ids)
 }
 
-/// 清空软件的回收站（都移到系统回收站）
+/// 清空软件的回收站（都移到系统回收站；路径太长的留下）
 #[tauri::command]
-async fn empty_recycle(store: State<'_, Store>) -> Cmd<usize> {
+async fn empty_recycle(store: State<'_, Store>) -> Cmd<PurgeResult> {
     store.empty_recycle()
 }
 

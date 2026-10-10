@@ -76,8 +76,14 @@ function RecycleBinDialog({ open, onClose }: { open: boolean; onClose: () => voi
   const purge = async (ids: string[], all = false) => {
     setBusy(all ? "*" : ids[0]);
     try {
-      const n = all ? await api.emptyRecycle() : await api.purgeRecycled(ids);
-      message.success(all ? `已清空回收站，${n} 项移到了 Windows 回收站` : "已移到 Windows 回收站");
+      const r = all ? await api.emptyRecycle() : await api.purgeRecycled(ids);
+      if (r.moved) message.success(all ? `已清空回收站，${r.moved} 项移到了 Windows 回收站` : "已移到 Windows 回收站");
+      // 里面的路径太长、Windows 回收站放不下的留在这里（交给它可能失败，也可能被直接删掉），还能恢复
+      if (r.tooLong)
+        message.warning(
+          `${all ? `有 ${r.tooLong} 项` : "这一项"}里面的路径太长，Windows 回收站放不下，留在了回收站里。可以恢复后把里面的文件夹改短或拆开，再删除`,
+          8,
+        );
     } catch (err) {
       message.error(errMsg(err));
     } finally {

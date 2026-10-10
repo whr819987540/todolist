@@ -94,6 +94,14 @@ export interface RestoreResult {
   errors: string[];
 }
 
+/** 彻底删除（移到 Windows 回收站）的结果 */
+export interface PurgeResult {
+  /** 移到 Windows 回收站的 */
+  moved: number;
+  /** 里面的路径太长、Windows 回收站放不下，留在软件的回收站里的 */
+  tooLong: number;
+}
+
 export interface SaveResult {
   saved: boolean;
   summary: TodoSummary;

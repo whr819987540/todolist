@@ -291,6 +291,25 @@ pub struct RestoreResult {
     pub errors: Vec<String>,
 }
 
+/// 彻底删除（移到系统回收站）的结果
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgeResult {
+    /// 移到系统回收站的
+    pub moved: usize,
+    /// 里面的路径太长、系统回收站放不下，留在软件的回收站里的
+    pub too_long: usize,
+}
+
+/// 回收站里的一项彻底删除得怎么样
+enum Purged {
+    /// 已经不在了
+    Gone,
+    Moved,
+    /// 路径太长，留在软件的回收站里
+    TooLong,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveResult {
@@ -1031,22 +1050,24 @@ impl Store {
         Ok(restored)
     }
 
-    /// 彻底删除：从软件的回收站移到系统回收站，返回移走了几项
-    pub fn purge(&self, ids: &[String]) -> Result<usize> {
+    /// 彻底删除：从软件的回收站移到系统回收站，返回移走了几项、几项路径太长留在了软件的回收站里
+    pub fn purge(&self, ids: &[String]) -> Result<PurgeResult> {
         let _g = self.guard();
-        let mut n = 0;
+        let mut r = PurgeResult::default();
         for id in ids {
             check_component(id, "回收站里的项")?;
             let dir = self.recycle_root().join(id);
-            if self.purge_dir(&dir)? {
-                n += 1;
+            match self.purge_dir(&dir)? {
+                Purged::Moved => r.moved += 1,
+                Purged::TooLong => r.too_long += 1,
+                Purged::Gone => {}
             }
         }
-        Ok(n)
+        Ok(r)
     }
 
-    /// 清空软件的回收站（都移到系统回收站）
-    pub fn empty_recycle(&self) -> Result<usize> {
+    /// 清空软件的回收站（都移到系统回收站；路径太长的留下）
+    pub fn empty_recycle(&self) -> Result<PurgeResult> {
         let ids: Vec<String> = {
             let _g = self.guard();
             self.recycle_entries()?.into_iter().map(|(id, _)| id).collect()
@@ -1054,8 +1075,8 @@ impl Store {
         self.purge(&ids)
     }
 
-    /// 放了超过 days 天的移到系统回收站（启动时调用），返回移走了几项
-    pub fn purge_expired(&self, days: i64) -> Result<usize> {
+    /// 放了超过 days 天的移到系统回收站（启动时调用；路径太长的留下，下次启动再试）
+    pub fn purge_expired(&self, days: i64) -> Result<PurgeResult> {
         let cutoff = now_ms() - days * 86_400_000;
         let ids: Vec<String> = {
             let _g = self.guard();
@@ -1069,24 +1090,33 @@ impl Store {
     }
 
     /// 把回收站里的一项连同说明整个移到系统回收站：从系统回收站还原时回到软件的回收站，还能从那里恢复到原来的位置。
-    /// 先把目录改成看得懂的名字（标题或名称加上 id），在系统回收站里认得出是什么；这一项不在时返回 false
-    fn purge_dir(&self, dir: &Path) -> Result<bool> {
+    /// 先把目录改成看得懂的名字（标题或名称加上 id），在系统回收站里认得出是什么。
+    /// 系统回收站（资源管理器）处理不了超过 MAX_PATH 的路径（会失败，也可能不放进回收站直接删掉）：里面最长的路径超过时
+    /// 不交给它，留在软件的回收站里（返回 TooLong），还能恢复；改名后会超过时把标题截短，再不行只用 id
+    fn purge_dir(&self, dir: &Path) -> Result<Purged> {
         let Some(mut f) = read_recycle_file(dir) else {
-            return Ok(false);
+            return Ok(Purged::Gone);
         };
+        // 里面最长的路径在这一项目录下面的那一段（含开头的分隔符）
+        let deepest = deepest_inside(dir);
+        if path_len(dir) + deepest > MAX_PATH_CHARS {
+            return Ok(Purged::TooLong);
+        }
+        let parent_len = dir.parent().map_or(0, path_len);
+        let name_room = MAX_PATH_CHARS - deepest - parent_len - 1;
         f.purged_at = Some(now_ms());
         if let Ok(json) = serde_json::to_vec_pretty(&f) {
             let _ = fs::write(dir.join(ENTRY_FILE), json);
         }
         let id = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let readable = dir.with_file_name(readable_entry_name(&f, &id));
+        let readable = dir.with_file_name(readable_entry_name(&f, &id, name_room));
         let target = if readable != dir && !readable.exists() && fs::rename(dir, &readable).is_ok() {
             readable
         } else {
             dir.to_path_buf()
         };
         self.move_to_trash(&target)?;
-        Ok(true)
+        Ok(Purged::Moved)
     }
 
     // ----- 删除 -----
@@ -1289,8 +1319,9 @@ fn read_recycle_file(dir: &Path) -> Option<RecycleFile> {
 }
 
 /// 回收站里一项移到系统回收站时用的目录名：待办的标题（没有时用正文开头）、项目名或工作区名，加上 id（保证不重名）。
-/// 不能用在文件名里的字符换成 _，太长的截短
-fn readable_entry_name(f: &RecycleFile, id: &str) -> String {
+/// 不能用在文件名里的字符换成 _，太长的截短；整个名字不超过 max_len 个字符（不然里面的路径太长），放不下时标题再截短，
+/// 一个字都放不下就只用 id
+fn readable_entry_name(f: &RecycleFile, id: &str, max_len: usize) -> String {
     let label = match &f.todo {
         Some(t) if !t.title.trim().is_empty() => t.title.clone(),
         Some(_) if !f.preview.is_empty() => f.preview.clone(),
@@ -1302,12 +1333,35 @@ fn readable_entry_name(f: &RecycleFile, id: &str) -> String {
         .map(|c| if INVALID_CHARS.contains(&c) || c.is_control() { '_' } else { c })
         .take(40)
         .collect();
-    let label = label.trim().trim_start_matches('.').trim_end_matches(['.', ' ']);
+    let mut label: Vec<char> = label.trim().trim_start_matches('.').trim_end_matches(['.', ' ']).chars().collect();
+    let fixed = id.encode_utf16().count() + 2;
+    while !label.is_empty() && fixed + label.iter().map(|c| c.len_utf16()).sum::<usize>() > max_len {
+        label.pop();
+    }
+    let label: String = label.into_iter().collect();
+    let label = label.trim_end_matches(['.', ' ']);
     if label.is_empty() {
         id.to_string()
     } else {
         format!("{label}（{id}）")
     }
+}
+
+/// 目录 dir 下面最长的路径比 dir 自己长多少个字符（含开头的分隔符）；空目录是 0
+fn deepest_inside(dir: &Path) -> usize {
+    let mut deepest = 0;
+    let mut stack = vec![(dir.to_path_buf(), 0)];
+    while let Some((d, rel)) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&d) else { continue };
+        for entry in entries.flatten() {
+            let here = rel + 1 + path_len(Path::new(&entry.file_name()));
+            deepest = deepest.max(here);
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                stack.push((entry.path(), here));
+            }
+        }
+    }
+    deepest
 }
 
 /// 在 parent 里恢复名为 name 的目录用的名字：被占用时加「（恢复）」「（恢复 2）」…；返回名字和是否改了名
@@ -2159,7 +2213,7 @@ mod tests {
         let ids: Vec<String> = s.list_recycle().unwrap().into_iter().map(|e| e.id).collect();
         assert_eq!(ids, [rc.clone(), rb.clone(), ra.clone()]);
 
-        assert_eq!(s.purge(std::slice::from_ref(&ra)).unwrap(), 1);
+        assert_eq!(s.purge(std::slice::from_ref(&ra)).unwrap().moved, 1);
         assert_eq!(s.list_recycle().unwrap().len(), 2);
         // 单元测试里「系统回收站」是数据目录下的 .trash。连同说明整个移过去，名字看得出是哪条
         let trashed: Vec<PathBuf> = fs::read_dir(s.root().join(TRASH_DIR)).unwrap().map(|e| e.unwrap().path()).collect();
@@ -2182,11 +2236,11 @@ mod tests {
         let mut f: RecycleFile = serde_json::from_slice(&fs::read(&entry).unwrap()).unwrap();
         f.deleted_at -= (RECYCLE_KEEP_DAYS + 1) * 86_400_000;
         fs::write(&entry, serde_json::to_vec(&f).unwrap()).unwrap();
-        assert_eq!(s.purge_expired(RECYCLE_KEEP_DAYS).unwrap(), 1);
+        assert_eq!(s.purge_expired(RECYCLE_KEEP_DAYS).unwrap().moved, 1);
         let left: Vec<String> = s.list_recycle().unwrap().into_iter().map(|e| e.id).collect();
         assert_eq!(left, [rc]);
 
-        assert_eq!(s.empty_recycle().unwrap(), 1);
+        assert_eq!(s.empty_recycle().unwrap(), PurgeResult { moved: 1, too_long: 0 });
         assert!(s.list_recycle().unwrap().is_empty());
         assert_eq!(fs::read_dir(s.root().join(TRASH_DIR)).unwrap().count(), 2);
         // 名字里带路径的不认
@@ -2204,18 +2258,18 @@ mod tests {
         let mut f: RecycleFile = serde_json::from_slice(&fs::read(&entry).unwrap()).unwrap();
         f.deleted_at -= (RECYCLE_KEEP_DAYS + 1) * 86_400_000;
         fs::write(&entry, serde_json::to_vec(&f).unwrap()).unwrap();
-        assert_eq!(s.purge_expired(RECYCLE_KEEP_DAYS).unwrap(), 1);
+        assert_eq!(s.purge_expired(RECYCLE_KEEP_DAYS).unwrap().moved, 1);
         // 从系统回收站（单元测试里是 .trash）还原回 .recycle：记着移走的时间，下次启动不会又被移走
         let trashed = fs::read_dir(s.root().join(TRASH_DIR)).unwrap().next().unwrap().unwrap().path();
         fs::rename(&trashed, s.root().join(RECYCLE_DIR).join("还原回来的")).unwrap();
-        assert_eq!(s.purge_expired(RECYCLE_KEEP_DAYS).unwrap(), 0);
+        assert_eq!(s.purge_expired(RECYCLE_KEEP_DAYS).unwrap().moved, 0);
         assert_eq!(s.list_recycle().unwrap()[0].title, "老的");
     }
 
     #[test]
     fn readable_names_for_system_trash() {
         let mut f = RecycleFile::new(RecycleKind::Project, "w", Some("需求: 开发?"), "需求: 开发?", 0);
-        assert_eq!(readable_entry_name(&f, "1"), "需求_ 开发_（1）");
+        assert_eq!(readable_entry_name(&f, "1", usize::MAX), "需求_ 开发_（1）");
         f.todo = Some(TodoMeta {
             id: "x".into(),
             title: "  ".into(),
@@ -2227,11 +2281,59 @@ mod tests {
             order: None,
         });
         f.preview = "正文开头".repeat(20);
-        assert_eq!(readable_entry_name(&f, "2"), format!("{}（2）", "正文开头".repeat(10)));
+        assert_eq!(readable_entry_name(&f, "2", usize::MAX), format!("{}（2）", "正文开头".repeat(10)));
+        // 名字有长度限制（不然里面的路径太长）：标题截短，一个字都放不下就只用 id
+        assert_eq!(readable_entry_name(&f, "2", 7), "正文开头（2）");
+        assert_eq!(readable_entry_name(&f, "2", 5), "正文（2）");
+        assert_eq!(readable_entry_name(&f, "2", 4), "正（2）");
+        assert_eq!(readable_entry_name(&f, "2", 3), "2");
         f.preview.clear();
-        assert_eq!(readable_entry_name(&f, "3"), "空白待办（3）");
+        assert_eq!(readable_entry_name(&f, "3", usize::MAX), "空白待办（3）");
         let ws = RecycleFile::new(RecycleKind::Workspace, ".隐藏", None, "...", 0);
-        assert_eq!(readable_entry_name(&ws, "4"), "4");
+        assert_eq!(readable_entry_name(&ws, "4", usize::MAX), "4");
+    }
+
+    #[test]
+    fn too_long_entries_stay_in_recycle_bin() {
+        let (_tmp, s) = store("recycle-long");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        // 在资源管理器之外建的很深的文件夹（Linux 上没有限制）：放进软件的回收站后里面的路径超过 259
+        let pdir = s.project_path("w", "p").unwrap();
+        let deep = (0..5).fold(pdir.clone(), |d, i| d.join(format!("{i}{}", "深".repeat(50))));
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("a.md"), "很深").unwrap();
+        let rid = s.delete_project("w", "p").unwrap();
+        let entry = s.root().join(RECYCLE_DIR).join(&rid);
+        assert!(path_len(&entry) + deepest_inside(&entry) > MAX_PATH_CHARS);
+        // 彻底删除、清空、放满 30 天：系统回收站放不下的不交给它，留在软件的回收站里，还能恢复
+        assert_eq!(s.purge(std::slice::from_ref(&rid)).unwrap(), PurgeResult { moved: 0, too_long: 1 });
+        assert_eq!(s.empty_recycle().unwrap(), PurgeResult { moved: 0, too_long: 1 });
+        assert_eq!(s.list_recycle().unwrap().len(), 1);
+        assert!(!s.root().join(TRASH_DIR).exists());
+        assert!(s.restore(&[rid]).errors.is_empty());
+        assert!(deep.join("a.md").is_file());
+
+        // 放得下、但改成看得懂的名字（「p（id）」）就放不下的：只用 id，里面的路径不超过 259
+        fs::remove_dir_all(&pdir).unwrap();
+        s.create_project("w", "p").unwrap();
+        let rid = s.delete_project("w", "p").unwrap();
+        let entry = s.root().join(RECYCLE_DIR).join(&rid);
+        // 在这一项里补上文件，让里面最长的路径正好 258 个字符
+        let mut dir = entry.join("p");
+        let mut len = path_len(&dir);
+        while len + 1 + 60 + 1 + 10 < MAX_PATH_CHARS - 1 {
+            dir = dir.join("层".repeat(60));
+            len += 61;
+        }
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("x".repeat(MAX_PATH_CHARS - 1 - len - 1)), "").unwrap();
+        assert_eq!(path_len(&entry) + deepest_inside(&entry), MAX_PATH_CHARS - 1);
+        assert_eq!(s.purge(std::slice::from_ref(&rid)).unwrap(), PurgeResult { moved: 1, too_long: 0 });
+        // 单元测试里「系统回收站」是 .trash，名字是「时间-原来的名字」
+        let trashed: Vec<String> =
+            fs::read_dir(s.root().join(TRASH_DIR)).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert!(trashed.iter().any(|n| n.ends_with(&format!("-{rid}"))), "{trashed:?}");
     }
 
     #[test]

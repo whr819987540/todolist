@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   EditorBackground,
   FontArea,
+  PurgeResult,
   QuickTarget,
   RecycleEntry,
   RestoreResult,
@@ -82,10 +83,10 @@ export const api = {
   listRecycle: () => invoke<RecycleEntry[]>("list_recycle"),
   /** 恢复到原来的位置（撤销删除也是它）；恢复了的话主窗口会收到 data-changed 刷新 */
   restoreRecycled: (ids: string[]) => invoke<RestoreResult>("restore_recycled", { ids }),
-  /** 彻底删除：移到 Windows 回收站，返回移走了几项 */
-  purgeRecycled: (ids: string[]) => invoke<number>("purge_recycled", { ids }),
-  /** 清空软件的回收站（都移到 Windows 回收站） */
-  emptyRecycle: () => invoke<number>("empty_recycle"),
+  /** 彻底删除：移到 Windows 回收站，返回移走了几项、几项路径太长留在了软件的回收站里 */
+  purgeRecycled: (ids: string[]) => invoke<PurgeResult>("purge_recycled", { ids }),
+  /** 清空软件的回收站（都移到 Windows 回收站；路径太长的留下） */
+  emptyRecycle: () => invoke<PurgeResult>("empty_recycle"),
   /** 移到另一个项目，可以在别的工作区里；返回移过去后的摘要（id 可能因为重名而变） */
   moveTodo: (workspace: string, project: string, id: string, targetWorkspace: string, targetProject: string) =>
     invoke<TodoSummary>("move_todo", { workspace, project, id, targetWorkspace, targetProject }),
