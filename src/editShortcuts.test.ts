@@ -34,6 +34,7 @@ const TYPORA_DEFAULTS: Record<EditCommandId, string> = {
   orderedList: "Ctrl+Shift+BracketLeft",
   bulletList: "Ctrl+Shift+BracketRight",
   codeBlock: "Ctrl+Shift+K",
+  table: "Ctrl+T",
   indent: "Ctrl+BracketRight",
   outdent: "Ctrl+BracketLeft",
   selectWord: "Ctrl+D",

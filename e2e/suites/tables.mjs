@@ -77,4 +77,22 @@ export default async function (t) {
   await m.press("Ctrl+S");
   await t.sleep(500);
   check("只改变显示，正文按原样保存", (await doc()) === source && t.read("工作/日常/表格.md") === source);
+
+  // Ctrl+T 插入表格：光标所在的行是空行时放在这一行（上一行有字，空一行），光标在表头的第一格，接着打字就在那一格里；可以撤销
+  await m.ev(`const v = view(); v.focus(); v.dispatch({ selection: { anchor: v.state.doc.length } }); await sleep(200); return 1`);
+  await m.press("Ctrl+T");
+  await m.type("新表头");
+  await t.sleep(300);
+  const empty = "| 新表头 |  |  |\n| --- | --- | --- |\n|  |  |  |";
+  check(
+    "Ctrl+T 在空行上插入 3 列、表头加一行内容的空表格，光标在表头的第一格",
+    (await doc()) === `${source}\n${empty}`,
+    (await doc()).slice(source.length),
+  );
+  await m.ev(`const v = view(); v.dispatch({ selection: { anchor: v.state.doc.toString().indexOf("中间一段") } }); await sleep(300); return 1`);
+  check("插入的表格也显示成渲染后的表格", (await tables()) === 3);
+  await m.ev(`view().focus(); return 1`);
+  await m.press("Ctrl+Z");
+  await m.press("Ctrl+Z");
+  check("插入表格可以撤销", (await doc()) === source, (await doc()).slice(source.length));
 }

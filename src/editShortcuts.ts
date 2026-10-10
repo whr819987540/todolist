@@ -21,6 +21,7 @@ export type EditCommandId =
   | "orderedList"
   | "bulletList"
   | "codeBlock"
+  | "table"
   | "indent"
   | "outdent"
   | "selectWord"
@@ -74,6 +75,7 @@ export const EDIT_SHORTCUT_GROUPS: readonly { title: string; items: readonly Edi
       { id: "orderedList", label: "有序列表", defaultKey: "Ctrl+Shift+BracketLeft" },
       { id: "bulletList", label: "无序列表", defaultKey: "Ctrl+Shift+BracketRight" },
       { id: "codeBlock", label: "代码块", defaultKey: "Ctrl+Shift+K" },
+      { id: "table", label: "插入表格", defaultKey: "Ctrl+T" },
       { id: "indent", label: "增加缩进", defaultKey: "Ctrl+BracketRight", fixed: ["Tab"] },
       { id: "outdent", label: "减少缩进", defaultKey: "Ctrl+BracketLeft", fixed: ["Shift+Tab"] },
     ],
