@@ -37,6 +37,22 @@ export const reparent = (p: string, from: string, to: string) => (inProject(p, f
 /** 显示用的路径：父项目 / 子项目 / … */
 export const projectLabel = (project: string) => project.split(PROJECT_SEP).join(" / ");
 
+/**
+ * 地方小、又不能悬停看完整路径的地方（操作后的提示、拖动时的说明、对话框和菜单里的说明）用的路径：级数多时留下开头 head 级
+ * 和最后 tail 级，中间折叠成「…」（只折叠掉一级时不折叠，省不了地方）
+ */
+export function compactPath(parts: readonly string[], head = 1, tail = 2): string {
+  const shown = parts.length > head + tail + 1 ? [...parts.slice(0, head), "…", ...parts.slice(-tail)] : parts;
+  return shown.join(" / ");
+}
+
+/** 项目路径超过 4 级时中间折叠：「需求 / … / 组件 / 按钮」 */
+export const shortProjectLabel = (project: string) => compactPath(project.split(PROJECT_SEP));
+
+/** 工作区 / 项目，项目层级多时中间折叠：「工作 / 需求 / … / 组件 / 按钮」 */
+export const shortPlaceLabel = (workspace: string, project: string) =>
+  compactPath([workspace, ...project.split(PROJECT_SEP)], 2, 2);
+
 /** projects 里 parent 的子项目（只是下一级的） */
 export const subProjectsOf = <T extends { name: string }>(projects: readonly T[], parent: string): T[] =>
   projects.filter((p) => parentOf(p.name) === parent);

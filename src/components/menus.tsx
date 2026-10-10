@@ -14,7 +14,7 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import { isSubProject, parentOf, projectLabel, projectMoveProblem } from "../projects";
+import { compactPath, isSubProject, parentOf, PROJECT_SEP, projectLabel, projectMoveProblem } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import type { BatchActions } from "./workspaceActions";
@@ -132,6 +132,22 @@ export function moveTargets(trees: readonly WorkspaceTree[], workspace: string):
   return [...own, ...others].map((t) => ({ workspace: t.name, projects: t.projects.map((p) => p.name) }));
 }
 
+/**
+ * 「移动到」里的一个项目：写成路径，看得出在哪一级；最后一级以外的颜色淡一点，层级多时中间折叠成「…」，
+ * 悬停（title）看完整路径。suffix 接在后面（如「（已有同名的）」）
+ */
+function pathLabel(project: string, suffix = "") {
+  const parts = compactPath(project.split(PROJECT_SEP)).split(" / ");
+  const leaf = parts.pop();
+  return (
+    <span className="menu-path" title={projectLabel(project) + suffix}>
+      {parts.length > 0 && <span className="menu-path-parent">{parts.join(" / ")} / </span>}
+      {leaf}
+      {suffix}
+    </span>
+  );
+}
+
 const MOVE_PREFIX = "move:";
 const moveKey = (workspace: string, project: string) => MOVE_PREFIX + JSON.stringify([workspace, project]);
 
@@ -144,7 +160,7 @@ function moveItems(project: string, targets: readonly MoveTarget[]): NonNullable
   const item = (workspace: string, p: string) => ({
     key: moveKey(workspace, p),
     icon: <FolderOutlined />,
-    label: projectLabel(p),
+    label: pathLabel(p),
   });
   const ownItems = own ? own.projects.filter((p) => p !== project).map((p) => item(own.workspace, p)) : [];
   if (!others.length) return ownItems;
@@ -175,13 +191,13 @@ function projectMoveItems(project: string, targets: readonly MoveTarget[]): NonN
     return places.flatMap((parent) => {
       const problem = projectMoveProblem({ project, from, to, sameWorkspace: t === own, parent });
       if (problem && problem.code !== "taken") return [];
-      const top = t === own && parentNow !== undefined ? `顶层（移出「${parentNow}」）` : "顶层";
-      const label = parent === undefined ? top : parent;
+      const top = t === own && parentNow !== undefined ? `顶层（移出「${compactPath(parentNow.split(PROJECT_SEP))}」）` : "顶层";
+      const suffix = problem ? "（已有同名的）" : "";
       return [
         {
           key: PROJECT_MOVE_PREFIX + JSON.stringify([t.workspace, parent ?? ""]),
           icon: <FolderOutlined />,
-          label: problem ? `${label}（已有同名的）` : label,
+          label: parent === undefined ? top + suffix : pathLabel(parent, suffix),
           disabled: !!problem,
         },
       ];
@@ -245,7 +261,7 @@ export function batchMoveMenu(targets: readonly MoveTarget[], onMove: (workspace
   const item = (workspace: string, p: string) => ({
     key: BATCH_MOVE_PREFIX + JSON.stringify([workspace, p]),
     icon: <FolderOutlined />,
-    label: projectLabel(p),
+    label: pathLabel(p),
   });
   const items: NonNullable<MenuProps["items"]> =
     targets.length === 1

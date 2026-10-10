@@ -1,7 +1,7 @@
 import { CheckOutlined, FolderFilled } from "@ant-design/icons";
 import { Empty, Spin, Tooltip } from "antd";
 import { useMemo } from "react";
-import { deepTodos, leafName, parentOf, projectLabel, sortProjects } from "../projects";
+import { deepTodos, leafName, parentOf, projectLabel, shortPlaceLabel, sortProjects } from "../projects";
 import { type ContentHits, hitKey, searchSnippet } from "../search";
 import type { ProjectNode, TodoSummary, WorkspaceInfo, WorkspaceTree } from "../types";
 import { displayTitle, fullTime, matchTodo, relativeTime, useNow } from "../utils";
@@ -78,7 +78,9 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
                 {projects.map(({ workspace, project, todos: all }) => {
                   const undone = all.filter((t) => !t.done).length;
                   const parent = parentOf(project.name);
+                  // 写明在哪个父项目里；层级多时中间折叠，悬停看完整的
                   const where = parent === undefined ? workspace : `${workspace} / ${projectLabel(parent)}`;
+                  const shortWhere = parent === undefined ? workspace : shortPlaceLabel(workspace, parent);
                   return (
                     <div
                       key={`${workspace}/${project.name}`}
@@ -90,7 +92,7 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
                         <Highlight text={leafName(project.name)} kw={kw} />
                       </span>
                       <span className="list-path" title={where}>
-                        {where}
+                        {shortWhere}
                       </span>
                       <span className="list-time">
                         {undone} 条未完成 / 共 {all.length} 条
@@ -126,7 +128,7 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
                         )}
                       </div>
                       <span className="list-path" title={`${workspace} / ${projectLabel(project)}`}>
-                        {workspace} / {projectLabel(project)}
+                        {shortPlaceLabel(workspace, project)}
                       </span>
                       <Tooltip title={`修改时间：${fullTime(t.updatedAt)}`}>
                         <span className="list-time">修改 {relativeTime(t.updatedAt, now)}</span>

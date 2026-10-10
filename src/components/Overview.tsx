@@ -8,14 +8,15 @@ import {
   PlusOutlined,
   PushpinFilled,
 } from "@ant-design/icons";
-import { Breadcrumb, Button, Dropdown, Empty, Input, Progress, Tooltip } from "antd";
+import { Button, Dropdown, Empty, Input, Progress, Tooltip } from "antd";
 import { useState } from "react";
-import { ancestorsOf, deepTodos, isSubProject, leafName, subProjectsOf } from "../projects";
+import { deepTodos, isSubProject, leafName, subProjectsOf } from "../projects";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../types";
 import { avatarColor, displayTitle, firstChar, fullTime, relativeTime, shortTime, sortTodos, useNow } from "../utils";
 import { type DragMove, isDraggingProject, isDraggingTodo, reorderMark } from "./DragMove";
 import { selKey } from "./sidebar/tree";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "./menus";
+import PathCrumb from "./PathCrumb";
 
 const percent = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0);
 
@@ -229,13 +230,13 @@ export function ProjectOverview(p: {
 
   return (
     <section className="overview">
-      <Breadcrumb
+      <PathCrumb
         className="overview-crumb"
-        items={[
-          { title: <a onClick={a.selectWorkspace}>{p.workspace}</a> },
-          ...ancestorsOf(project.name).map((x) => ({ title: <a onClick={() => a.selectProject(x)}>{leafName(x)}</a> })),
-          { title: leafName(project.name) },
-        ]}
+        workspace={p.workspace}
+        project={project.name}
+        onSelectWorkspace={a.selectWorkspace}
+        onSelectProject={a.selectProject}
+        linkLast={false}
       />
       <div className="overview-head">
         <FolderFilled className="project-icon huge" />

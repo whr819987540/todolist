@@ -12,6 +12,7 @@ import {
   submitKey,
   targetExists,
   targetKey,
+  shortTargetLabel,
   targetLabel,
   targetOptions,
   writeDraft,
@@ -137,7 +138,8 @@ export default function QuickCapture({ onTheme }: { onTheme: (mode: ThemeMode) =
           value={target ? targetKey(target) : undefined}
           options={targetOptions(list, target)}
           optionRender={(o) => <span title={o.data.title}>{o.label}</span>}
-          labelRender={() => (target ? targetLabel(target) : "")}
+          // 层级多时中间折叠，悬停看完整的
+          labelRender={() => (target ? <span title={targetLabel(target)}>{shortTargetLabel(target)}</span> : "")}
           listHeight={150}
           popupMatchSelectWidth={false}
           placement="bottomRight"

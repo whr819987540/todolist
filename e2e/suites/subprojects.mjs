@@ -323,6 +323,67 @@ export default async function (t) {
     { deepest: deepest.split("/").length, tooLong },
   );
 
+  // 层级多时的显示：侧栏拖窄后少缩进几级，更深的不再往右挪、文件夹图标上标出是第几级，名字不被挤没；
+  // 编辑区上方的路径放不下时中间折叠成「…」，悬停列出折叠掉的几级，点了打开那个项目
+  const chain = ["一级", "二级", "三级", "四级", "五级", "六级", "七级"];
+  const deepPath = await m.ev(`let parent = await invoke("create_project", { workspace: "工作", name: "多层" });
+    for (const name of ${JSON.stringify(chain)}) parent = await invoke("create_project", { workspace: "工作", name, parent });
+    await invoke("create_todo", { workspace: "工作", project: parent, title: "最深处的待办" });
+    return parent`);
+  await refresh();
+  await m.expandAll();
+  await m.expandAll();
+  const resizer = await m.at(".resizer");
+  await m.drag(resizer, { x: resizer.x - 60, y: resizer.y }, { steps: 6 });
+  // 指针移开：停在哪一行上时那一行显示按钮、名字变窄
+  await m.mouse("mouseMoved", { x: 900, y: 600 });
+  await t.sleep(200);
+  const narrow = await m.ev(`const levels = ["多层", ...${JSON.stringify(chain)}].map((_, i, a) => a.slice(0, i + 1).join("/"));
+    const rows = levels.map((p) => row("工作", p));
+    return {
+      sidebar: document.querySelector(".sidebar").getBoundingClientRect().width,
+      pads: rows.map((r) => parseFloat(r.style.paddingLeft)),
+      badges: rows.map((r) => r.querySelector(".project-icon").dataset.level ?? ""),
+      labels: rows.map((r) => Math.round(r.querySelector(".row-label").getBoundingClientRect().width)),
+    }`);
+  check(
+    "侧栏拖窄后：前几级照样一级一级缩进，再深的不再往右挪、文件夹图标上标出是第几级，名字留着地方",
+    narrow.sidebar <= 250 &&
+      narrow.pads[1] > narrow.pads[0] &&
+      narrow.pads[3] > narrow.pads[2] &&
+      narrow.pads.at(-1) === narrow.pads[3] &&
+      narrow.badges.slice(0, 4).every((b) => !b) &&
+      narrow.badges.slice(4).join() === "5,6,7,8" &&
+      narrow.labels.every((w) => w >= 60),
+    narrow,
+  );
+  await m.ev(`document.querySelector(".resizer").dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); await sleep(300); return 1`);
+
+  await m.viewport(860, 700);
+  await m.ev(`row("工作", ${JSON.stringify(deepPath)}, await waitFor(() => [...document.querySelectorAll(".todo-row[data-sel]")]
+      .map((r) => JSON.parse(r.dataset.sel)).find(([, p, id]) => p === ${JSON.stringify(deepPath)} && id)?.[2])).click();
+    await waitFor(() => document.querySelector(".editor-title")?.value === "最深处的待办"); await sleep(500); return 1`);
+  const crumb = await m.ev(`const c = document.querySelector(".editor-crumb");
+    return { fits: c.scrollWidth <= c.clientWidth + 1, more: !!c.querySelector(".crumb-more"), title: c.getAttribute("title"),
+      shown: [...c.querySelectorAll(".ant-breadcrumb-link")].map((e) => e.textContent) }`);
+  await m.mouse("mouseMoved", await m.at(".editor-crumb .crumb-more"));
+  const hiddenLevels = await t.until(() =>
+    m.ev(`const items = [...document.querySelectorAll(".ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item")].map((e) => e.textContent);
+      return items.length ? items : null`),
+  );
+  await m.ev(`menuItem("二级").click(); await sleep(500); return 1`);
+  await m.viewport(1200, 900);
+  check(
+    "最小窗口宽度下打开很深的待办：编辑区上方的路径中间折叠成「…」、放得下、最后一级照样显示，悬停看完整路径",
+    crumb.fits && crumb.more && crumb.shown.at(-1) === "七级" && crumb.title === `工作 / ${["多层", ...chain].join(" / ")}`,
+    crumb,
+  );
+  check(
+    "悬停「…」列出折叠掉的几级，点了打开那个项目",
+    !!hiddenLevels && hiddenLevels.includes("二级") && (await selected()) === sel("工作", "多层/一级/二级"),
+    { hiddenLevels, selected: await selected() },
+  );
+
   // 首页搜索：按子项目的名字找到，写明在哪个父项目里
   await m.ev(`document.querySelector(".anticon-home")?.closest("button")?.click(); await sleep(500); return 1`);
   await m.press("Ctrl+Shift+F");

@@ -2,7 +2,18 @@ import { App as AntApp } from "antd";
 import { useEffect, useMemo, useRef } from "react";
 import { api, errMsg } from "../api";
 import type { How } from "../navHistory";
-import { deepTodos, descendantsOf, inProject, isSubProject, leafName, parentOf, projectLabel, reparent } from "../projects";
+import {
+  deepTodos,
+  descendantsOf,
+  inProject,
+  isSubProject,
+  leafName,
+  parentOf,
+  projectLabel,
+  reparent,
+  shortPlaceLabel,
+  shortProjectLabel,
+} from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
 import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
@@ -232,7 +243,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       newSubProject: (parent) =>
         openDialog({
           title: "新建子项目",
-          label: `在项目「${workspaces.length > 1 ? `${ws} / ` : ""}${projectLabel(parent)}」中新建子项目`,
+          label: `在项目「${workspaces.length > 1 ? shortPlaceLabel(ws, parent) : shortProjectLabel(parent)}」中新建子项目`,
           placeholder: "例如：前端、后端",
           okText: "创建",
           onSubmit: async (v) => {
@@ -277,7 +288,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
             }
             forgetProjectState(ws, project);
             await reload();
-            undoDelete(`已删除${isSubProject(project) ? "子项目" : "项目"}「${projectLabel(project)}」`, [rid]);
+            undoDelete(`已删除${isSubProject(project) ? "子项目" : "项目"}「${shortProjectLabel(project)}」`, [rid]);
           },
         );
       },
@@ -295,8 +306,8 @@ export function useWorkspaceActions(ctx: ActionContext) {
           await reload();
           if (isSel && sel.project)
             setSel({ ...sel, workspace: targetWs, project: reparent(sel.project, project, to) }, "replace");
-          const there = targetWs === ws ? "" : `${targetWs} / `;
-          if (parent !== undefined) message.success(`已放进「${there}${projectLabel(parent)}」`);
+          if (parent !== undefined)
+            message.success(`已放进「${targetWs === ws ? shortProjectLabel(parent) : shortPlaceLabel(targetWs, parent)}」`);
           else if (targetWs === ws) message.success("已移出来，放在顶层");
           else message.success(`已移动到工作区「${targetWs}」`);
         }),
@@ -353,8 +364,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
           await reload();
           reveal(targetWs, target);
           if (isSel) setSel({ workspace: targetWs, project: target, todoId: moved.id }, "replace");
-          const where = projectLabel(target);
-          message.success(`已移动到「${targetWs === ws ? where : `${targetWs} / ${where}`}」`);
+          message.success(`已移动到「${targetWs === ws ? shortProjectLabel(target) : shortPlaceLabel(targetWs, target)}」`);
         }),
       reorderTodo: (project, id, targetId, place) =>
         run(async () => {
@@ -429,7 +439,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
       reveal(targetWs, target);
       if (selMoved) setSel(selMoved, "replace");
       clearPicked();
-      if (ok) message.success(`已把 ${ok} 条移动到「${targetWs} / ${projectLabel(target)}」`);
+      if (ok) message.success(`已把 ${ok} 条移动到「${shortPlaceLabel(targetWs, target)}」`);
     },
     remove: (items) =>
       modal.confirm({

@@ -1,14 +1,14 @@
 import { CheckCircleOutlined, CloseOutlined, DeleteOutlined, PushpinOutlined, SwapOutlined, UndoOutlined } from "@ant-design/icons";
 import { Button, Dropdown } from "antd";
-import { projectLabel } from "../projects";
+import { projectLabel, shortPlaceLabel, shortProjectLabel } from "../projects";
 import { displayTitle } from "../utils";
 import type { TodoAt } from "./DragMove";
 import { batchMoveMenu, type MoveTarget } from "./menus";
 import type { BatchActions } from "./workspaceActions";
 
-/** 一条待办在列表里显示的位置：同时显示了几个工作区时带上工作区 */
+/** 一条待办在列表里显示的位置：同时显示了几个工作区时带上工作区；层级多时中间折叠，悬停看完整的 */
 const placeOf = (x: TodoAt, multi: boolean) =>
-  multi ? `${x.workspace} / ${projectLabel(x.project)}` : projectLabel(x.project);
+  multi ? shortPlaceLabel(x.workspace, x.project) : shortProjectLabel(x.project);
 
 /** 左侧列表里多选了待办时，右侧显示的批量操作 */
 export default function BatchPanel({
@@ -68,7 +68,9 @@ export default function BatchPanel({
           return (
             <div key={`${x.workspace}/${x.project}/${x.todo.id}`} className={`list-row${x.todo.done ? " done" : ""}`}>
               <span className={`list-title${fromContent ? " from-content" : ""}`}>{text}</span>
-              <span className="list-path">{placeOf(x, multi)}</span>
+              <span className="list-path" title={`${x.workspace} / ${projectLabel(x.project)}`}>
+                {placeOf(x, multi)}
+              </span>
             </div>
           );
         })}

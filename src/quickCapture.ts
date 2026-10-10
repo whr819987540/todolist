@@ -1,4 +1,4 @@
-import { projectLabel, sortProjects } from "./projects";
+import { projectLabel, shortPlaceLabel, shortProjectLabel, sortProjects } from "./projects";
 import type { QuickTarget, WorkspaceProjects } from "./types";
 import { compareName } from "./utils";
 
@@ -12,8 +12,11 @@ export function parseTargetKey(key: string): QuickTarget {
   return { workspace, project };
 }
 
-/** 工作区 / 项目（子项目是「工作区 / 父项目 / 子项目」） */
+/** 工作区 / 项目（子项目是「工作区 / 父项目 / 子项目 / …」） */
 export const targetLabel = (t: QuickTarget) => `${t.workspace} / ${projectLabel(t.project)}`;
+
+/** 地方小时（选择框里）显示的存到哪里：层级多时中间折叠成「…」，悬停（targetLabel）看完整的 */
+export const shortTargetLabel = (t: QuickTarget) => shortPlaceLabel(t.workspace, t.project);
 
 export interface TargetGroup {
   label: string;
@@ -22,7 +25,8 @@ export interface TargetGroup {
 }
 
 /**
- * 下拉框的选项：每个工作区一组，工作区、项目都按名称排序，子项目跟在父项目后面（写成「父项目 / 子项目」）；没有项目的工作区不列。
+ * 下拉框的选项：每个工作区一组，工作区、项目都按名称排序，各级子项目跟在父项目后面（写成「父项目 / 子项目」，层级多时
+ * 中间折叠成「…」，悬停（title）是完整的，搜索也按完整的）；没有项目的工作区不列。
  * 现在存到的项目还不在时（默认的「收件箱 / 快速记录」第一次用，或被删了）放在最前面，注明保存时新建
  */
 export function targetOptions(list: readonly WorkspaceProjects[], current: QuickTarget | null): TargetGroup[] {
@@ -34,7 +38,7 @@ export function targetOptions(list: readonly WorkspaceProjects[], current: Quick
       title: w.name,
       options: sortProjects(w.projects.map((name) => ({ name }))).map(({ name: p }) => ({
         value: targetKey({ workspace: w.name, project: p }),
-        label: projectLabel(p),
+        label: shortProjectLabel(p),
         title: targetLabel({ workspace: w.name, project: p }),
       })),
     }));
@@ -42,7 +46,9 @@ export function targetOptions(list: readonly WorkspaceProjects[], current: Quick
     groups.unshift({
       label: "保存时新建",
       title: "保存时新建",
-      options: [{ value: targetKey(current), label: targetLabel(current), title: targetLabel(current) }],
+      options: [
+        { value: targetKey(current), label: shortTargetLabel(current), title: targetLabel(current) },
+      ],
     });
   return groups;
 }

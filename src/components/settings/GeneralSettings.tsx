@@ -1,7 +1,7 @@
 import { App as AntApp, Checkbox, Radio, Select, Switch } from "antd";
 import { useEffect, useState } from "react";
 import { api, errMsg } from "../../api";
-import { matchTarget, parseTargetKey, targetKey, targetLabel, targetOptions } from "../../quickCapture";
+import { matchTarget, parseTargetKey, shortTargetLabel, targetKey, targetLabel, targetOptions } from "../../quickCapture";
 import { useSettings } from "../../settings";
 import { shortcutLabel } from "../../shortcuts";
 import type { StartupView, WorkspaceProjects } from "../../types";
@@ -111,7 +111,9 @@ export default function GeneralSettings() {
           showSearch={{ filterOption: matchTarget }}
           value={targetKey(info.settings.quickCaptureTarget)}
           options={targetOptions(projects, info.settings.quickCaptureTarget)}
-          labelRender={() => targetLabel(info.settings.quickCaptureTarget)}
+          labelRender={() => (
+            <span title={targetLabel(info.settings.quickCaptureTarget)}>{shortTargetLabel(info.settings.quickCaptureTarget)}</span>
+          )}
           onChange={(key) => run(async () => setInfo(await api.setQuickCaptureTarget(parseTargetKey(key))))}
         />
       </div>

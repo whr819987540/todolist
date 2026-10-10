@@ -1,10 +1,13 @@
 import type { MenuProps } from "antd";
+import { isValidElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { type Actions, moveTargets, todoMenu } from "./menus";
 
 // docs/requirements.md「右键工作区 / 项目 / 待办弹出操作菜单」：待办的「移动到」——只显示一个工作区时列出同一工作区的其他项目；
-// 同时显示了几个工作区时，也列出其他选中工作区的项目，按工作区分组
+// 同时显示了几个工作区时，也列出其他选中工作区的项目，按工作区分组。「子项目」：「移动到」里的项目写成「父项目 / 子项目 / …」，
+// 看得出层级；路径太长时中间折叠成「…」，悬停看完整路径
 
 const tree = (name: string, ...projects: string[]): WorkspaceTree => ({
   name,
@@ -24,7 +27,12 @@ const todo: TodoSummary = {
 
 type Item = { key?: string; type?: string; label?: unknown; disabled?: boolean; children?: Item[] };
 const moveItem = (menu: MenuProps) => (menu.items as Item[]).find((i) => i?.key === "move")!;
-const labels = (items: Item[] | undefined) => (items ?? []).map((i) => i.label);
+/** 菜单项上悬停看到的完整路径（写成路径的项目是带 title 的元素），别的是文字本身 */
+const full = (label: unknown) => (isValidElement(label) ? (label as ReactElement<{ title: string }>).props.title : label);
+/** 菜单项上显示出来的文字 */
+const shown = (label: unknown) =>
+  isValidElement(label) ? renderToStaticMarkup(label).replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&quot;/g, '"') : label;
+const labels = (items: Item[] | undefined) => (items ?? []).map((i) => full(i.label));
 
 function actions() {
   return { moveTodo: vi.fn(), togglePinned: vi.fn() } as unknown as Actions & {
@@ -102,6 +110,26 @@ describe("待办右键菜单的「移动到」", () => {
       ["需求", todo, "测试", undefined],
       ["需求", todo, "杂事", "生活"],
     ]);
+  });
+});
+
+describe("「移动到」里的子项目", () => {
+  it("写成路径，看得出在哪一级", () => {
+    const trees = [tree("工作", "需求", "需求/前端", "需求/前端/组件", "日常")];
+    const move = moveItem(todoMenu(actions(), "日常", todo, moveTargets(trees, "工作")));
+    expect(labels(move.children)).toEqual(["需求", "需求 / 前端", "需求 / 前端 / 组件"]);
+    expect(move.children!.map((c) => shown(c.label))).toEqual(["需求", "需求 / 前端", "需求 / 前端 / 组件"]);
+  });
+
+  it("层级多时中间折叠成「…」，悬停看完整路径；点了照样移到那里", () => {
+    const deep = "需求/前端/组件/按钮/图标";
+    const a = actions();
+    const menu = todoMenu(a, "日常", todo, moveTargets([tree("工作", "日常", deep)], "工作"));
+    const [item] = moveItem(menu).children!;
+    expect(shown(item.label)).toBe("需求 / … / 按钮 / 图标");
+    expect(full(item.label)).toBe("需求 / 前端 / 组件 / 按钮 / 图标");
+    click(menu, item.key!);
+    expect(a.moveTodo.mock.calls).toEqual([["日常", todo, deep, undefined]]);
   });
 });
 

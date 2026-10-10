@@ -3,7 +3,7 @@ import { App as AntApp, Button, Empty, Input, Modal, Popconfirm, Spin, Tooltip }
 import { useCallback, useEffect, useState } from "react";
 import { api, errMsg } from "../api";
 import type { RecycleEntry, RecycleKind } from "../types";
-import { parentOf, projectLabel } from "../projects";
+import { compactPath, parentOf, PROJECT_SEP } from "../projects";
 import { avatarColor, firstChar, fullTime, relativeTime, useNow } from "../utils";
 import { restoredPlace } from "./undo";
 
@@ -12,13 +12,15 @@ const KIND_LABELS: Record<RecycleKind, string> = { todo: "待办", project: "项
 /** 回收站列表里显示的名字：待办没有标题时用正文开头 */
 const nameOf = (e: RecycleEntry) => e.title.trim() || e.preview || "空白待办";
 
-/** 原来在哪里：工作区（子项目还有它的各级父项目）、待办所在的项目 */
-function placeOf(e: RecycleEntry): string {
-  if (e.kind === "workspace") return "";
-  const parent = e.project ? parentOf(e.project) : undefined;
-  if (e.kind === "project") return parent === undefined ? e.workspace : `${e.workspace} / ${projectLabel(parent)}`;
-  return `${e.workspace} / ${projectLabel(e.project ?? "")}`;
+/** 原来在哪里的各级：工作区（子项目还有它的各级父项目）、待办所在的项目 */
+function placeParts(e: RecycleEntry): string[] {
+  if (e.kind === "workspace") return [];
+  const project = e.kind === "project" ? (e.project ? parentOf(e.project) : undefined) : (e.project ?? "");
+  return [e.workspace, ...(project ? project.split(PROJECT_SEP) : [])];
 }
+
+/** 原来在哪里（完整的，查找时也按它找） */
+const placeOf = (e: RecycleEntry) => placeParts(e).join(" / ");
 
 function KindIcon({ e }: { e: RecycleEntry }) {
   if (e.kind === "workspace")
@@ -137,9 +139,10 @@ function RecycleBinDialog({ open, onClose }: { open: boolean; onClose: () => voi
                   <div className={`list-title${e.kind === "todo" && !e.title.trim() ? " from-content" : ""}`} title={nameOf(e)}>
                     {nameOf(e)}
                   </div>
-                  <div className="list-snippet">
+                  <div className="list-snippet" title={placeOf(e) ? `原来在「${placeOf(e)}」` : undefined}>
                     {KIND_LABELS[e.kind]}
-                    {placeOf(e) && ` · 原来在「${placeOf(e)}」`}
+                    {/* 层级多时中间折叠，悬停看完整的 */}
+                    {placeOf(e) && ` · 原来在「${compactPath(placeParts(e), 2, 2)}」`}
                     {e.kind !== "todo" && ` · ${e.todoCount} 条待办`}
                   </div>
                 </div>

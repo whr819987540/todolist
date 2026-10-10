@@ -13,7 +13,6 @@ import {
 import {
   Alert,
   App as AntApp,
-  Breadcrumb,
   Button,
   Dropdown,
   Input,
@@ -31,7 +30,6 @@ import { activeIndex, type OutlineItem } from "../editor/outline";
 import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
 import { registerFlusher, useWindowFocus } from "../hooks";
-import { ancestorsOf, leafName } from "../projects";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { TextEncoding, TodoDetail, TodoSummary } from "../types";
@@ -55,6 +53,7 @@ import {
 } from "../workspaceState";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 import Outline from "./Outline";
+import PathCrumb from "./PathCrumb";
 
 export interface EditorHandle {
   /**
@@ -633,14 +632,13 @@ export default function TodoEditor(props: Props) {
   return (
     <section className="editor">
       <header className="editor-head">
-        <Breadcrumb
+        <PathCrumb
           className="editor-crumb"
-          items={[
-            { title: <a onClick={props.onSelectWorkspace}>{workspace}</a> },
-            ...[...ancestorsOf(project), project].map((p) => ({
-              title: <a onClick={() => props.onSelectProject(p)}>{leafName(p)}</a>,
-            })),
-          ]}
+          workspace={workspace}
+          project={project}
+          onSelectWorkspace={props.onSelectWorkspace}
+          onSelectProject={props.onSelectProject}
+          linkLast
         />
         <div className="editor-actions">
           <Tooltip title={keys?.toggleDoneShortcut && `快捷键：${shortcutLabel(keys.toggleDoneShortcut)}`}>

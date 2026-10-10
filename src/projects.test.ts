@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ancestorsOf,
   childPath,
+  compactPath,
   deepCounts,
   deepTodos,
   depthOf,
@@ -12,6 +13,8 @@ import {
   projectMoveProblem,
   projectLabel,
   reparent,
+  shortPlaceLabel,
+  shortProjectLabel,
   sortProjects,
   subProjectsOf,
 } from "./projects";
@@ -97,6 +100,26 @@ describe("子项目", () => {
     const ps = [project("需求", todo("a")), project("需求/前端", todo("b"), todo("c")), project("需求二", todo("d"))];
     expect(deepTodos(ps, "需求").map((t) => t.id)).toEqual(["a", "b", "c"]);
     expect(deepTodos(ps, "需求/前端").map((t) => t.id)).toEqual(["b", "c"]);
+  });
+});
+
+// 「显示项目路径的地方」：路径太长时要有合理的截断——地方小、不能悬停看完整路径的地方（提示、拖动的说明、菜单）中间折叠成「…」
+describe("路径太长时中间折叠", () => {
+  it("4 级以内照常写全", () => {
+    expect(shortProjectLabel("需求")).toBe("需求");
+    expect(shortProjectLabel("需求/前端/组件/按钮")).toBe("需求 / 前端 / 组件 / 按钮");
+  });
+
+  it("再多就留下第一级和最后两级，中间折叠成「…」", () => {
+    expect(shortProjectLabel("需求/前端/组件/按钮/图标")).toBe("需求 / … / 按钮 / 图标");
+    expect(shortProjectLabel("a/b/c/d/e/f/g/h")).toBe("a / … / g / h");
+  });
+
+  it("带工作区的：留下工作区、顶层项目和最后两级", () => {
+    expect(shortPlaceLabel("工作", "需求/前端/组件")).toBe("工作 / 需求 / 前端 / 组件");
+    expect(shortPlaceLabel("工作", "需求/前端/组件/按钮")).toBe("工作 / 需求 / 前端 / 组件 / 按钮");
+    expect(shortPlaceLabel("工作", "需求/前端/组件/按钮/图标")).toBe("工作 / 需求 / … / 按钮 / 图标");
+    expect(compactPath(["a", "b", "c", "d"], 1, 1)).toBe("a / … / d");
   });
 });
 

@@ -862,6 +862,22 @@ mark {
   max-height: min(480px, 70vh);
   overflow-y: auto;
 }
+/* 「移动到」里的项目写成路径：最后一级以外的颜色淡一点；名字很长时末尾省略，悬停看完整路径 */
+.move-menu .ant-dropdown-menu-item {
+  max-width: 420px;
+}
+.menu-path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-path-parent {
+  color: var(--c-text-3);
+}
+.ant-dropdown-menu-item-disabled .menu-path-parent {
+  color: inherit;
+}
 
 /* ---------------- 拖动移动 ---------------- */
 
@@ -1001,6 +1017,45 @@ body.drag-moving .tree-row:hover .row-count {
 
 .overview-crumb {
   margin-bottom: 16px;
+}
+
+/* 编辑区上方、项目概览上方的路径（PathCrumb）：放不下时先把中间的几级折叠成「…」（量的时候各级都不缩），
+   折叠到头了（squeeze）还放不下才让各级名字末尾省略 */
+.path-crumb {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.path-crumb .ant-breadcrumb ol {
+  flex-wrap: nowrap;
+}
+.path-crumb .ant-breadcrumb li {
+  flex-shrink: 0;
+}
+.path-crumb.squeeze .ant-breadcrumb li:not(.ant-breadcrumb-separator) {
+  flex-shrink: 1;
+  min-width: 1.5em;
+  overflow: hidden;
+}
+.path-crumb.squeeze .ant-breadcrumb li > .ant-breadcrumb-link,
+.path-crumb.squeeze .ant-breadcrumb li > .ant-breadcrumb-link > a {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 折叠起来的那几级（「…」，悬停列出来）不缩 */
+.path-crumb.squeeze .ant-breadcrumb li:has(> .ant-breadcrumb-overlay-link) {
+  flex-shrink: 0;
+  min-width: auto;
+}
+.path-crumb .ant-breadcrumb-overlay-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.crumb-more {
+  cursor: default;
+  padding: 0 2px;
 }
 
 /* 右侧窄（最小窗口宽度、侧栏拉宽）时按钮换到下一行，标题不会被挤得只剩一个字 */
@@ -1275,9 +1330,8 @@ body.drag-moving .editor-tab-close {
   border-bottom: 1px solid var(--c-border);
 }
 .editor-crumb {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
+  /* 占满按钮左边的地方，宽度不随路径长短变（PathCrumb 按宽度决定折叠几级） */
+  flex: 1 1 0;
 }
 
 /* 编辑区和右侧的大纲 */

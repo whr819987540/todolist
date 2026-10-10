@@ -1,6 +1,6 @@
 import { FileTextOutlined, FolderFilled } from "@ant-design/icons";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ancestorsOf, inProject, projectLabel, projectMoveProblem } from "../projects";
+import { ancestorsOf, inProject, projectMoveProblem, shortPlaceLabel, shortProjectLabel } from "../projects";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { displayTitle } from "../utils";
 import { parseSelKey } from "./sidebar/tree";
@@ -171,23 +171,26 @@ function judge(
         status: problem.code === "taken" || problem.code === "hasSubs" ? "refused" : "none",
         hint: problem.code === "taken" && !target.project ? `「${target.workspace}」里已有同名项目` : problem.reason,
       };
-    if (target.project)
-      return { status: "ok", hint: `放进「${same ? "" : `${target.workspace} / `}${projectLabel(target.project)}」，成为子项目` };
+    if (target.project) {
+      const where = same ? shortProjectLabel(target.project) : shortPlaceLabel(target.workspace, target.project);
+      return { status: "ok", hint: `放进「${where}」，成为子项目` };
+    }
     return { status: "ok", hint: same ? "移出来，放在顶层" : `移动到工作区「${target.workspace}」` };
   }
   if (item.kind === "todos") {
     if (!target?.project) return { status: "none", hint: "拖到左侧的项目上" };
     const n = item.items.filter((x) => x.workspace !== target.workspace || x.project !== target.project).length;
     if (!n) return { status: "none", hint: "都已在这个项目里" };
-    return { status: "ok", hint: `把 ${n} 条移动到「${target.workspace} / ${projectLabel(target.project)}」` };
+    return { status: "ok", hint: `把 ${n} 条移动到「${shortPlaceLabel(target.workspace, target.project)}」` };
   }
   if (!target?.project) return { status: "none", hint: "拖到左侧的项目上，或拖到其他待办上调整顺序" };
   if (target.workspace === item.workspace && target.project === item.project)
     return { status: "none", hint: "已在这个项目里；拖到其他待办上可以调整顺序" };
+  // 层级多时中间折叠（跟着指针的说明地方小）
   const where =
     target.workspace === item.workspace
-      ? projectLabel(target.project)
-      : `${target.workspace} / ${projectLabel(target.project)}`;
+      ? shortProjectLabel(target.project)
+      : shortPlaceLabel(target.workspace, target.project);
   return { status: "ok", hint: `移动到「${where}」` };
 }
 
@@ -341,7 +344,7 @@ export function useDragMove(opts: {
             ? displayTitle(item.todo).text
             : item.kind === "todos"
               ? `${item.items.length} 条待办`
-              : projectLabel(item.project)}
+              : shortProjectLabel(item.project)}
         </span>
       </div>
       <div className="drag-ghost-hint">{state.hint}</div>

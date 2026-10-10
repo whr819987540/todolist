@@ -1,15 +1,15 @@
 import { App as AntApp } from "antd";
 import { useCallback } from "react";
 import { api, errMsg } from "../api";
-import { projectLabel } from "../projects";
+import { shortPlaceLabel } from "../projects";
 import type { Restored, RestoreResult } from "../types";
 
 /** 撤销删除的提示停留多久（秒） */
 const UNDO_SECONDS = 8;
 
-/** 恢复到了哪里，给提示用：「工作 / 需求开发」，改了名的说明一下 */
+/** 恢复到了哪里，给提示用：「工作 / 需求开发」（层级多时中间折叠），改了名的说明一下 */
 export function restoredPlace(r: Restored): string {
-  const where = r.project ? `${r.workspace} / ${projectLabel(r.project)}` : r.workspace;
+  const where = r.project ? shortPlaceLabel(r.workspace, r.project) : r.workspace;
   if (!r.renamed) return `「${where}」`;
   return `「${where}」（原来的名字已被占用，改了名）`;
 }
