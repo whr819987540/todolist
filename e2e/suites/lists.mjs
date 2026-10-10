@@ -1,8 +1,9 @@
-// 正文里列表的缩进和折行对齐（实时渲染）
+// 正文里列表的缩进和折行对齐（实时渲染、源码模式）
 export const title = "列表的缩进和折行对齐";
 
 const LONG = "，这一项写得很长很长，长到一行放不下需要自动折行，第二行要和第一行的正文开头对齐".repeat(3);
 const EN = " mixed English words that should wrap around nicely".repeat(5);
+const CODE = "const value = someFunction(argumentOne, argumentTwo) + anotherFunction(argumentThree, argumentFour);".repeat(3);
 const DOC = [
   "段落",
   "",
@@ -51,6 +52,13 @@ const DOC = [
   "",
   "> - 引用里的列表项",
   ">   > 引用里列表里的引用",
+  "",
+  "- 列表项里的代码：",
+  "",
+  "  ```js",
+  `  ${CODE}`,
+  `      ${CODE}`,
+  "  ```",
 ].join("\n");
 
 /**
@@ -162,11 +170,13 @@ export default async function (t) {
     quote3: lineNo("> > 套着的引用"),
     qList: lineNo("> - 引用里的列表项"),
     qInner: lineNo(">   > 引用里列表里的引用"),
+    code1: lineNo(`  ${CODE.slice(0, 10)}`),
+    code2: lineNo(`      ${CODE.slice(0, 10)}`),
   };
-  const WRAPPED = ["one", "two", "cont", "three", "n10", "task", "subTask", "oTask", "q1", "q2", "para2", "qItem", "qItem2", "n100", "nested", "quote"];
+  const WRAPPED = ["one", "two", "cont", "three", "n10", "task", "subTask", "oTask", "q1", "q2", "para2", "qItem", "qItem2", "n100", "nested", "quote", "code1"];
   const near = (a, b) => Math.abs(a - b) <= 1;
-  const misaligned = (r) =>
-    WRAPPED.map((k) => ({ k, ...r.lines[L[k]] })).filter((x) => !x.rows.length || x.rows.some((y) => !near(y, x.left)));
+  const misaligned = (r, keys = WRAPPED) =>
+    keys.map((k) => ({ k, ...r.lines[L[k]] })).filter((x) => !x.rows.length || x.rows.some((y) => !near(y, x.left)));
 
   // 实时渲染
   let r = await m.ev(MEASURE);
@@ -257,6 +267,22 @@ export default async function (t) {
     { fs: r.fs, bad, one: x("one"), two: x("two") },
   );
   await m.ev(`document.documentElement.style.removeProperty("--fs-editor"); await sleep(300); return 1`);
+
+  // 源码模式：缩进照原样的空格，折行后也对齐到第一行的正文
+  await m.ev(`view().focus(); return 1`);
+  await m.press("Ctrl+/");
+  await m.ev(`view().contentDOM.blur(); await sleep(400); return 1`);
+  r = await m.ev(MEASURE);
+  const src = await m.ev(`return document.querySelector(".statusbar").textContent.includes("源码模式")`);
+  const spaces = r.lines[L.two].left - r.lines[L.two].lineLeft;
+  // 源码模式只管列表里的行（普通引用照原样）
+  bad = misaligned(r, [...WRAPPED.filter((k) => k !== "quote"), "code2"]);
+  check("源码模式：一项折行后，折下来的行和第一行的正文开头对齐（列表项里的代码行对齐到代码文字开头）", src && !bad.length, bad);
+  check("源码模式：行首的空格照原样显示（缩进比实时渲染窄）", spaces > 0 && r.lines[L.two].left < before.lines[L.two].left, {
+    source: r.lines[L.two],
+    live: before.lines[L.two],
+  });
+  await m.press("Ctrl+/");
 
   // 只改显示
   await m.ev(`view().focus(); return 1`);

@@ -1,6 +1,16 @@
 import { ensureSyntaxTree } from "@codemirror/language";
 import { describe, expect, it } from "vitest";
-import { INDENT, type ListLine, listLine, listLineStyle, type MarkerPart, markerParts, quoteGroups, TASK } from "./listLayout";
+import {
+  INDENT,
+  type ListLine,
+  listLine,
+  listLineStyle,
+  type MarkerPart,
+  markerParts,
+  quoteGroups,
+  sourcePrefix,
+  TASK,
+} from "./listLayout";
 import { makeState } from "./testState";
 
 // docs/requirements.md「待办内容 → 实时渲染里的列表」：每一级缩进约两个字宽，列表符号、序号、任务框放在正文左边那一格里；
@@ -203,6 +213,37 @@ describe("行首的 > 显示原文时放在哪里", () => {
   it("不在行首的 > 不管（内容从引用开始的列表项另外放）", () => {
     expect(groups("- > 甲")).toEqual([]);
     expect(groups("甲 > 乙")).toEqual([]);
+  });
+});
+
+describe("源码模式折行后对齐到哪里", () => {
+  // 源码模式：缩进照原样的空格，一项折行时折下来的行对齐到第一行的正文开头（列表符号、任务框后面），续行对齐到它自己的文字开头；
+  // 代码块里的行用等宽字体排，按等宽字体量
+  const prefixes = (doc: string) => {
+    const state = makeState(doc);
+    const tree = ensureSyntaxTree(state, state.doc.length, 1000)!;
+    return Array.from({ length: state.doc.lines }, (_, i) => {
+      const p = sourcePrefix(state, state.doc.line(i + 1), tree);
+      return p && `${JSON.stringify(p.text)}${p.code ? " 代码" : ""}`;
+    });
+  };
+
+  it("第一行对齐到列表符号、任务框后面，续行、引用里的行对齐到行首的空白和 > 后面", () => {
+    expect(prefixes("- [ ] 甲\n  续行\n> 1. 乙\n>    乙的续行\n- > 引用")).toEqual([
+      '"- [ ] "',
+      '"  "',
+      '"> 1. "',
+      '">    "',
+      '"- > "',
+    ]);
+  });
+
+  it("代码块里的行（连同 ``` 那两行）按等宽字体量，对齐到代码文字开头", () => {
+    expect(prefixes("- 甲\n\n  ```\n      y();\n  ```")).toEqual(['"- "', null, '"  " 代码', '"      " 代码', '"  " 代码']);
+  });
+
+  it("不在列表里的行、空行、只有列表符号的行不管", () => {
+    expect(prefixes("段落\n\n- \n  缩进的段落")).toEqual([null, null, null, '"  "']);
   });
 });
 

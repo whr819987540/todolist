@@ -52,6 +52,8 @@ export interface ListLine {
   extra: number;
   /** 列表项的内容从引用开始（"- > 引用"）：这个 > 连同后面的空格。第一行的引用竖线画在列表符号那一格后面 */
   quoteMark: TextRange | null;
+  /** 这一行在代码块里（用等宽字体排） */
+  code: boolean;
 }
 
 /** 里面的空白原样有意义的块：只藏列表本身的缩进，多出来的留着 */
@@ -140,9 +142,11 @@ export function listLine(state: EditorState, line: Line, tree: Tree = syntaxTree
   // 外层到里层的列表项和引用
   let chain: SyntaxNode[] = [];
   let literal = false;
+  let code = false;
   for (let n: SyntaxNode | null = node; n; n = n.parent) {
     if (n.name === "ListItem" || n.name === "Blockquote") chain.unshift(n);
     else if (LITERAL.has(n.name)) literal = true;
+    if (n.name === "FencedCode" || n.name === "CodeBlock") code = true;
   }
   const items = chain.filter((n) => n.name === "ListItem");
   let own: SyntaxNode | undefined = items[items.length - 1];
@@ -211,7 +215,17 @@ export function listLine(state: EditorState, line: Line, tree: Tree = syntaxTree
   if (qm) quoteMark = { from: qm.from, to: qm.to + (state.sliceDoc(qm.to, qm.to + 1) === " " ? 1 : 0) };
 
   const textFrom = quoteMark ? quoteMark.to : last ? last.contentFrom : line.from + s;
-  return { hidden, markers, textFrom, margin, inner, hang, extra, quoteMark };
+  return { hidden, markers, textFrom, margin, inner, hang, extra, quoteMark, code };
+}
+
+/**
+ * 源码模式里这一行折行后对齐到哪里：行首这一段（空格、>、列表符号、任务框）的原文，和这一行是不是代码
+ * （代码用等宽字体排，要按等宽字体量）。不在列表里、没有这一段或后面没有字时为 null
+ */
+export function sourcePrefix(state: EditorState, line: Line, tree: Tree = syntaxTree(state)): { text: string; code: boolean } | null {
+  const l = listLine(state, line, tree);
+  if (!l || l.textFrom <= line.from || l.textFrom >= line.to) return null;
+  return { text: state.sliceDoc(line.from, l.textFrom), code: l.code };
 }
 
 const em = (n: number, extra = "") =>
