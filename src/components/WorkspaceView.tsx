@@ -75,13 +75,15 @@ function sortTree(t: WorkspaceTree): WorkspaceTree {
   return { ...t, projects: sortProjects(t.projects) };
 }
 
+/** 新的列表和原来的逐项相同（reuse 过的会是同一个对象）时沿用原来的列表 */
+const sameItems = <T,>(a: readonly T[], b: readonly T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** 各字段都一样；字段是数组的（待办的标签）逐项比，每次加载出来的都是新数组 */
 const sameFields = <T extends object>(a: T, b: T) => {
   const keys = Object.keys(a) as (keyof T)[];
-  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
+  const same = (x: unknown, y: unknown) => x === y || (Array.isArray(x) && Array.isArray(y) && sameItems(x, y));
+  return keys.length === Object.keys(b).length && keys.every((k) => same(a[k], b[k]));
 };
-
-/** 新的列表和原来的逐项相同（reuse 过的会是同一个对象）时沿用原来的列表 */
-const sameItems = <T,>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** 沿用原来的对象：before 里有同名（同 id）且内容一样的就用它 */
 function reuse<T>(before: T[], after: T[], key: (x: T) => string, same: (old: T, fresh: T) => T): T[] {

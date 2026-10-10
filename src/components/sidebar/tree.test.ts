@@ -27,6 +27,8 @@ const todo = (id: string, done: boolean): TodoSummary => ({
   doneAt: done ? 1 : null,
   pinned: false,
   order: null,
+  tags: [],
+  priority: 0,
 });
 const project = (name: string, ...done: boolean[]): ProjectNode => ({
   name,

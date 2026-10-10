@@ -3,6 +3,7 @@ import type {
   EditorBackground,
   FontArea,
   ImageFile,
+  Priority,
   QuickTarget,
   RecycleEntry,
   RestoreResult,
@@ -55,7 +56,8 @@ export const api = {
   /**
    * content 是正文，不传时新建空白待办；带正文时正文和待办在同一次调用里建好。
    * createProject 为 true 时工作区、项目不在就先建（离开待办时存不上的修改另存到快速记录存到的项目）。
-   * assetsFrom 是外部修改冲突时「另存为新待办」的原来那条：复制一份它的图片（附件目录）给新的这条，正文里的链接改成新的
+   * assetsFrom 是外部修改冲突时「另存为新待办」的原来那条：复制一份它的图片（附件目录）给新的这条，正文里的链接改成新的；
+   * 新的这条也带上它现在的标签和优先级
    */
   createTodo: (
     workspace: string,
@@ -91,6 +93,16 @@ export const api = {
   /** 置顶 / 取消置顶，修改时间不变 */
   setTodoPinned: (workspace: string, project: string, id: string, pinned: boolean) =>
     invoke<TodoSummary>("set_todo_pinned", { workspace, project, id, pinned }),
+  /** 设置标签（全部标签，按先后），修改时间不变；有不合规则的标签时 reject 原因，什么都不改 */
+  setTodoTags: (workspace: string, project: string, id: string, tags: string[]) =>
+    invoke<TodoSummary>("set_todo_tags", { workspace, project, id, tags }),
+  /** 设置优先级，修改时间不变 */
+  setTodoPriority: (workspace: string, project: string, id: string, priority: Priority) =>
+    invoke<TodoSummary>("set_todo_priority", { workspace, project, id, priority }),
+  /** 工作区 workspaces 里所有待办上的标签 from（不区分大小写）改名成 to，已经有 to 的就是合并；返回改了几条 */
+  renameTag: (workspaces: string[], from: string, to: string) => invoke<number>("rename_tag", { workspaces, from, to }),
+  /** 工作区 workspaces 里所有待办上去掉标签 tag（不区分大小写），返回改了几条 */
+  removeTag: (workspaces: string[], tag: string) => invoke<number>("remove_tag", { workspaces, tag }),
   /** 手动排序：ids 是项目里待办从前到后的顺序（修改时间不变） */
   reorderTodos: (workspace: string, project: string, ids: string[]) =>
     invoke<void>("reorder_todos", { workspace, project, ids }),

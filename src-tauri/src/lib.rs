@@ -174,7 +174,7 @@ fn follow_quick_target(settings: &SettingsStore, f: impl FnOnce(&QuickTarget) ->
 
 /// 新建待办；content 是正文，不传时是空白待办（外部修改冲突时「另存为新待办」带着正文一起建）。
 /// create_project 为 true 时工作区、项目不在就先建（离开待办时存不上、原来的项目也不在了，另存到快速记录存到的项目）；
-/// assets_from 是另存时原来那条待办，复制一份它的图片（附件目录）给新的这条
+/// assets_from 是另存时原来那条待办，复制一份它的图片（附件目录）给新的这条，也带上它的标签和优先级
 #[tauri::command]
 async fn create_todo(
     store: State<'_, Store>,
@@ -248,6 +248,42 @@ async fn set_todo_pinned(
     pinned: bool,
 ) -> Cmd<TodoSummary> {
     store.set_todo_pinned(&workspace, &project, &id, pinned)
+}
+
+/// 设置标签（全部标签，按先后；修改时间不变）。有不合规则的标签时不改，返回原因
+#[tauri::command]
+async fn set_todo_tags(
+    store: State<'_, Store>,
+    workspace: String,
+    project: String,
+    id: String,
+    tags: Vec<String>,
+) -> Cmd<TodoSummary> {
+    store.set_todo_tags(&workspace, &project, &id, &tags)
+}
+
+/// 设置优先级：0 无、1 低、2 中、3 高（修改时间不变）
+#[tauri::command]
+async fn set_todo_priority(
+    store: State<'_, Store>,
+    workspace: String,
+    project: String,
+    id: String,
+    priority: u8,
+) -> Cmd<TodoSummary> {
+    store.set_todo_priority(&workspace, &project, &id, priority)
+}
+
+/// 工作区 workspaces 里所有待办上的标签 from 改名成 to（已经有 to 的就是合并），返回改了几条
+#[tauri::command]
+async fn rename_tag(store: State<'_, Store>, workspaces: Vec<String>, from: String, to: String) -> Cmd<usize> {
+    store.rename_tag(&workspaces, &from, &to)
+}
+
+/// 工作区 workspaces 里所有待办上去掉标签 tag，返回改了几条
+#[tauri::command]
+async fn remove_tag(store: State<'_, Store>, workspaces: Vec<String>, tag: String) -> Cmd<usize> {
+    store.remove_tag(&workspaces, &tag)
 }
 
 /// 手动排序：ids 是项目里待办从前到后的顺序（修改时间不变）
@@ -1250,6 +1286,10 @@ pub fn run() {
             set_todo_title,
             set_todo_done,
             set_todo_pinned,
+            set_todo_tags,
+            set_todo_priority,
+            rename_tag,
+            remove_tag,
             reorder_todos,
             delete_todo,
             list_recycle,

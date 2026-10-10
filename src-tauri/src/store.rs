@@ -6,7 +6,7 @@
 //! TodoList/
 //!   {工作区}/
 //!     {项目}/
-//!       .todos.json          标题、完成状态、创建/修改时间等元数据
+//!       .todos.json          标题、完成状态、置顶、标签、优先级、创建/修改时间等元数据
 //!       20260926-153012.md   待办正文（Markdown 纯文本）
 //!       .assets/{待办 id}/   这条待办的图片（附件目录），正文里写成相对地址 `.assets/{待办 id}/{文件名}`
 //!       {子项目}/            项目文件夹里的子文件夹是子项目，里面同样是 .todos.json、.md 和 .assets（只有一层子项目）
@@ -38,7 +38,7 @@
 use chrono::Local;
 use encoding_rs::{DecoderResult, Encoding, GB18030, UTF_8};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -62,6 +62,10 @@ const PREVIEW_CHARS: usize = 200;
 const PREVIEW_READ_BYTES: u64 = 4096;
 const MAX_NAME_CHARS: usize = 64;
 const MAX_TITLE_CHARS: usize = 200;
+/// 标签名最多这么多个字
+const MAX_TAG_CHARS: usize = 20;
+/// 优先级：0 无、1 低、2 中、3 高
+const MAX_PRIORITY: u8 = 3;
 /// 全文搜索最多返回这么多条
 const MAX_SEARCH_HITS: usize = 2000;
 /// 全文搜索的结果里，命中处前后各带多少个字
@@ -96,10 +100,34 @@ struct TodoMeta {
     /// 手动排序时的位置（从小到大）；没拖动排过的（新建的、移过来的）没有，手动排序时排在最前面
     #[serde(default, skip_serializing_if = "Option::is_none")]
     order: Option<i64>,
+    /// 标签（clean_tag 规整过，同一条里不区分大小写地去了重，先加的在前）；没有时不写。
+    /// 手改得不合规则的读的时候去掉，读不懂的整项当没有，不至于把整个元数据文件当成损坏的
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient_tags")]
+    tags: Vec<String>,
+    /// 优先级：3 高、2 中、1 低；无（0）时不写，读不懂的当无
+    #[serde(default, skip_serializing_if = "is_zero", deserialize_with = "lenient_priority")]
+    priority: u8,
 }
 
 fn is_false(v: &bool) -> bool {
     !v
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
+}
+
+/// 读 `tags`：一组文字里规整得了的留下（clean_tags），别的（不是文字、不合规则的）去掉；不是一组文字时当没有
+fn lenient_tags<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<String>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let raw = v.as_array().map(Vec::as_slice).unwrap_or_default();
+    Ok(clean_tags(raw.iter().filter_map(|t| clean_tag(t.as_str()?).ok())))
+}
+
+/// 读 `priority`：1～3 的整数照用，别的当无
+fn lenient_priority<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u8, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_u64().filter(|p| (1..=MAX_PRIORITY as u64).contains(p)).map_or(0, |p| p as u8))
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -135,6 +163,10 @@ pub struct TodoSummary {
     pub pinned: bool,
     /// 手动排序时的位置，没排过的为 null
     pub order: Option<i64>,
+    /// 标签，按加上的先后
+    pub tags: Vec<String>,
+    /// 优先级：3 高、2 中、1 低、0 无
+    pub priority: u8,
 }
 
 #[derive(Debug, Serialize)]
@@ -609,7 +641,8 @@ impl Store {
     /// 新建待办；content 是正文（新建空白待办时为空）。正文在同一次调用里写好，
     /// 不会出现先有一个空文件、再保存正文的中间状态（外部修改冲突时「另存为新待办」用）。
     /// 给了 from（另存为新待办时原来那条）时，复制一份它的附件目录给新的这条，正文里指向原来附件目录的链接改成新的 id，
-    /// 免得以后删了原来那条图片就没了；复制失败时照常新建，链接不改
+    /// 免得以后删了原来那条图片就没了；复制失败时照常新建，链接不改。新的这条也带上原来那条现在的标签和优先级
+    /// （原来那条已经不在了时没有）
     pub fn create_todo_from(
         &self,
         ws: &str,
@@ -650,6 +683,7 @@ impl Store {
         }
         note_own(&path);
         let now = now_ms();
+        let (tags, priority) = from.and_then(|f| self.todo_meta(f)).map(|m| (m.tags, m.priority)).unwrap_or_default();
         let entry = TodoMeta {
             id,
             title: clean_title(title),
@@ -659,6 +693,8 @@ impl Store {
             done_at: None,
             pinned: false,
             order: None,
+            tags,
+            priority,
         };
         meta.todos.push(entry.clone());
         write_meta(&dir, &meta)?;
@@ -787,6 +823,66 @@ impl Store {
             m.pinned = pinned;
             changed
         })
+    }
+
+    /// 设置标签，tags 是全部标签（按先后）：逐个规整（clean_tag），有不合规则的什么都不改、返回原因；不区分大小写地去重，
+    /// 保留先出现的写法。和置顶一样不算修改，修改时间不变
+    pub fn set_todo_tags(&self, ws: &str, project: &str, id: &str, tags: &[String]) -> Result<TodoSummary> {
+        let tags = clean_tags(tags.iter().map(|t| clean_tag(t)).collect::<Result<Vec<_>>>()?);
+        self.change_meta(ws, project, id, false, |m| {
+            let changed = m.tags != tags;
+            m.tags = tags;
+            changed
+        })
+    }
+
+    /// 设置优先级（0 无、1 低、2 中、3 高）。不算修改，修改时间不变
+    pub fn set_todo_priority(&self, ws: &str, project: &str, id: &str, priority: u8) -> Result<TodoSummary> {
+        if priority > MAX_PRIORITY {
+            return Err("无效的优先级".into());
+        }
+        self.change_meta(ws, project, id, false, |m| {
+            let changed = m.priority != priority;
+            m.priority = priority;
+            changed
+        })
+    }
+
+    /// 工作区 workspaces（不在的跳过）里所有带标签 from（不区分大小写）的待办，这个标签改名成 to（先规整，不合规则时
+    /// 什么都不改、返回原因）；已经有 to（不区分大小写）的去掉 from，就是合并。不算修改，修改时间不变。返回改了几条
+    pub fn rename_tag(&self, workspaces: &[String], from: &str, to: &str) -> Result<usize> {
+        let to = clean_tag(to)?;
+        self.edit_tags(workspaces, |tags| rename_tag_in(tags, from, &to))
+    }
+
+    /// 工作区 workspaces（不在的跳过）里所有待办上去掉标签 tag（不区分大小写），待办本身不动。不算修改。返回改了几条
+    pub fn remove_tag(&self, workspaces: &[String], tag: &str) -> Result<usize> {
+        self.edit_tags(workspaces, |tags| {
+            let before = tags.len();
+            tags.retain(|t| !same_tag(t, tag));
+            tags.len() != before
+        })
+    }
+
+    /// 逐个项目改 workspaces 里的待办的标签（f 返回 true 表示改了这一条），有改动的项目写一次元数据；返回改了几条
+    fn edit_tags(&self, workspaces: &[String], mut f: impl FnMut(&mut Vec<String>) -> bool) -> Result<usize> {
+        let _g = self.guard();
+        let mut n = 0;
+        for ws in workspaces {
+            let Ok(ws_dir) = self.ws_dir(ws) else { continue };
+            for (_, dir) in project_dirs(&ws_dir)? {
+                let mut meta = read_meta(&dir)?;
+                let mut changed = 0;
+                for m in &mut meta.todos {
+                    changed += f(&mut m.tags) as usize;
+                }
+                if changed > 0 {
+                    write_meta(&dir, &meta)?;
+                    n += changed;
+                }
+            }
+        }
+        Ok(n)
     }
 
     /// 手动排序：ids 是项目里待办从前到后的顺序，依次记下位置；没列出的（排序期间新建的）去掉位置，排在最前面。
@@ -1003,6 +1099,13 @@ impl Store {
         })
     }
 
+    /// 待办 r 现在的元数据（另存为新待办时带上原来那条的标签、优先级）；它或所在的项目已经不在时返回 None
+    fn todo_meta(&self, r: &TodoRef) -> Option<TodoMeta> {
+        let dir = self.project_dir(&r.workspace, &r.project).ok()?;
+        let meta = read_meta(&dir).ok()?;
+        meta.find(&r.id).map(|i| meta.todos[i].clone())
+    }
+
     /// 另存为新待办：待办 from 的附件目录复制一份到 to；复制成了返回 true。没有附件目录、复制失败（删掉复制了一半的）
     /// 时返回 false，那时新的那条的正文还指向原来那条的图片
     fn copy_assets(&self, from: &TodoRef, to: &Path) -> bool {
@@ -1203,6 +1306,8 @@ impl Store {
                         done_at: None,
                         pinned: false,
                         order: None,
+                        tags: Vec::new(),
+                        priority: 0,
                     }
                 });
                 let mut new_id = stem.clone();
@@ -1464,6 +1569,8 @@ fn scan_project(dir: &Path, previews: Option<&mut MemCache>) -> Result<Vec<TodoS
             done_at: None,
             pinned: false,
             order: None,
+            tags: Vec::new(),
+            priority: 0,
         });
         changed = true;
     }
@@ -1659,6 +1766,8 @@ fn summary_of(m: &TodoMeta, file_mtime: i64, preview: String) -> TodoSummary {
         done_at: m.done_at,
         pinned: m.pinned,
         order: m.order,
+        tags: m.tags.clone(),
+        priority: m.priority,
     }
 }
 
@@ -1859,6 +1968,59 @@ fn clean_title(title: &str) -> String {
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
     one_line.trim().chars().take(MAX_TITLE_CHARS).collect()
+}
+
+// ---------------------------------------------------------------------------
+// 标签
+// ---------------------------------------------------------------------------
+
+/// 规整一个标签名：去掉首尾空白和开头的 #（全角的 ＃ 也算，「#工作」就是「工作」）；不能为空、不超过 20 个字，
+/// 不能有逗号（半角、全角）和换行
+pub fn clean_tag(raw: &str) -> Result<String> {
+    let tag = raw.trim().trim_start_matches(['#', '＃']).trim();
+    if tag.is_empty() {
+        return Err("标签不能为空".into());
+    }
+    if tag.chars().count() > MAX_TAG_CHARS {
+        return Err(format!("标签不能超过 {MAX_TAG_CHARS} 个字"));
+    }
+    if tag.chars().any(|c| c == ',' || c == '，' || c.is_control()) {
+        return Err("标签里不能有逗号和换行".into());
+    }
+    Ok(tag.to_string())
+}
+
+/// 两个标签算同一个：不区分大小写
+fn same_tag(a: &str, b: &str) -> bool {
+    a == b || a.to_lowercase() == b.to_lowercase()
+}
+
+/// 不区分大小写地去重，保留先出现的（和它的写法），顺序不变
+fn clean_tags(tags: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in tags {
+        if !out.iter().any(|x| same_tag(x, &t)) {
+            out.push(t);
+        }
+    }
+    out
+}
+
+/// 一条待办的标签里的 from（不区分大小写）改名成 to：已经有 to 的（不区分大小写，不是 from 自己）去掉 from，
+/// 就是合并到 to；只改大小写的换成新的写法。返回改了没有
+fn rename_tag_in(tags: &mut Vec<String>, from: &str, to: &str) -> bool {
+    let Some(i) = tags.iter().position(|t| same_tag(t, from)) else {
+        return false;
+    };
+    if tags.iter().enumerate().any(|(j, t)| j != i && same_tag(t, to)) {
+        tags.remove(i);
+        return true;
+    }
+    if tags[i] == to {
+        return false;
+    }
+    tags[i] = to.to_string();
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -2420,6 +2582,136 @@ mod tests {
     }
 
     #[test]
+    fn tag_rules() {
+        assert_eq!(clean_tag("  工作 ").unwrap(), "工作");
+        // 开头的 #（全角的也算）去掉
+        assert_eq!(clean_tag("#等回复").unwrap(), "等回复");
+        assert_eq!(clean_tag("＃ 等回复").unwrap(), "等回复");
+        assert_eq!(clean_tag("C#").unwrap(), "C#");
+        assert!(clean_tag("").is_err());
+        assert!(clean_tag(" # ").is_err());
+        assert_eq!(clean_tag(&"字".repeat(20)).unwrap().chars().count(), 20);
+        assert!(clean_tag(&"字".repeat(21)).is_err());
+        for bad in ["a,b", "a，b", "第一行\n第二行", "a\tb"] {
+            assert!(clean_tag(bad).is_err(), "{bad}");
+        }
+        // 不区分大小写地去重，保留先加的写法
+        let tags = clean_tags(["work", "工作", "Work", "WORK", "工作"].map(String::from));
+        assert_eq!(tags, ["work", "工作"]);
+    }
+
+    #[test]
+    fn tags_and_priority_keep_updated_time_and_move_along() {
+        let (_tmp, s) = store("tags");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        s.create_project("w", "q").unwrap();
+        let t = s.create_todo("w", "p", "周报", "").unwrap();
+        assert!(t.tags.is_empty() && t.priority == 0);
+        let tagged = s.set_todo_tags("w", "p", &t.id, &[" #工作".into(), "等回复".into(), "工作".into()]).unwrap();
+        assert_eq!(tagged.tags, ["工作", "等回复"]);
+        // 改标签、优先级不算修改了这条待办
+        assert_eq!(tagged.updated_at, t.updated_at);
+        let high = s.set_todo_priority("w", "p", &t.id, 3).unwrap();
+        assert_eq!((high.priority, high.updated_at), (3, t.updated_at));
+        let text = fs::read_to_string(s.project_path("w", "p").unwrap().join(META_FILE)).unwrap();
+        assert!(text.contains(r#""priority": 3"#) && text.contains("等回复"), "{text}");
+        // 有不合规则的标签时什么都不改
+        assert!(s.set_todo_tags("w", "p", &t.id, &["新的".into(), "a,b".into()]).is_err());
+        assert!(s.set_todo_priority("w", "p", &t.id, 4).is_err());
+        let now = &s.load_workspace("w").unwrap().projects[0].todos[0];
+        assert_eq!((now.tags.clone(), now.priority), (vec!["工作".to_string(), "等回复".to_string()], 3));
+        // 移到别的项目后还在
+        let moved = s.move_todo("w", "p", &t.id, "w", "q").unwrap();
+        assert_eq!((moved.tags.clone(), moved.priority), (vec!["工作".to_string(), "等回复".to_string()], 3));
+        // 去掉后不写这两项
+        s.set_todo_tags("w", "q", &moved.id, &[]).unwrap();
+        s.set_todo_priority("w", "q", &moved.id, 0).unwrap();
+        let text = fs::read_to_string(s.project_path("w", "q").unwrap().join(META_FILE)).unwrap();
+        assert!(!text.contains("tags") && !text.contains("priority"), "{text}");
+    }
+
+    #[test]
+    fn hand_edited_tags_and_priority_are_read_leniently() {
+        let (_tmp, s) = store("tags-lenient");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "p").unwrap();
+        let dir = s.project_path("w", "p").unwrap();
+        for id in ["a", "b", "c"] {
+            fs::write(dir.join(format!("{id}.md")), "").unwrap();
+        }
+        let meta = r##"{"version":1,"todos":[
+            {"id":"a","title":"甲","tags":["#工作"," 工作 ",3,"a,b","","等回复"],"priority":2},
+            {"id":"b","title":"乙","tags":"工作","priority":"高"},
+            {"id":"c","title":"丙","priority":7}
+        ]}"##;
+        fs::write(dir.join(META_FILE), meta).unwrap();
+        let todos = s.load_workspace("w").unwrap().projects.remove(0).todos;
+        let get = |id: &str| todos.iter().find(|t| t.id == id).unwrap();
+        // 不是当成损坏的元数据重建：标题都还在
+        assert_eq!(get("a").title, "甲");
+        assert_eq!((get("a").tags.clone(), get("a").priority), (vec!["工作".to_string(), "等回复".to_string()], 2));
+        assert_eq!((get("b").title.as_str(), get("b").tags.len(), get("b").priority), ("乙", 0, 0));
+        assert_eq!((get("c").title.as_str(), get("c").priority), ("丙", 0));
+        assert!(!fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains("broken")));
+    }
+
+    #[test]
+    fn rename_and_remove_tags_in_shown_workspaces() {
+        let (_tmp, s) = store("tags-rename");
+        for ws in ["甲", "乙", "丙"] {
+            s.create_workspace(ws).unwrap();
+            s.create_project(ws, "p").unwrap();
+        }
+        s.create_sub_project("甲", "p", "子").unwrap();
+        let tag = |ws: &str, p: &str, tags: &[&str]| {
+            let t = s.create_todo(ws, p, "", "").unwrap();
+            s.set_todo_tags(ws, p, &t.id, &tags.iter().map(|x| x.to_string()).collect::<Vec<_>>()).unwrap()
+        };
+        let a = tag("甲", "p", &["工作", "急"]);
+        let b = tag("甲", "p/子", &["Work"]);
+        let c = tag("乙", "p", &["work", "办公"]);
+        let d = tag("丙", "p", &["工作"]);
+        let tags_of = |ws: &str, p: &str, id: &str| {
+            let tree = s.load_workspace(ws).unwrap();
+            let t = tree.projects.iter().find(|x| x.name == p).unwrap().todos.iter().find(|x| x.id == id).unwrap().clone();
+            (t.tags, t.updated_at)
+        };
+        let shown = ["甲".to_string(), "乙".to_string(), "不在的".to_string()];
+        // 不区分大小写地找，改成新名字；已经有新名字的（乙）去掉旧的，就是合并
+        assert_eq!(s.rename_tag(&shown, "WORK", "办公").unwrap(), 2);
+        assert_eq!(tags_of("甲", "p/子", &b.id), (vec!["办公".to_string()], b.updated_at));
+        assert_eq!(tags_of("乙", "p", &c.id).0, ["办公"]);
+        assert_eq!(s.rename_tag(&shown, "工作", " #事务 ").unwrap(), 1);
+        assert_eq!(tags_of("甲", "p", &a.id), (vec!["事务".to_string(), "急".to_string()], a.updated_at));
+        // 改成一样的什么都不改；新名字不合规则时不改
+        assert_eq!(s.rename_tag(&shown, "急", "急").unwrap(), 0);
+        assert!(s.rename_tag(&shown, "急", "a,b").is_err());
+        // 没显示在侧栏的工作区不动
+        assert_eq!(tags_of("丙", "p", &d.id).0, ["工作"]);
+        assert_eq!(s.remove_tag(&shown, "办公").unwrap(), 2);
+        assert!(tags_of("甲", "p/子", &b.id).0.is_empty());
+        assert!(tags_of("乙", "p", &c.id).0.is_empty());
+        assert_eq!(tags_of("甲", "p", &a.id).0, ["事务", "急"]);
+        assert_eq!(s.remove_tag(&shown, "没有的").unwrap(), 0);
+    }
+
+    #[test]
+    fn renaming_a_tag_in_one_todo() {
+        let mut tags = vec!["工作".to_string(), "急".to_string()];
+        assert!(rename_tag_in(&mut tags, "工作", "Work"));
+        assert_eq!(tags, ["Work", "急"]);
+        // 只改大小写：换成新的写法
+        assert!(rename_tag_in(&mut tags, "work", "WORK"));
+        assert_eq!(tags, ["WORK", "急"]);
+        // 改成已有的：合并，留着已有的那个（和它的位置）
+        assert!(rename_tag_in(&mut tags, "work", "急"));
+        assert_eq!(tags, ["急"]);
+        assert!(!rename_tag_in(&mut tags, "没有的", "x"));
+        assert!(!rename_tag_in(&mut tags, "急", "急"));
+    }
+
+    #[test]
     fn reorder_keeps_updated_time() {
         let (_tmp, s) = store("reorder");
         s.create_workspace("w").unwrap();
@@ -2457,6 +2749,8 @@ mod tests {
         let t = s.create_todo("w", "p", "周报", "# 正文\n内容").unwrap();
         s.set_todo_done("w", "p", &t.id, true).unwrap();
         s.set_todo_pinned("w", "p", &t.id, true).unwrap();
+        s.set_todo_tags("w", "p", &t.id, &["工作".into(), "等回复".into()]).unwrap();
+        s.set_todo_priority("w", "p", &t.id, 2).unwrap();
         let before = s.load_workspace("w").unwrap().projects[0].todos[0].clone();
 
         let rid = s.delete_todo("w", "p", &t.id).unwrap();
@@ -2477,6 +2771,9 @@ mod tests {
         let after = &s.load_workspace("w").unwrap().projects[0].todos[0];
         assert_eq!((after.title.as_str(), after.done, after.pinned), ("周报", true, true));
         assert_eq!((after.created_at, after.done_at), (before.created_at, before.done_at));
+        // 标签、优先级也还原
+        assert_eq!(after.tags, ["工作", "等回复"]);
+        assert_eq!(after.priority, 2);
         assert_eq!(s.read_todo("w", "p", &t.id).unwrap().content, "# 正文\n内容");
         assert!(s.list_recycle().unwrap().is_empty());
         // 已经恢复过的再恢复：说明没有了
@@ -2630,6 +2927,8 @@ mod tests {
             done_at: None,
             pinned: false,
             order: None,
+            tags: Vec::new(),
+            priority: 0,
         });
         f.preview = "正文开头".repeat(20);
         assert_eq!(readable_entry_name(&f, "2"), format!("{}（2）", "正文开头".repeat(10)));
@@ -3561,8 +3860,11 @@ mod tests {
         let a = s.save_image("w", "p", &id, "png", PNG).unwrap();
         let mine = format!("我的版本 ![]({})", a.link);
         let from = TodoRef { workspace: "w".into(), project: "p".into(), id: id.clone() };
-        // 同一项目里另存：复制一份附件目录，正文里的地址改成新的 id
+        s.set_todo_tags("w", "p", &id, &["等回复".into()]).unwrap();
+        s.set_todo_priority("w", "p", &id, 3).unwrap();
+        // 同一项目里另存：复制一份附件目录，正文里的地址改成新的 id；带上原来那条的标签、优先级
         let copy = s.create_todo_from("w", "p", "有图的（我的版本）", &mine, Some(&from)).unwrap();
+        assert_eq!((copy.tags.clone(), copy.priority), (vec!["等回复".to_string()], 3));
         let p_dir = s.project_path("w", "p").unwrap();
         let copied = asset_link(&copy.id, &a.name);
         assert_eq!(fs::read(p_dir.join(&copied)).unwrap(), PNG);
@@ -3575,6 +3877,7 @@ mod tests {
         let there = s.project_path("收件箱", "快速记录").unwrap();
         assert!(!there.join(asset_link(&rescued.id, &a.name)).exists(), "原来那条已经删了，没有可复制的");
         assert_eq!(s.read_todo("收件箱", "快速记录", &rescued.id).unwrap().content, mine);
+        assert!(rescued.tags.is_empty() && rescued.priority == 0, "原来那条已经删了，没有可带上的标签");
         let from_copy = TodoRef { id: copy.id.clone(), ..from };
         let again = s.create_todo_creating_project("收件箱", "快速记录", "y", &format!("![]({copied})"), Some(&from_copy)).unwrap();
         assert_eq!(fs::read(there.join(asset_link(&again.id, &a.name))).unwrap(), PNG);

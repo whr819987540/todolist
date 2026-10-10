@@ -28,6 +28,8 @@ const todo = (id: string, done = false): TodoSummary => ({
   doneAt: null,
   pinned: false,
   order: null,
+  tags: [],
+  priority: 0,
 });
 const project = (name: string, ...todos: TodoSummary[]): ProjectNode => ({ name, todos });
 
