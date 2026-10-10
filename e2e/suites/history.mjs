@@ -126,7 +126,9 @@ export default async function (t) {
   await m.clearToasts();
   await m.click(await m.ev(`const r = ${rowOf("D")}; r.scrollIntoView({ block: "nearest" }); const x = r.getBoundingClientRect();
     return { x: Math.round(x.left + 60), y: Math.round(x.top + x.height / 2) }`), { right: true });
-  await m.ev(`await sleep(300); menuItem("标记为未完成").click(); await sleep(800); return 1`);
+  // 右键菜单弹出来要一会儿，CI 上忙的时候 300ms 不一定够
+  await m.ev(`const it = await waitFor(() => menuItem("标记为未完成")); if (!it) throw new Error("右键菜单里没有「标记为未完成」");
+    it.click(); await sleep(800); return 1`);
   const dMeta = t.meta("工作", "日常").find((x) => x.id === "D");
   check("右键「标记为未完成」：从列表里去掉，.todos.json 里改成未完成",
     !(await titles()).includes("D") && dMeta.done === false && !dMeta.doneAt && /「D」已标记为未完成/.test(await m.toast()), dMeta);
