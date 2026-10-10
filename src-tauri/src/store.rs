@@ -8,14 +8,18 @@
 //!     {项目}/
 //!       .todos.json          标题、完成状态、创建/修改时间等元数据
 //!       20260926-153012.md   待办正文（Markdown 纯文本）
-//!       {子项目}/            项目文件夹里的子文件夹是子项目，里面同样是 .todos.json 和 .md（只有一层子项目）
+//!       {子项目}/            项目文件夹里的子文件夹是子项目，里面同样是 .todos.json 和 .md；子项目里还可以有子项目，层数不限
 //!   .state.json              界面状态：上次的位置、各待办的编辑位置等，内容由前端决定
 //!   .recycle/                软件的回收站：删除的工作区、项目、待办先放在这里，可以恢复
 //!     {条目 id}/entry.json   原来在哪里、标题和完成状态等
 //!     {条目 id}/{原名}       删除的 .md 文件或目录
 //! ```
 //!
-//! 接口里的项目用路径表示：顶层项目是它的名字，子项目是「父项目/子项目」（名字里不能有 /，不会混淆）。
+//! 接口里的项目用路径表示：顶层项目是它的名字，下一级用 / 连起来，如「父项目/子项目/孙项目」（名字里不能有 /，不会混淆）。
+//!
+//! Windows 上很多程序（资源管理器、用默认程序打开的编辑器、系统回收站）打不开超过 MAX_PATH（260）的路径，
+//! Rust 自己倒是能读写。层级多、名字长时路径会超过它，所以新建、移动、改名、恢复前先算好完整路径的长度，超过了就不做，
+//! 说明原因；还给软件的回收站留出了路径变长的余地，删除后还能整个移到系统回收站（[`PATH_LIMIT`]、`check_grow`）。
 //!
 //! Markdown 文件是“待办是否存在”的唯一依据：元数据里有但文件不在的条目会被清理，
 //! 文件在但元数据里没有的（例如用户手动拷进来的 .md）会被自动补登记。
@@ -124,7 +128,7 @@ pub struct TodoSummary {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectNode {
-    /// 项目路径：顶层项目是名字，子项目是「父项目/子项目」
+    /// 项目路径：顶层项目是名字，子项目是「父项目/子项目」，再往下一样用 / 连起来
     pub name: String,
     /// 只是这个项目自己的待办，不含子项目的
     pub todos: Vec<TodoSummary>,
@@ -134,11 +138,11 @@ pub struct ProjectNode {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceTree {
     pub name: String,
-    /// 全部项目：每个顶层项目后面跟着它的子项目
+    /// 全部项目：每个项目后面跟着它的各级子项目
     pub projects: Vec<ProjectNode>,
 }
 
-/// 一个工作区里的项目路径（快速记录选择存到哪里时用，不读待办），子项目跟在它的父项目后面
+/// 一个工作区里的项目路径（快速记录选择存到哪里时用，不读待办），各级子项目跟在它的父项目后面
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceProjects {
@@ -213,7 +217,7 @@ struct RecycleFile {
     kind: RecycleKind,
     /// 原来在哪个工作区（删除的是工作区时是它自己）
     workspace: String,
-    /// 原来在哪个项目（项目路径，子项目是「父项目/子项目」；删除的是项目时是它自己；删除工作区时没有）
+    /// 原来在哪个项目（项目路径，子项目是「父项目/子项目」，可以有好几级；删除的是项目时是它自己；删除工作区时没有）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     project: Option<String>,
     /// 删除的文件 / 目录在这一项里的名字（原来的名字；子项目是它自己的名字，不带父项目）
@@ -332,7 +336,7 @@ impl Store {
         Ok(dir)
     }
 
-    /// 项目（或子项目，路径是「父项目/子项目」）的目录
+    /// 项目（或子项目，路径是「父项目/子项目」，可以有好几级）的目录
     fn project_dir(&self, ws: &str, project: &str) -> Result<PathBuf> {
         let ws_dir = self.ws_dir(ws)?;
         let dir = project_parts(project)?.iter().fold(ws_dir, |d, p| d.join(p));
@@ -414,6 +418,9 @@ impl Store {
         let mut g = self.guard();
         let dir = self.ws_dir(name)?;
         let new_name = normalize_name(new_name, "工作区")?;
+        if new_name != name {
+            check_grow(&dir, &dir, &self.root.join(&new_name), &new_name)?;
+        }
         rename_dir(&dir, &self.root, name, &new_name, "工作区")?;
         g.forget_under(&dir);
         Ok(new_name)
@@ -458,23 +465,23 @@ impl Store {
         let _g = self.guard();
         let dir = self.ws_dir(ws)?;
         let name = normalize_name(name, "项目")?;
+        check_new_folder(&dir.join(&name), &place_label(ws, Some(&name)))?;
         create_child_dir(&dir, &name, "项目")?;
         Ok(name)
     }
 
-    /// 在顶层项目 parent 里新建子项目，返回子项目的路径（「父项目/子项目」）
+    /// 在项目 parent（可以是子项目）里新建子项目，返回子项目的路径（「父项目/子项目」）
     pub fn create_sub_project(&self, ws: &str, parent: &str, name: &str) -> Result<String> {
         let _g = self.guard();
-        if parent.contains(PROJECT_SEP) {
-            return Err("子项目里不能再建子项目".into());
-        }
         let dir = self.project_dir(ws, parent)?;
         let name = normalize_name(name, "子项目")?;
+        let path = join_project(Some(parent), &name);
+        check_new_folder(&dir.join(&name), &place_label(ws, Some(&path)))?;
         create_child_dir(&dir, &name, "子项目")?;
-        Ok(format!("{parent}{PROJECT_SEP}{name}"))
+        Ok(path)
     }
 
-    /// 改项目（或子项目）自己的名字，返回改名后的路径；子项目改名后还在原来的父项目里
+    /// 改项目（或子项目）自己的名字，返回改名后的路径；子项目改名后还在原来的父项目里，它的各级子项目跟着
     pub fn rename_project(&self, ws: &str, project: &str, new_name: &str) -> Result<String> {
         let _g = self.guard();
         let pdir = self.project_dir(ws, project)?;
@@ -482,57 +489,57 @@ impl Store {
         let what = if parent.is_some() { "子项目" } else { "项目" };
         let new_name = normalize_name(new_name, what)?;
         let parent_dir = pdir.parent().ok_or("无效的项目名称")?;
+        let renamed = join_project(parent, &new_name);
+        if new_name != name {
+            check_grow(&pdir, &pdir, &parent_dir.join(&new_name), &place_label(ws, Some(&renamed)))?;
+        }
         rename_dir(&pdir, parent_dir, name, &new_name, what)?;
-        Ok(join_project(parent, &new_name))
+        Ok(renamed)
     }
 
-    /// 放进软件的回收站（顶层项目连同它的子项目），返回回收站里这一项的 id
+    /// 放进软件的回收站（连同它的各级子项目），返回回收站里这一项的 id
     pub fn delete_project(&self, ws: &str, project: &str) -> Result<String> {
         let mut g = self.guard();
         let pdir = self.project_dir(ws, project)?;
-        let (parent, name) = split_project(project);
+        let (_, name) = split_project(project);
         let mut count = markdown_files(&pdir)?.len();
-        if parent.is_none() {
-            for (_, sdir) in list_subdirs(&pdir)? {
-                count += markdown_files(&sdir)?.len();
-            }
+        for (_, sdir) in project_dirs(&pdir)? {
+            count += markdown_files(&sdir)?.len();
         }
         let id = self.recycle(&pdir, RecycleFile::new(RecycleKind::Project, ws, Some(project), name, count))?;
         g.forget_under(&pdir);
         Ok(id)
     }
 
-    /// 把项目（或子项目）连同其中的待办移到工作区 target 的顶层（parent 为 None），或者放进它的顶层项目 parent 里
-    /// 成为子项目；名字不变，返回移过去后的路径。只有一层子项目：有子项目的项目不能放进别的项目。
-    /// 那里已有同名项目时不移动
+    /// 把项目（或子项目）连同其中的待办和各级子项目移到工作区 target 的顶层（parent 为 None），或者放进那里的
+    /// 项目 parent（可以是子项目）里成为它的子项目；名字不变，返回移过去后的路径。
+    /// 不能放进它自己或它自己的子项目里；那里已有同名项目、移过去后路径太长时不移动
     pub fn move_project(&self, ws: &str, project: &str, target: &str, parent: Option<&str>) -> Result<String> {
         let _g = self.guard();
         let pdir = self.project_dir(ws, project)?;
         let (_, name) = split_project(project);
         let dst_parent = match parent {
             None => self.ws_dir(target)?,
-            Some(p) if p.contains(PROJECT_SEP) => return Err("子项目里不能再放项目".into()),
             Some(p) => self.project_dir(target, p)?,
         };
         if dst_parent.starts_with(&pdir) {
-            return Err("不能移到它自己里面".into());
+            return Err("不能放进它自己或它的子项目里".into());
         }
         if Some(dst_parent.as_path()) == pdir.parent() {
             return Err(if parent.is_some() { "已经在该项目中" } else { "已经在该工作区中" }.into());
-        }
-        if parent.is_some() && !list_subdirs(&pdir)?.is_empty() {
-            return Err(format!("「{name}」里有子项目，不能放进别的项目（子项目里不能再有子项目）"));
         }
         // Windows 不区分大小写，exists 也会认出只差大小写的同名项目
         let dst = dst_parent.join(name);
         if dst.exists() {
             return Err(match parent {
-                Some(p) => format!("项目「{p}」中已有同名子项目「{name}」"),
+                Some(p) => format!("项目「{}」中已有同名子项目「{name}」", project_label(p)),
                 None => format!("工作区「{target}」中已有同名项目「{name}」"),
             });
         }
+        let moved = join_project(parent, name);
+        check_grow(&pdir, &pdir, &dst, &place_label(target, Some(&moved)))?;
         fs::rename(&pdir, &dst).map_err(|e| format!("移动失败，可能有文件正被其他程序占用：{e}"))?;
-        Ok(join_project(parent, name))
+        Ok(moved)
     }
 
     // ----- 待办 -----
@@ -545,6 +552,10 @@ impl Store {
         let mut meta = read_meta(&dir)?;
         let id = unique_id(&dir, &meta);
         let path = dir.join(format!("{id}.md"));
+        // 软件里建的项目都留够了待办文件名的长度；在外部建的很深的文件夹可能不够，这时只要待办文件本身打得开就行
+        if path_len(&path) > MAX_PATH_CHARS {
+            return Err(too_long(path_len(&path), MAX_PATH_CHARS, &place_label(ws, Some(project))));
+        }
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -585,6 +596,7 @@ impl Store {
             let _g = self.guard();
             let dir = project.split(PROJECT_SEP).fold(self.root.join(&ws), |d, p| d.join(p));
             if !dir.is_dir() {
+                check_new_folder(&dir, &place_label(&ws, Some(&project)))?;
                 fs::create_dir_all(&dir)
                     .map_err(|e| format!("创建项目「{}」失败：{e}", project_label(&project)))?;
             }
@@ -783,6 +795,7 @@ impl Store {
             new_id = unique_id(&dst_dir, &dst_meta);
         }
         let dst_path = dst_dir.join(format!("{new_id}.md"));
+        check_grow(&src_path, &src_path, &dst_path, &place_label(target_ws, Some(target)))?;
         fs::rename(&src_path, &dst_path)
             .map_err(|e| format!("移动失败，文件可能正被其他程序占用：{e}"))?;
 
@@ -950,6 +963,7 @@ impl Store {
         let restored = match f.kind {
             RecycleKind::Todo => {
                 let project = f.project.clone().ok_or_else(gone)?;
+                // 项目（和它的各级父项目）不在了时逐级重新建
                 let pdir = project_parts(&project)?.iter().fold(self.root.join(&f.workspace), |d, p| d.join(p));
                 fs::create_dir_all(&pdir).map_err(|e| format!("恢复失败：{e}"))?;
                 let mut meta = read_meta(&pdir)?;
@@ -971,7 +985,10 @@ impl Store {
                 if pdir.join(format!("{new_id}.md")).exists() || meta.find(&new_id).is_some() {
                     new_id = unique_id(&pdir, &meta);
                 }
-                fs::rename(&payload, pdir.join(format!("{new_id}.md"))).map_err(|e| format!("恢复失败：{e}"))?;
+                // 原来的文件名还空着时就是原来的路径，一定能恢复；换了文件名、变长了才检查
+                let dst = pdir.join(format!("{new_id}.md"));
+                check_grow(&payload, &pdir.join(&f.name), &dst, &place_label(&f.workspace, Some(&project)))?;
+                fs::rename(&payload, dst).map_err(|e| format!("恢复失败：{e}"))?;
                 todo.id = new_id.clone();
                 // 原来排的位置在别的待办调整过顺序后不一定还对，当成新来的排在最前面
                 todo.order = None;
@@ -987,25 +1004,24 @@ impl Store {
                 }
             }
             RecycleKind::Project => {
-                // 子项目恢复到原来的父项目里（父项目不在了重新建）；以前的版本记的项目没有父项目
-                let parent = match f.project.as_deref().map(split_project) {
-                    Some((Some(p), _)) => Some(p),
-                    _ => None,
-                };
+                // 子项目恢复到原来的父项目里（父项目和更上面的项目不在了时逐级重新建）；以前的版本记的项目没有父项目
+                let parent = f.project.as_deref().and_then(|p| split_project(p).0);
                 let mut dir = self.root.join(&f.workspace);
                 if let Some(p) = parent {
-                    check_component(p, "项目")?;
-                    dir = dir.join(p);
+                    dir = project_parts(p)?.iter().fold(dir, |d, x| d.join(x));
                 }
-                fs::create_dir_all(&dir).map_err(|e| format!("恢复失败：{e}"))?;
                 let (name, renamed) = free_name(&dir, &f.name);
+                let project = join_project(parent, &name);
+                // 恢复到原来的地方、用原来的名字时一定能恢复（删除前就在那里）；名字被占用、加了「（恢复）」变长了才检查
+                check_grow(&payload, &dir.join(&f.name), &dir.join(&name), &place_label(&f.workspace, Some(&project)))?;
+                fs::create_dir_all(&dir).map_err(|e| format!("恢复失败：{e}"))?;
                 fs::rename(&payload, dir.join(&name)).map_err(|e| format!("恢复失败：{e}"))?;
                 g.forget_under(&dir.join(&name));
-                let project = Some(join_project(parent, &name));
-                Restored { kind: f.kind, workspace: f.workspace.clone(), project, todo_id: None, renamed }
+                Restored { kind: f.kind, workspace: f.workspace.clone(), project: Some(project), todo_id: None, renamed }
             }
             RecycleKind::Workspace => {
                 let (name, renamed) = free_name(&self.root, &f.name);
+                check_grow(&payload, &self.root.join(&f.name), &self.root.join(&name), &name)?;
                 fs::rename(&payload, self.root.join(&name)).map_err(|e| format!("恢复失败：{e}"))?;
                 g.forget_under(&self.root.join(&name));
                 Restored { kind: f.kind, workspace: name, project: None, todo_id: None, renamed }
@@ -1646,27 +1662,24 @@ pub fn normalize_name(raw: &str, what: &str) -> Result<String> {
 }
 
 // ---------------------------------------------------------------------------
-// 项目路径：顶层项目是名字，子项目是「父项目/子项目」（只有一层子项目）
+// 项目路径：顶层项目是名字，下一级用 / 连起来：「父项目/子项目/孙项目」…，层数不限
 // ---------------------------------------------------------------------------
 
 /// 项目路径里父项目和子项目之间的分隔符；名字里不能有它，不会和名字混淆
 pub const PROJECT_SEP: char = '/';
 
-/// 访问已有项目时拆开路径：一级（顶层项目）或两级（子项目），每级只防路径穿越和非法字符
+/// 访问已有项目时拆开路径：每级是一层文件夹，只防路径穿越和非法字符
 fn project_parts(project: &str) -> Result<Vec<&str>> {
     let parts: Vec<&str> = project.split(PROJECT_SEP).collect();
-    if parts.len() > 2 {
-        return Err("无效的项目名称".into());
-    }
     for p in &parts {
         check_component(p, "项目")?;
     }
     Ok(parts)
 }
 
-/// 拆成父项目（顶层项目没有）和它自己的名字；不校验
+/// 拆成父项目（顶层项目没有；可以有好几级，如「A/B」）和它自己的名字；不校验
 fn split_project(project: &str) -> (Option<&str>, &str) {
-    match project.split_once(PROJECT_SEP) {
+    match project.rsplit_once(PROJECT_SEP) {
         Some((parent, name)) => (Some(parent), name),
         None => (None, project),
     }
@@ -1679,19 +1692,120 @@ fn join_project(parent: Option<&str>, name: &str) -> String {
     }
 }
 
-/// 提示里的项目路径：父项目 / 子项目
+/// 提示里的项目路径：父项目 / 子项目 / …
 fn project_label(project: &str) -> String {
     project.replace(PROJECT_SEP, " / ")
 }
 
+/// 提示里的位置：工作区 / 父项目 / 子项目
+fn place_label(ws: &str, project: Option<&str>) -> String {
+    match project {
+        Some(p) => format!("{ws} / {}", project_label(p)),
+        None => ws.to_string(),
+    }
+}
+
 /// 新建、设置（快速记录存到哪里）时的严格校验：每一级按 normalize_name，返回规整后的路径
 pub fn normalize_project_path(raw: &str) -> Result<String> {
-    let parts: Vec<&str> = raw.split(PROJECT_SEP).collect();
-    if parts.len() > 2 {
-        return Err("子项目里不能再有子项目".into());
-    }
-    let parts = parts.into_iter().map(|p| normalize_name(p, "项目")).collect::<Result<Vec<_>>>()?;
+    let parts = raw.split(PROJECT_SEP).map(|p| normalize_name(p, "项目")).collect::<Result<Vec<_>>>()?;
     Ok(parts.join(&PROJECT_SEP.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// 路径长度
+// ---------------------------------------------------------------------------
+
+/// 一般的 Windows 程序能用的路径最长有多少个字符：MAX_PATH 是 260，含结尾的 NUL。Rust 自己读写更长的路径没问题，
+/// 但资源管理器、用默认程序打开时的编辑器、系统回收站多半打不开
+pub const MAX_PATH_CHARS: usize = 259;
+
+/// 删除后放进软件的回收站时路径最多会长多少：删除整个工作区时 `{数据目录}\{工作区}\…` 变成
+/// `{数据目录}\.recycle\{id}\{工作区}\…`（`\.recycle\` 10 个字符，id 19～22 个字符）；删除项目、待办时不会比这更长
+pub const RECYCLE_ROOM: usize = 32;
+
+/// 软件里新建、移动、改名后路径不能超过的长度（227）：再给软件的回收站留出 RECYCLE_ROOM，删除以后还能整个移到系统回收站
+pub const PATH_LIMIT: usize = MAX_PATH_CHARS - RECYCLE_ROOM;
+
+/// 项目文件夹里要给待办的文件名留出来的长度：`\20260926-153012-99.md`
+const TODO_FILE_ROOM: usize = 22;
+
+/// 路径有多少个字符，和 Windows 一样按 UTF-16 算（一个汉字一个，表情符号两个）
+fn path_len(p: &Path) -> usize {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        p.as_os_str().encode_wide().count()
+    }
+    #[cfg(not(windows))]
+    {
+        p.to_string_lossy().encode_utf16().count()
+    }
+}
+
+/// 路径太长时的提示：n 个字符，超过了 limit（PATH_LIMIT 或 MAX_PATH_CHARS）；place 是提示里写的位置（工作区 / 项目 / …）
+fn too_long(n: usize, limit: usize, place: &str) -> String {
+    let why = if limit == MAX_PATH_CHARS {
+        format!("超过了 Windows 的上限（{MAX_PATH_CHARS} 个），资源管理器和别的程序会打不开")
+    } else {
+        format!(
+            "超过了 {limit} 个（Windows 的资源管理器和别的程序最多只能打开 {MAX_PATH_CHARS} 个字符的路径，删除后在软件的回收站里路径还会长 {RECYCLE_ROOM} 个字符）"
+        )
+    };
+    format!("路径太长：「{place}」里的文件路径会有 {n} 个字符，{why}。请把名字改短一些，或者少建几层子项目")
+}
+
+/// 新建项目文件夹 dir 前检查：加上待办文件名的长度不超过 PATH_LIMIT
+fn check_new_folder(dir: &Path, place: &str) -> Result<()> {
+    let n = path_len(dir) + TODO_FILE_ROOM;
+    if n <= PATH_LIMIT {
+        return Ok(());
+    }
+    Err(too_long(n, PATH_LIMIT, place))
+}
+
+/// 把已有的 src（项目、工作区的目录，或待办的文件）放到 dst 之前检查（移动、改名、恢复）。base 是它原来所在的地方：
+/// 移动、改名时就是 src，从回收站恢复时是删除前的位置。
+/// - dst 不比 base 长：里面的路径都不会变长，不检查（恢复到原来的地方、用原来的名字时一定能恢复，改短、一样长时一定能改）
+/// - 变长时：里面每个文件、文件夹的路径都不能超过 PATH_LIMIT；原来还放得下新待办的项目文件夹（加上待办文件名的长度不超过
+///   PATH_LIMIT）移过去后也要放得下。原来就放不下的（在资源管理器里建得很深的）不因为要留的长度而不让动
+fn check_grow(src: &Path, base: &Path, dst: &Path, place: &str) -> Result<()> {
+    let (from, to) = (path_len(base), path_len(dst));
+    if to <= from {
+        return Ok(());
+    }
+    // 一个文件夹（或文件）的路径从 from + rel 变成 to + rel，rel 是它在 src 下面的那一段（含开头的分隔符）
+    let mut worst = 0;
+    let mut judge = |rel: usize, folder: bool| {
+        let (old, new) = (from + rel, to + rel);
+        let room = if folder && old + TODO_FILE_ROOM <= PATH_LIMIT { TODO_FILE_ROOM } else { 0 };
+        if new + room > PATH_LIMIT {
+            worst = worst.max(new + room);
+        }
+    };
+    if !src.is_dir() {
+        judge(0, false);
+    } else {
+        judge(0, true);
+        let mut stack = vec![(src.to_path_buf(), 0)];
+        while let Some((dir, rel)) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let here = rel + 1 + path_len(Path::new(&name));
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    // . 开头的文件夹不是项目，不会往里面建待办
+                    judge(here, !name.to_string_lossy().starts_with('.'));
+                    stack.push((entry.path(), here));
+                } else {
+                    judge(here, false);
+                }
+            }
+        }
+    }
+    if worst == 0 {
+        return Ok(());
+    }
+    Err(too_long(worst, PATH_LIMIT, place))
 }
 
 // ---------------------------------------------------------------------------
@@ -1723,17 +1837,17 @@ fn list_subdirs(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     Ok(out)
 }
 
-/// 工作区里的全部项目（路径和目录）：每个顶层项目后面跟着它的子项目（项目文件夹里的子文件夹）。
-/// 子项目里再有文件夹不算（只有一层子项目）
+/// 工作区里的全部项目（路径和目录）：项目文件夹里的子文件夹是子项目，子项目里的子文件夹也是，层数不限。
+/// 每个项目后面跟着它的各级子项目（列完一个项目的子项目再列下一个，同资源管理器的树）。
+/// 给的是项目的目录时列出的是它的各级子项目，路径从它下一级算起。用栈不用递归：外部建的文件夹再深也不会栈溢出
 fn project_dirs(ws_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     let mut out = Vec::new();
-    for (name, dir) in list_subdirs(ws_dir)? {
-        let subs: Vec<_> = list_subdirs(&dir)?
-            .into_iter()
-            .map(|(sub, sdir)| (format!("{name}{PROJECT_SEP}{sub}"), sdir))
-            .collect();
-        out.push((name, dir));
-        out.extend(subs);
+    // 倒着放进栈里，先拿出来的是读目录时排在前面的
+    let mut stack: Vec<(String, PathBuf)> = list_subdirs(ws_dir)?.into_iter().rev().collect();
+    while let Some((path, dir)) = stack.pop() {
+        let subs = list_subdirs(&dir)?;
+        stack.extend(subs.into_iter().rev().map(|(name, d)| (format!("{path}{PROJECT_SEP}{name}"), d)));
+        out.push((path, dir));
     }
     Ok(out)
 }
@@ -2158,8 +2272,7 @@ mod tests {
         s.create_project("w", "日常").unwrap();
         assert_eq!(s.create_sub_project("w", "需求", " 前端 ").unwrap(), "需求/前端");
         assert_eq!(s.create_sub_project("w", "需求", "后端").unwrap(), "需求/后端");
-        // 只有一层子项目；重名（不分大小写）、父项目不在的建不了
-        assert!(s.create_sub_project("w", "需求/前端", "组件").is_err());
+        // 同一个父项目里重名（不分大小写）、父项目不在的建不了
         assert!(s.create_sub_project("w", "需求", "前端").is_err());
         assert!(s.create_sub_project("w", "不存在", "x").is_err());
         assert!(s.create_sub_project("w", "需求", "a/b").is_err());
@@ -2189,11 +2302,9 @@ mod tests {
         let listed = &s.list_projects().unwrap()[0].projects;
         assert!(listed.contains(&"需求/前端".to_string()) && listed.len() == 4);
 
-        // 子项目里再有文件夹不算项目；不认的路径
-        fs::create_dir_all(s.root().join("w/需求/前端/图片")).unwrap();
-        assert_eq!(project_names(&s, "w").len(), 4);
-        assert!(s.read_todo("w", "需求/前端/图片", "x").is_err());
+        // 不认的路径
         assert!(s.read_todo("w", "需求/../日常", &own.id).is_err());
+        assert!(s.read_todo("w", "需求//前端", &t.id).is_err());
 
         // 全文搜索也查子项目
         let hits = s.search(None, "正文").unwrap();
@@ -2202,6 +2313,278 @@ mod tests {
         let m = s.move_todo("w", "需求/前端", &t.id, "w", "日常").unwrap();
         s.move_todo("w", "日常", &m.id, "w", "需求/后端").unwrap();
         assert_eq!(s.load_workspace("w").unwrap().projects[at("需求/后端")].todos.len(), 1);
+    }
+
+    #[test]
+    fn sub_projects_nest_to_any_depth() {
+        let (_tmp, s) = store("sub-deep");
+        s.create_workspace("w").unwrap();
+        s.create_project("w", "A").unwrap();
+        s.create_project("w", "Z").unwrap();
+        assert_eq!(s.create_sub_project("w", "A", "B").unwrap(), "A/B");
+        assert_eq!(s.create_sub_project("w", "A/B", "C").unwrap(), "A/B/C");
+        assert_eq!(s.create_sub_project("w", "A/B/C", " D ").unwrap(), "A/B/C/D");
+        assert_eq!(s.create_sub_project("w", "A", "B2").unwrap(), "A/B2");
+        assert!(s.root().join("w/A/B/C/D").is_dir());
+        // 同一个父项目里不能重名（Windows 上不分大小写，靠的是文件系统），不同父项目里可以
+        assert!(s.create_sub_project("w", "A/B", "C").is_err());
+        if cfg!(windows) {
+            assert!(s.create_sub_project("w", "A/B", "c").is_err());
+        }
+        assert_eq!(s.create_sub_project("w", "A/B2", "C").unwrap(), "A/B2/C");
+        assert_eq!(s.create_sub_project("w", "Z", "B").unwrap(), "Z/B");
+
+        // 每个项目后面跟着它的各级子项目，列完一个项目的再列下一个
+        let names = project_names(&s, "w");
+        assert_eq!(names.len(), 8);
+        let at = |n: &str| names.iter().position(|x| x == n).unwrap();
+        assert!(at("A") < at("A/B") && at("A/B") < at("A/B/C") && at("A/B/C") < at("A/B/C/D"));
+        for (i, n) in names.iter().enumerate() {
+            // 子项目都在它的父项目后面、它的父项目的下一个兄弟前面
+            if let Some((parent, _)) = n.rsplit_once('/') {
+                let p = at(parent);
+                assert!(p < i, "{names:?}");
+                assert!(names[p..=i].iter().all(|x| x == parent || x.starts_with(&format!("{parent}/"))), "{names:?}");
+            }
+        }
+
+        // 深处的待办：读写、移动、搜索都按路径；用户直接在资源管理器里建的文件夹也是子项目
+        let t = s.create_todo("w", "A/B/C/D", "最深的", "深处的正文").unwrap();
+        assert!(s.root().join("w/A/B/C/D").join(format!("{}.md", t.id)).is_file());
+        fs::create_dir_all(s.root().join("w/A/B/C/D/外部建的/再一层")).unwrap();
+        fs::write(s.root().join("w/A/B/C/D/外部建的/再一层/笔记.md"), "外部的").unwrap();
+        let tree = s.load_workspace("w").unwrap();
+        let deep = tree.projects.iter().find(|p| p.name == "A/B/C/D/外部建的/再一层").unwrap();
+        assert_eq!(deep.todos[0].title, "笔记");
+        assert_eq!(s.search(None, "深处").unwrap()[0].project, "A/B/C/D");
+        let moved = s.move_todo("w", "A/B/C/D", &t.id, "w", "Z/B").unwrap();
+        assert_eq!(s.read_todo("w", "Z/B", &moved.id).unwrap().content, "深处的正文");
+
+        // 首页卡片：项目数只算顶层，待办数包括各级子项目里的
+        let info = &s.list_workspaces().unwrap()[0];
+        assert_eq!((info.project_count, info.todo_count), (2, 2));
+        assert_eq!(s.list_projects().unwrap()[0].projects.len(), 10);
+
+        // 改名：中间一级改名后，下面各级跟着
+        assert_eq!(s.rename_project("w", "A/B", "B改").unwrap(), "A/B改");
+        assert!(s.read_todo("w", "A/B改/C/D/外部建的/再一层", "笔记").is_ok());
+        // 只改大小写也行
+        assert!(s.rename_project("w", "A/B改/C", "c").is_ok());
+        assert!(project_names(&s, "w").contains(&"A/B改/c/D".to_string()));
+
+        // 删除中间的一级：连同下面各级一起进回收站，待办数一起算
+        let rid = s.delete_project("w", "A/B改").unwrap();
+        let e = &s.list_recycle().unwrap()[0];
+        assert_eq!((e.title.as_str(), e.project.as_deref(), e.todo_count), ("B改", Some("A/B改"), 1));
+        assert!(!project_names(&s, "w").iter().any(|n| n.starts_with("A/B改")));
+        // 父项目链不在了：逐级重新建，恢复回原来的地方
+        s.delete_project("w", "A").unwrap();
+        let r = s.restore(&[rid]);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(r.restored[0].project.as_deref(), Some("A/B改"));
+        assert!(s.read_todo("w", "A/B改/c/D/外部建的/再一层", "笔记").is_ok());
+        // 删除的深处的待办：项目链不在了也逐级重新建
+        let t = s.create_todo("w", "A/B改/c/D", "", "").unwrap();
+        let tid = s.delete_todo("w", "A/B改/c/D", &t.id).unwrap();
+        s.delete_project("w", "A").unwrap();
+        let r = s.restore(&[tid]);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert!(s.read_todo("w", "A/B改/c/D", &t.id).is_ok());
+    }
+
+    #[test]
+    fn move_projects_between_levels() {
+        let (_tmp, s) = store("sub-move-deep");
+        s.create_workspace("甲").unwrap();
+        s.create_workspace("乙").unwrap();
+        s.create_project("甲", "A").unwrap();
+        s.create_sub_project("甲", "A", "B").unwrap();
+        s.create_sub_project("甲", "A/B", "C").unwrap();
+        s.create_project("甲", "P").unwrap();
+        s.create_sub_project("甲", "P", "Q").unwrap();
+        s.create_project("乙", "X").unwrap();
+        s.create_sub_project("乙", "X", "Y").unwrap();
+        s.create_sub_project("乙", "X/Y", "Q").unwrap();
+        let t = s.create_todo("甲", "P/Q", "跟着走", "").unwrap();
+
+        // 有子项目的项目放进别的项目的子项目里，下面各级跟着
+        assert_eq!(s.move_project("甲", "P", "甲", Some("A/B/C")).unwrap(), "A/B/C/P");
+        assert!(s.read_todo("甲", "A/B/C/P/Q", &t.id).is_ok());
+        // 孙项目移到别的工作区的子项目里、移到顶层
+        assert_eq!(s.move_project("甲", "A/B/C/P/Q", "乙", Some("X")).unwrap(), "X/Q");
+        assert_eq!(s.move_project("乙", "X/Q", "乙", None).unwrap(), "Q");
+        assert!(s.read_todo("乙", "Q", &t.id).is_ok());
+
+        // 不行的：放进它自己、它自己的子项目、孙项目里；已经在那里；那里有同名的（不分大小写）；目标不在
+        assert!(s.move_project("甲", "A", "甲", Some("A")).is_err());
+        assert!(s.move_project("甲", "A", "甲", Some("A/B")).is_err());
+        assert!(s.move_project("甲", "A/B", "甲", Some("A/B/C/P")).is_err());
+        assert!(s.move_project("甲", "A/B/C", "甲", Some("A/B")).is_err());
+        assert!(s.move_project("乙", "Q", "乙", Some("X/Y")).is_err());
+        s.create_project("甲", "Q").unwrap();
+        assert!(s.move_project("甲", "Q", "乙", None).is_err());
+        if cfg!(windows) {
+            s.create_project("甲", "y").unwrap();
+            assert!(s.move_project("甲", "y", "乙", Some("X")).is_err());
+        }
+        assert!(s.move_project("甲", "Q", "甲", Some("A/B/不在")).is_err());
+        assert!(s.root().join("甲/A/B/C/P").is_dir());
+    }
+
+    /// docs/requirements.md「基础 → 路径长度」写明的数：Windows 的上限 259，软件的回收站要留 32，新建、移动、改名后的路径
+    /// 不超过 227；新建的项目文件夹还要给待办文件名留 22 个字符（项目文件夹最长 205）
+    const WINDOWS_LIMIT: usize = 259;
+    const LIMIT: usize = 227;
+    const NEW_FOLDER_LIMIT: usize = 205;
+
+    /// 在工作区 ws 里一级一级往下建（每级最多 60 个字），最后一级的名字正好让它下面还能建 room 个字的子项目（room 为 0 时
+    /// 最深的项目文件夹正好到新建的上限）。返回最深的项目路径
+    fn fill(s: &Store, ws: &str, c: char, room: usize) -> String {
+        let mut len = path_len(&s.workspace_path(ws).unwrap());
+        let mut levels: Vec<String> = Vec::new();
+        // 最深的那一级到 NEW_FOLDER_LIMIT - (1 + room) 为止
+        let target = NEW_FOLDER_LIMIT - if room > 0 { 1 + room } else { 0 };
+        while len < target {
+            let n = (target - len - 1).min(60);
+            assert!(n > 0, "数据目录太长：{len}");
+            let name = c.to_string().repeat(n);
+            let path = match levels.last() {
+                None => s.create_project(ws, &name).unwrap(),
+                Some(p) => s.create_sub_project(ws, p, &name).unwrap(),
+            };
+            levels.push(path);
+            len += 1 + n;
+        }
+        assert_eq!(len, target);
+        levels.pop().unwrap()
+    }
+
+    #[test]
+    fn paths_must_fit_windows_limit() {
+        assert_eq!((MAX_PATH_CHARS, PATH_LIMIT), (WINDOWS_LIMIT, LIMIT));
+        let (_tmp, s) = store("long-path");
+        s.create_workspace("w").unwrap();
+        // 最深的项目文件夹正好 205 个字符：再加 22 个字符的待办文件名正好 227
+        let deepest = fill(&s, "w", '甲', 0);
+        assert_eq!(path_len(&s.project_path("w", &deepest).unwrap()), NEW_FOLDER_LIMIT);
+        assert!(deepest.split('/').count() >= 2, "{deepest}");
+
+        // 到上限的项目里照样能建待办，文件路径不超过 227
+        let t = s.create_todo("w", &deepest, "最深的", "").unwrap();
+        assert!(path_len(&s.todo_path("w", &deepest, &t.id).unwrap()) <= LIMIT);
+        // 再建一级就超了：说明原因、写明上限，什么都不建
+        let e = s.create_sub_project("w", &deepest, "x").unwrap_err();
+        assert!(e.contains("路径太长") && e.contains("227") && e.contains("259"), "{e}");
+        assert!(!s.project_path("w", &deepest).unwrap().join("x").exists());
+        // 上面哪一级的名字改长一个字，最深的就放不下新待办了：不改
+        let top = deepest.split('/').next().unwrap().to_string();
+        let e = s.rename_project("w", &top, &format!("{top}长")).unwrap_err();
+        assert!(e.contains("路径太长"), "{e}");
+        assert!(s.project_path("w", &deepest).is_ok());
+        // 改短、一样长的一定能改
+        let renamed = s.rename_project("w", &top, &"乙".repeat(top.chars().count())).unwrap();
+        let deepest = deepest.replacen(&top, &renamed, 1);
+        let shorter = s.rename_project("w", &renamed, "短").unwrap();
+        let deepest = deepest.replacen(&renamed, &shorter, 1);
+        assert!(s.project_path("w", &deepest).is_ok());
+        let back = s.rename_project("w", &shorter, &renamed).unwrap();
+        let deepest = deepest.replacen(&shorter, &back, 1);
+        // 工作区改长了也一样
+        assert!(s.rename_workspace("w", "ww").unwrap_err().contains("路径太长"));
+
+        // 整个移进另一个项目里放不下：不移；移到更短的地方（顶层）可以
+        s.create_project("w", "丁").unwrap();
+        let e = s.move_project("w", &back, "w", Some("丁")).unwrap_err();
+        assert!(e.contains("路径太长"), "{e}");
+        assert!(s.project_path("w", &deepest).is_ok());
+        let (_, leaf) = deepest.rsplit_once('/').unwrap();
+        let top_level = s.move_project("w", &deepest, "w", None).unwrap();
+        assert_eq!(top_level, leaf);
+        let deepest = s.move_project("w", &top_level, "w", Some(deepest.rsplit_once('/').unwrap().0)).unwrap();
+        // 快速记录存到放不下的地方：不建
+        assert!(s.quick_capture("w", &format!("{deepest}/x"), "记一下").unwrap_err().contains("路径太长"));
+        assert!(s.project_path("w", &format!("{deepest}/x")).is_err());
+        // 外部拷进来的、文件名很长的待办移到最深处放不下：不移
+        let dir = s.project_path("w", "丁").unwrap();
+        let long = "长".repeat(30);
+        fs::write(dir.join(format!("{long}.md")), "x").unwrap();
+        assert!(s.move_todo("w", "丁", &long, "w", &deepest).unwrap_err().contains("路径太长"));
+        assert!(dir.join(format!("{long}.md")).is_file());
+
+        // 删除后恢复到原来的地方一定能恢复；原来的名字被占用了要加「（恢复）」，加上就放不下了：说明原因，还留在回收站里
+        let rid = s.delete_project("w", &deepest).unwrap();
+        let (parent, leaf) = deepest.rsplit_once('/').unwrap();
+        s.create_sub_project("w", parent, leaf).unwrap();
+        let r = s.restore(std::slice::from_ref(&rid));
+        assert!(r.restored.is_empty() && r.errors[0].contains("路径太长"), "{:?}", r.errors);
+        assert_eq!(s.list_recycle().unwrap().len(), 1);
+        s.delete_project("w", &deepest).unwrap();
+        let r = s.restore(std::slice::from_ref(&rid));
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert!(s.read_todo("w", &deepest, &t.id).is_ok());
+    }
+
+    #[test]
+    fn existing_long_folders_are_never_blocked_by_reserve() {
+        let (_tmp, s) = store("long-existing");
+        s.create_workspace("w").unwrap();
+        // 用户在资源管理器里建的很深的文件夹（资源管理器建文件夹最长 248）：超过了软件里新建的上限，也放不下新待办的
+        // 文件名，但是在 Windows 上能用
+        let deepest = fill(&s, "w", '甲', 0);
+        let pdir = s.project_path("w", &deepest).unwrap();
+        let folder = |len: usize| {
+            let name = "外".repeat(len - NEW_FOLDER_LIMIT - 1);
+            fs::create_dir(pdir.join(&name)).unwrap();
+            assert_eq!(path_len(&pdir.join(&name)), len);
+            format!("{deepest}/{name}")
+        };
+        let ext = folder(240);
+        fs::write(s.project_path("w", &ext).unwrap().join("a.md"), "外部的").unwrap();
+        // 在这样的文件夹里建待办：待办文件本身不超过 259 就行（225 的放得下，245 的放不下）
+        let roomy = folder(225);
+        let cramped = folder(245);
+        assert!(s.create_todo("w", &roomy, "能建", "").is_ok());
+        let e = s.create_todo("w", &cramped, "放不下", "").unwrap_err();
+        assert!(e.contains("路径太长") && e.contains("259"), "{e}");
+
+        // 删除再撤销（恢复到原来的地方）：一定能恢复，删除上面一级、删除它自己都一样
+        let top = deepest.split('/').next().unwrap().to_string();
+        let rid = s.delete_project("w", &top).unwrap();
+        let r = s.restore(&[rid]);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert!(s.read_todo("w", &ext, "a").is_ok());
+        let rid = s.delete_project("w", &ext).unwrap();
+        assert!(s.restore(&[rid]).errors.is_empty());
+        assert!(s.read_todo("w", &ext, "a").is_ok());
+
+        // 不让路径变长的改名一定能改：上面一级改成一样长、改短
+        let same = s.rename_project("w", &top, &"乙".repeat(top.chars().count())).unwrap();
+        let short = s.rename_project("w", &same, "短").unwrap();
+        // 变长了、里面的路径超过 227：不改（改回原来那么长也一样，它原来就超了）
+        assert!(s.rename_project("w", &short, &same).unwrap_err().contains("路径太长"));
+        // 变长了一点、还在 227 以内：可以
+        let short = s.rename_project("w", &short, "短短").unwrap();
+        let ext = ext.replacen(&top, &short, 1);
+        assert!(s.read_todo("w", &ext, "a").is_ok());
+        // 移到路径更短的地方、再移回来（还在 227 以内）都可以
+        let moved = s.move_project("w", &ext, "w", None).unwrap();
+        assert!(s.read_todo("w", &moved, "a").is_ok());
+        let back = s.move_project("w", &moved, "w", Some(ext.rsplit_once('/').unwrap().0)).unwrap();
+        assert_eq!(back, ext);
+    }
+
+    #[test]
+    fn path_length_counts_utf16_like_windows() {
+        // 一个汉字一个字符，表情符号（不在 BMP 里）两个
+        assert_eq!(path_len(Path::new("a汉😀")), 4);
+        let (_tmp, s) = store("long-emoji");
+        s.create_workspace("w").unwrap();
+        // 下面还能建 10 个字符的子项目：10 个字母、5 个表情可以，6 个表情（按字数只有 6 个）不行
+        let parent = fill(&s, "w", '甲', 10);
+        assert!(s.create_sub_project("w", &parent, &"a".repeat(11)).is_err());
+        assert!(s.create_sub_project("w", &parent, &"😀".repeat(6)).unwrap_err().contains("路径太长"));
+        assert!(s.create_sub_project("w", &parent, &"😀".repeat(5)).is_ok());
+        assert!(s.create_sub_project("w", &parent, &"a".repeat(10)).is_ok());
     }
 
     #[test]
@@ -2279,9 +2662,12 @@ mod tests {
         assert_eq!(s.move_project("甲", "需求", "乙", None).unwrap(), "需求");
         assert!(project_names(&s, "乙").contains(&"需求/后端".to_string()));
 
-        // 不行的：有子项目的放进别的项目、放进子项目、放进自己、已经在那里、重名
-        assert!(s.move_project("乙", "需求", "乙", Some("重名")).is_err());
-        assert!(s.move_project("甲", "日常", "乙", Some("需求/后端")).is_err());
+        // 有子项目的项目放进别的项目、项目放进子项目里也行
+        assert_eq!(s.move_project("乙", "需求", "乙", Some("重名")).unwrap(), "重名/需求");
+        assert_eq!(s.move_project("甲", "日常", "乙", Some("重名/需求/后端")).unwrap(), "重名/需求/后端/日常");
+        assert_eq!(s.move_project("乙", "重名/需求/后端/日常", "甲", None).unwrap(), "日常");
+
+        // 不行的：放进自己、已经在那里、重名
         assert!(s.move_project("甲", "日常", "甲", Some("日常")).is_err());
         assert!(s.move_project("乙", "重名/前端", "乙", Some("重名")).is_err());
         assert!(s.move_project("甲", "日常", "甲", None).is_err());
@@ -2296,7 +2682,10 @@ mod tests {
         let t = s.quick_capture("收件箱", " 灵感 / 产品 ", "想法\n细节").unwrap();
         assert_eq!(t.title, "想法");
         assert!(s.read_todo("收件箱", "灵感/产品", &t.id).is_ok());
-        assert!(s.quick_capture("收件箱", "a/b/c", "x").is_err());
+        // 好几级的也行，不在时逐级建
+        let t = s.quick_capture("收件箱", "a/b/c", "x").unwrap();
+        assert!(s.read_todo("收件箱", "a/b/c", &t.id).is_ok());
+        assert!(s.quick_capture("收件箱", "a//c", "x").is_err());
     }
 
     #[test]

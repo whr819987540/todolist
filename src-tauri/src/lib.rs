@@ -93,7 +93,7 @@ async fn load_workspace(store: State<'_, Store>, workspace: String) -> Cmd<Works
 
 // ----- 项目 -----
 
-/// 新建项目，parent 不为空时在这个顶层项目里新建子项目；返回新项目的路径（子项目是「父项目/子项目」）
+/// 新建项目，parent 不为空时在这个项目（可以是子项目）里新建子项目；返回新项目的路径（子项目是「父项目/子项目」）
 #[tauri::command]
 async fn create_project(
     store: State<'_, Store>,
@@ -130,7 +130,7 @@ async fn delete_project(store: State<'_, Store>, workspace: String, name: String
     store.delete_project(&workspace, &name)
 }
 
-/// 项目（或子项目）移到工作区 target_workspace 的顶层，或放进它的项目 target_parent 里成为子项目；返回移过去后的路径
+/// 项目（或子项目）移到工作区 target_workspace 的顶层，或放进那里的项目 target_parent（可以是子项目）里成为子项目；返回移过去后的路径
 #[tauri::command]
 async fn move_project(
     store: State<'_, Store>,
@@ -148,7 +148,7 @@ async fn move_project(
     Ok(moved)
 }
 
-/// 项目 from 改名、移动成 to 之后，路径 project 变成什么：就是它或它的子项目时跟着改，不相干时返回 None
+/// 项目 from 改名、移动成 to 之后，路径 project 变成什么：就是它或它的各级子项目时跟着改，不相干时返回 None
 fn reparent(project: &str, from: &str, to: &str) -> Option<String> {
     if project == from {
         return Some(to.to_string());
@@ -1190,6 +1190,8 @@ mod tests {
         assert_eq!(reparent("需求", "需求", "开发").as_deref(), Some("开发"));
         assert_eq!(reparent("需求/前端", "需求", "开发").as_deref(), Some("开发/前端"));
         assert_eq!(reparent("需求/前端", "需求/前端", "前端").as_deref(), Some("前端"));
+        assert_eq!(reparent("需求/前端/组件/按钮", "需求/前端", "开发/界面").as_deref(), Some("开发/界面/组件/按钮"));
+        assert_eq!(reparent("需求/前端二/组件", "需求/前端", "x"), None);
         assert_eq!(reparent("需求二", "需求", "开发"), None);
         assert_eq!(reparent("日常", "需求", "开发"), None);
     }

@@ -256,7 +256,7 @@ impl Settings {
         self.editor_custom_color =
             parse_color(&self.editor_custom_color).unwrap_or_else(|| DEFAULT_CUSTOM_COLOR.into());
         let t = &self.quick_capture_target;
-        // 项目可以是子项目（「父项目/子项目」）
+        // 项目可以是子项目（「父项目/子项目」，可以有好几级）
         self.quick_capture_target = match (normalize_name(&t.workspace, "工作区"), normalize_project_path(&t.project)) {
             (Ok(workspace), Ok(project)) => QuickTarget { workspace, project },
             _ => QuickTarget::default(),
@@ -397,19 +397,23 @@ mod tests {
         assert_eq!(s.quick_capture_target, QuickTarget { workspace: "工作".into(), project: "灵感".into() });
         assert_eq!(s.quick_capture_shortcut, None);
 
-        // 可以存到子项目里
+        // 可以存到子项目里，好几级的也行
         let mut next = store.get();
         next.quick_capture_target = QuickTarget { workspace: "工作".into(), project: "需求 / 前端 ".into() };
         store.save(next).unwrap();
         let s = SettingsStore::load(&tmp.0).get();
         assert_eq!(s.quick_capture_target, QuickTarget { workspace: "工作".into(), project: "需求/前端".into() });
+        let mut next = store.get();
+        next.quick_capture_target = QuickTarget { workspace: "工作".into(), project: "需求/前端/组件".into() };
+        store.save(next).unwrap();
+        assert_eq!(SettingsStore::load(&tmp.0).get().quick_capture_target.project, "需求/前端/组件");
 
         // 手改坏的、名字不合法的用默认的，别的设置照常读出来
         for bad in [
             r#""收件箱""#,
             r#"{"workspace":"a/b","project":"x"}"#,
             r#"{"workspace":"w"}"#,
-            r#"{"workspace":"w","project":"a/b/c"}"#,
+            r#"{"workspace":"w","project":"a/../c"}"#,
             r#"{"workspace":"w","project":"a//b"}"#,
         ] {
             let json = format!(r#"{{"toggleShortcut":"Ctrl+Alt+Y","quickCaptureTarget":{bad}}}"#);
