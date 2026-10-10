@@ -138,6 +138,9 @@ export default async function (t) {
   const home = await m.ev(`return [...document.querySelectorAll(".search-results .list-row")].map((r) => ({
     text: r.querySelector(".list-title-text")?.textContent, hit: [...r.querySelectorAll(".tag-chip.hit")].map((x) => x.textContent).join() }))`);
   check("首页搜索 #标签名 也只按标签找，结果里显示标签", home.length === 1 && home[0].text === "A" && home[0].hit === "等回复", home);
+  // 清空首页搜索：#标签名 时工作区名不算命中，首页不列工作区的卡片，m.enter 找不到「工作」
+  await m.press("Escape");
+  await m.ev(`return !!(await waitFor(() => [...document.querySelectorAll(".ws-card")].length))`);
 
   // 批量添加 / 移除
   await m.enter("工作");
