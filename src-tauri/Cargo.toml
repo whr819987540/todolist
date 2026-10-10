@@ -51,6 +51,9 @@ windows-sys = { version = "0.61", features = [
 ] }
 # 读 Windows 的代理设置（见 webdav.rs proxy）
 windows-registry = "0.6"
+# 导出 PDF：用 WebView2 的 PrintToPdf（lib.rs print_pdf），版本和 Tauri（wry）用的一致
+webview2-com = "0.38"
+windows-core = "0.61"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
