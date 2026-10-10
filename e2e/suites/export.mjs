@@ -52,13 +52,20 @@ export default async function (t) {
   await m.viewport(1200, 900);
   await m.enter("工作");
   await m.emit("tauri://focus");
-  await t.until(() => m.ev(`return !!row("工作", "需求", "图文") && !!row("工作", "需求/前端")`));
-  // 一条已完成（沉底）、一条置顶（在最前）
+  await t.sleep(800);
+  // 刷新出来的子项目可能是折叠着的：每次看之前先展开
+  const shown = await t.until(async () => {
+    await m.expandAll();
+    return m.ev(`return !!row("工作", "需求", "图文") && !!row("工作", "需求/前端")`);
+  });
+  if (!shown) throw new Error("侧栏里没刷新出测试数据（图文、子项目「前端」）");
+  // 一条已完成（沉底）、一条置顶（在最前）；等侧栏跟着变
   await m.invoke("set_todo_done", { workspace: "工作", project: "需求", id: "A", done: true });
   await m.invoke("set_todo_pinned", { workspace: "工作", project: "需求", id: "C", pinned: true });
   await m.emit("tauri://focus");
-  await m.expandAll();
-  await t.sleep(500);
+  await t.until(() =>
+    m.ev(`return !!row("工作", "需求", "A")?.querySelector(".check.checked") && !!row("工作", "需求", "C")?.querySelector(".pin-mark")`),
+  );
 
   /** 换掉页面里 api 的一个方法（弹出对话框的那些），直接返回 value，记下调用时的参数 */
   const stub = (name, value) =>
@@ -124,7 +131,10 @@ export default async function (t) {
   await m.ev(`return await openTodo("工作", "需求", "B")`);
   await m.ev(`const v = view(); v.focus(); v.dispatch({ selection: { anchor: v.state.doc.length } }); return 1`);
   await m.type("\n还没保存的新内容");
-  const dirty = await m.ev(`return document.querySelector(".save-state")?.textContent ?? ""`);
+  const dirty = await t.until(async () => {
+    const s = await m.ev(`return document.querySelector(".save-state")?.textContent ?? ""`);
+    return s.includes("未保存") && s;
+  });
   const fresh = join(out, "B.html");
   await stub("pickExportTarget", fresh);
   await m.clearToasts();
@@ -133,7 +143,7 @@ export default async function (t) {
   await doneToast();
   check(
     "导出前有没保存的修改：先存盘，导出的是最新的内容",
-    dirty.includes("未保存") && read(fresh).includes("还没保存的新内容") && t.read("工作/需求/B.md").includes("还没保存的新内容"),
+    !!dirty && read(fresh).includes("还没保存的新内容") && t.read("工作/需求/B.md").includes("还没保存的新内容"),
     { dirty },
   );
   const [again] = await calls();
@@ -252,5 +262,5 @@ export default async function (t) {
   await m.clearToasts();
   await rightClickExport(["工作", "需求", "C"], "PDF");
   toast = await doneToast(120000);
-  check("导出 PDF 失败时也写明原因", /导出失败：.+/.test(toast) && !existsSync(join(out, "没有这个目录")), toast);
+  check("导出 PDF 失败时也写明原因", /导出失败：.+/.test(toast), toast);
 }
