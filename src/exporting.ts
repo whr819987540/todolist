@@ -53,3 +53,7 @@ export function rememberExportDir(path: string) {
 
 /** 导出成功的提示 */
 export const exportedText = (r: Exported) => `已导出 ${r.count} 条待办到 ${r.path}`;
+
+/** 导出 PDF 退回了系统的打印对话框时的提示：为什么，以及在对话框里怎么存成 PDF */
+export const printDialogText = (reason: string) =>
+  `没能直接存成 PDF（${reason}），已打开打印对话框：在「打印机」里选「另存为 PDF」或「Microsoft Print to PDF」存成 PDF，存好后关掉那个窗口`;

@@ -334,4 +334,9 @@ export interface Exported {
   path: string;
   /** 导出了几条待办 */
   count: number;
+  /**
+   * 导出 PDF 时 WebView2 没能直接存成 PDF、退回了系统的打印对话框时是没做成的原因（path 处没有文件，用户在打印对话框里
+   * 自己存）；别的时候是 null
+   */
+  printDialog: string | null;
 }

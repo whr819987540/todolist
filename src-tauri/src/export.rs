@@ -104,6 +104,9 @@ pub struct Exported {
     pub path: String,
     /// 导出了几条待办
     pub count: usize,
+    /// 导出 PDF 时 WebView2 没能直接存成 PDF、退回了系统的打印对话框时是没做成的原因（path 处没有文件，
+    /// 用户在打印对话框里自己存）；别的时候是 null
+    pub print_dialog: Option<String>,
 }
 
 /// 要导出的一条待办
@@ -291,6 +294,21 @@ pub fn with_extension(path: &Path, format: Format) -> PathBuf {
     s.push(".");
     s.push(format.ext());
     PathBuf::from(s)
+}
+
+/// 导出 PDF 之前先看能不能写到 path：文件夹不在了、文件被别的程序占用时返回原因（这时不退回打印对话框，
+/// 换个地方就行）。已有的文件不动，为了试而新建的空文件随即删掉
+pub fn check_writable(path: &Path) -> Result<()> {
+    let existed = path.exists();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(|e| format!("无法保存到 {}：{e}", path.display()))?;
+    if !existed {
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1360,6 +1378,24 @@ mod tests {
         assert_eq!(with_extension(Path::new("C:/导出/周报.v2"), Format::Html), PathBuf::from("C:/导出/周报.v2.html"));
         assert_eq!(with_extension(Path::new("C:/导出/周报"), Format::Pdf), PathBuf::from("C:/导出/周报.pdf"));
         assert_eq!(with_extension(Path::new("C:/导出/周报.html"), Format::Pdf), PathBuf::from("C:/导出/周报.html.pdf"));
+    }
+
+    #[test]
+    fn writable_check_leaves_nothing_behind() {
+        let tmp = TempDir::new("writable");
+        // 能写：试的时候建的空文件删掉，已有的文件内容不动
+        let new = tmp.0.join("新的.pdf");
+        assert!(check_writable(&new).is_ok());
+        assert!(!new.exists());
+        let old = tmp.0.join("已有.pdf");
+        fs::write(&old, "%PDF-旧的").unwrap();
+        assert!(check_writable(&old).is_ok());
+        assert_eq!(fs::read_to_string(&old).unwrap(), "%PDF-旧的");
+        // 文件夹不在了、是个文件夹：写明原因
+        let gone = tmp.0.join("没有这个目录").join("x.pdf");
+        assert!(check_writable(&gone).is_err_and(|e| e.contains("无法保存到") && e.contains("x.pdf")));
+        assert!(!tmp.0.join("没有这个目录").exists());
+        assert!(check_writable(&tmp.0).is_err());
     }
 
     #[test]

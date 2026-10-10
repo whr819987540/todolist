@@ -2,7 +2,7 @@
 // 导出的 HTML 里有标题、状态、所在的位置、渲染后的表格和任务框、嵌进去的相对路径图片、找不到的图片的占位，正文里的 script 去掉了；
 // 导出前有没保存的修改时先存盘、导出的是最新的；项目连同子项目：确认框里的数目、目录和各节都在、顺序同侧栏（父项目自己的在前，
 // 子项目一章在后）、不含已完成的；工作区按项目分章；上次导出到的目录记住；PDF 的文件头、页数（每条待办从新的一页开始）、图片，
-// 打印用的窗口和临时文件用完就没了；取消、失败时的提示
+// 打印用的窗口和临时文件用完就没了；取消、失败时的提示（导出 PDF 时选的文件被占用着：不打印、原来的文件不动）
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,7 +86,11 @@ export default async function (t) {
     await t.sleep(300);
     await pickExport(format);
   };
-  const doneToast = (ms = 30000) => t.until(async () => /已导出|导出失败/.test(await m.toast()) && (await m.toast()), ms);
+  /** 等导出完的提示（成功、失败、退回了打印对话框），返回提示的文字；等不到时是那时的提示（检查不通过，不中断） */
+  const doneToast = async (ms = 30000) => {
+    await t.until(async () => /已导出|导出失败|没能直接存成/.test(await m.toast()), ms);
+    return m.toast();
+  };
   /** 导出项目、工作区时的确认框：返回里面的文字；uncheck 时取消「包含已完成的待办」；点「导出…」 */
   const confirmExport = async ({ uncheck = false } = {}) => {
     const text = await m.ev(`const c = await waitFor(() => document.querySelector(".export-options")); return c?.textContent ?? ""`);
@@ -262,5 +266,18 @@ export default async function (t) {
   await m.clearToasts();
   await rightClickExport(["工作", "需求", "C"], "PDF");
   toast = await doneToast(120000);
-  check("导出 PDF 失败时也写明原因", /导出失败：.+/.test(toast), toast);
+  check("导出 PDF 时文件夹不在了：不打印，写明原因", /导出失败：无法保存到/.test(toast), toast);
+  // 选的同名文件正被别的程序占用：不打印、不退回打印对话框，写明原因，原来的文件不动
+  const before = pdfOf(onePdf);
+  const lock = await t.win.lockFile(onePdf, 8);
+  await stub("pickExportTarget", onePdf);
+  await m.clearToasts();
+  await rightClickExport(["工作", "需求", "C"], "PDF");
+  toast = await doneToast();
+  await lock.released;
+  check(
+    "导出 PDF 时同名文件被别的程序占用：写明原因，原来的文件不动，没有打印用的窗口留下",
+    /导出失败：无法保存到/.test(toast) && before.length > 0 && pdfOf(onePdf).equals(before) && (await leftovers()) === 0,
+    toast,
+  );
 }
