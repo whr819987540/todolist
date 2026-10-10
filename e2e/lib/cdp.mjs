@@ -22,6 +22,8 @@ const KEYS = {
   ArrowDown: ["ArrowDown", 40, "ArrowDown"],
   ArrowLeft: ["ArrowLeft", 37, "ArrowLeft"],
   ArrowRight: ["ArrowRight", 39, "ArrowRight"],
+  Home: ["Home", 36, "Home"],
+  End: ["End", 35, "End"],
   F3: ["F3", 114, "F3"],
   F5: ["F5", 116, "F5"],
 };
