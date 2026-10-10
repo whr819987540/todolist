@@ -28,6 +28,7 @@ import {
   type ListOptions,
   listOptionsKey,
   moveTodoTab,
+  moveTodoTabToGroup,
   pinTodoTabs,
   pruneTodoTabs,
   readEditorGroups,
@@ -37,6 +38,7 @@ import {
   setEditorSplitRatio,
   showTodoTab,
   splitEditor,
+  writeGroupEditPosition,
   stateGeneration,
   subscribeEditorGroups,
   writeJson,
@@ -51,6 +53,7 @@ import { useNameDialog } from "./NameDialog";
 import { ProjectOverview, WorkspaceOverview } from "./Overview";
 import Sidebar, { type SidebarHandle } from "./Sidebar";
 import { parseSelKey, type Selection, selKey, WS_KEY } from "./sidebar/tree";
+import { dropsOnGroup, useTabDrag } from "./tabDrag";
 import TodoEditor, { type EditorHandle } from "./TodoEditor";
 import { batchMenu, moveTargets, todoMenu } from "./menus";
 import { sortNames, useWorkspaceActions } from "./workspaceActions";
@@ -231,6 +234,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const editorRefB = useRef<EditorHandle | null>(null);
   const editorRefOf = useCallback((id: string) => (id === "b" ? editorRefB : editorRefA), []);
   const groupsRef = useRef<HTMLDivElement>(null);
+  // 拖动中的标签（拖到另一边的编辑区上时那一边画出框）
+  const tabDrag = useTabDrag();
   const searchRef = useRef<InputRef>(null);
   const sidebarRef = useRef<SidebarHandle | null>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -612,7 +617,26 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     setSel(s);
   };
 
-  // 有焦点的一组消失了（它的标签都删了、在外部被删了）：显示留下的一组正显示着的。
+  /**
+   * 把第 from 组的标签拖到第 to 组（右键「移到另一边」同样，见 tabs.ts 的 moveTabToGroup）：拖过去的显示出来、焦点到那一组，
+   * 光标、滚动接着原来那一边的
+   */
+  const moveTabTo = (from: number, moving: TodoRef, to: number, target: TodoRef | null, place: "before" | "after") => {
+    const src = editorGroups.groups[from];
+    const dst = editorGroups.groups[to];
+    if (!src || !dst) return;
+    const showing = from === group ? activeTodo : otherTodos[from];
+    const pos = showing && sameTodo(showing, moving) ? editorRefOf(src.id).current?.position() : null;
+    if (pos) writeGroupEditPosition(dst.id, moving.workspace, moving.project, moving.todoId, pos);
+    moveTodoTabToGroup(from, moving, to, target, place);
+    const s: Selection = { workspace: moving.workspace, project: moving.project, todoId: moving.todoId };
+    reveal(s.workspace, s.project);
+    setFocusTitleId(null);
+    setFocusBodyKey(selKey(s));
+    setSel(s);
+  };
+
+  // 有焦点的一组消失了（它的标签都删了、在外部被删了、拖到了另一组）：显示留下的一组正显示着的。
   // 刻意放在 effect 里：组是在 workspaceState 里跟着改名、删除变的，各处都可能让它消失
   const lastFocused = useRef(focusedId);
   useEffect(() => {
@@ -1057,12 +1081,13 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
                   />
                 )}
                 <section
-                  className={`editor-group${focused ? " focused" : ""}`}
+                  className={`editor-group${focused ? " focused" : ""}${dropsOnGroup(tabDrag, i) ? " drop-target" : ""}`}
                   data-group={i}
                   style={splitShown ? { flexGrow: n === 0 ? editorGroups.ratio : 1 - editorGroups.ratio } : undefined}
                 >
                   {tabs.length > 0 && (
                     <EditorTabs
+                      group={i}
                       tabs={tabs}
                       active={focused ? activeTodo : other}
                       activeDirty={!!dirtyOf[g.id]}
@@ -1074,6 +1099,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
                       onClose={(closing) => closeTabs(closing, i)}
                       onKeep={(t) => keepTodoTab(t, i)}
                       onMove={(moving, target, place) => moveTodoTab(i, moving, target, place)}
+                      onMoveToGroup={(moving, to, target, place) => moveTabTo(i, moving, to, target, place)}
                     />
                   )}
                   {focused ? main : other && editorFor(i, other.workspace, other.project, other.todo)}

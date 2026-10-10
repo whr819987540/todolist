@@ -1189,12 +1189,28 @@ body.drag-moving .tree-row:hover .row-count {
 }
 /* 每一边（不分屏时就是整个右侧）：上面一排标签，下面是编辑器或概览；按这一边的宽度决定显示多少（见下面的 @container） */
 .editor-group {
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   container: editor-group / inline-size;
+}
+/* 把标签拖到另一边的编辑区上：那一边画出框，放下就移过去（放在最后） */
+.editor-group.drop-target::after {
+  content: "移到这一边";
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--c-primary);
+  background: color-mix(in srgb, var(--c-primary) 8%, transparent);
+  color: var(--c-primary);
+  font-size: 16px;
+  pointer-events: none;
 }
 /* 两边中间的分隔条：拖动调整比例，双击恢复一半一半 */
 .group-resizer {

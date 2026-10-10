@@ -62,6 +62,8 @@ export interface EditorHandle {
   focusBody(): void;
   /** 立即量出、记下现在的编辑位置（平时光标、滚动停下片刻才记）：分屏时新的一边从这里开始 */
   savePosition(): void;
+  /** 现在的编辑位置（正文还没加载出来时为 null）：把标签拖到另一边时，那一边从这里开始 */
+  position(): EditPosition | null;
   /** 显示的是哪条待办 */
   readonly todo: TodoRef;
 }
@@ -262,6 +264,7 @@ export default function TodoEditor(props: Props) {
         }
         savePosition();
       },
+      position: () => mdRef.current?.position() ?? null,
       todo: { workspace, project, todoId: id },
     };
     handleRef.current = handle;

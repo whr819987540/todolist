@@ -4,15 +4,17 @@ import {
   CloseOutlined,
   MergeCellsOutlined,
   PushpinFilled,
+  SwapOutlined,
 } from "@ant-design/icons";
 import { Dropdown, type MenuProps } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { shortcutLabel } from "../shortcuts";
 import { type OpenTodo, sameTodo, type SplitDirection, type TodoRef } from "../tabs";
 import type { TodoSummary } from "../types";
 import { projectLabel } from "../projects";
 import { displayTitle } from "../utils";
 import { swallowClick } from "./DragMove";
+import { setTabDrag, type TabDrag, useTabDrag } from "./tabDrag";
 import { selKey } from "./sidebar/tree";
 
 /** 显示出来的一个标签：打开着的待办连同它现在的标题等 */
@@ -21,6 +23,8 @@ export interface ShownTab extends OpenTodo {
 }
 
 interface Props {
+  /** 这一排标签是第几组（分屏时的哪一边）的 */
+  group: number;
   /** 侧栏里显示着的工作区的标签，按顺序 */
   tabs: readonly ShownTab[];
   /** 这一组正显示着的待办；显示概览等时是 null */
@@ -41,14 +45,14 @@ interface Props {
   onKeep: (t: ShownTab) => void;
   /** 拖动标签：moving 挪到 target 的前面 / 后面 */
   onMove: (moving: TodoRef, target: TodoRef, place: "before" | "after") => void;
+  /** 把标签拖到（右键「移到另一边」）第 to 组：放在 target 的前面 / 后面，target 为 null 时放在最后 */
+  onMoveToGroup: (moving: TodoRef, to: number, target: TodoRef | null, place: "before" | "after") => void;
 }
 
-/** 拖动中：正在拖的标签（selKey），放在哪个标签的前面 / 后面；放回原处时 target 是 null */
-interface TabDrag {
-  key: string;
-  target: string | null;
-  place: "before" | "after";
-}
+const refOfKey = (key: string): TodoRef => {
+  const [workspace, project, todoId] = JSON.parse(key) as string[];
+  return { workspace, project, todoId };
+};
 
 const DIRTY_HINT = "有没保存的修改，关掉、切走时会先保存";
 const PREVIEW_HINT = "预览：打开别的待办时会被替换；修改内容或双击后一直保留";
@@ -61,16 +65,17 @@ const SCROLL_STEP = 8;
 
 /**
  * 右侧编辑区上方的标签（分屏时每一边一排）：每个是一条打开着的待办，点击切过去（光标、滚动回到上次的地方），× / 鼠标中键 /
- * Ctrl+W 关掉，右键关掉其他的、右侧的、全部，按住拖动调整顺序。预览标签的标题是斜体。最右边是分屏的菜单
+ * Ctrl+W 关掉，右键关掉其他的、右侧的、全部，按住拖动调整顺序（分屏时可以拖到另一边）。预览标签的标题是斜体。
+ * 最右边是分屏的菜单
  */
 export default function EditorTabs(props: Props) {
-  const { tabs, active, activeDirty, dim, split, splitKeys, onSplit, onActivate, onClose, onKeep, onMove } = props;
+  const { group, tabs, active, activeDirty, dim, split, splitKeys, onSplit, onActivate, onClose, onKeep } = props;
   const barRef = useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = useState<TabDrag | null>(null);
+  const drag = useTabDrag();
   const stopDrag = useRef<(() => void) | null>(null);
-  const latest = useRef({ tabs, onMove });
+  const latest = useRef(props);
   useEffect(() => {
-    latest.current = { tabs, onMove };
+    latest.current = props;
   });
   // 拖动中离开了工作区视图（返回首页等）：结束拖动
   useEffect(() => () => stopDrag.current?.(), []);
@@ -81,41 +86,56 @@ export default function EditorTabs(props: Props) {
     barRef.current?.querySelector(".editor-tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [activeKey, tabs.length]);
 
-  /** 在标签上按下左键：移动几个像素后开始拖，没怎么动就还是单击 */
+  /**
+   * 在标签上按下左键：移动几个像素后开始拖，没怎么动就还是单击。拖到这一排里的另一个标签上调整顺序；分屏时拖到另一边的
+   * 标签栏上放进那一边的这个位置，拖到另一边的编辑区上放在那一边的最后
+   */
   const startDrag = (e: React.MouseEvent, t: ShownTab) => {
     if (e.button !== 0 || stopDrag.current || (e.target as Element).closest(".editor-tab-close")) return;
     const key = selKey(t);
     const x0 = e.clientX;
     const y0 = e.clientY;
     let x = x0;
+    let y = y0;
     let dragging = false;
     let current: TabDrag | null = null;
     let frame = 0;
+    /** 指针下面的那一排标签（自动滚动它） */
+    let barUnder: HTMLElement | null = null;
 
-    // 指针在哪个标签的左半边就放在它前面，过了最后一个标签的中线放在最后
+    // 指针在哪个标签的左半边就放在它前面，过了最后一个标签的中线放在最后；在另一边的编辑区上放在那一边的最后
     const update = () => {
-      const els = [...(barRef.current?.querySelectorAll<HTMLElement>(".editor-tab") ?? [])];
-      let at = els.findIndex((el) => {
-        const r = el.getBoundingClientRect();
-        return x < r.left + r.width / 2;
-      });
-      let place: TabDrag["place"] = "before";
-      if (at < 0) {
-        at = els.length - 1;
-        place = "after";
+      const el = document.elementFromPoint(x, y);
+      const groupEl = el?.closest<HTMLElement>(".editor-group");
+      const bar = el?.closest<HTMLElement>(".editor-tabs") ?? null;
+      barUnder = bar;
+      const to = groupEl?.dataset.group === undefined ? group : Number(groupEl.dataset.group);
+      let target: string | null = null;
+      let place: TabDrag["place"] = to === group ? "before" : "after";
+      if (bar) {
+        const els = [...bar.querySelectorAll<HTMLElement>(".editor-tab")];
+        let at = els.findIndex((tab) => {
+          const r = tab.getBoundingClientRect();
+          return x < r.left + r.width / 2;
+        });
+        place = "before";
+        if (at < 0) {
+          at = els.length - 1;
+          place = "after";
+        }
+        const from = to === group ? els.findIndex((tab) => tab.dataset.tab === key) : -1;
+        const back = to === group && (at === from || (place === "before" ? at === from + 1 : at === from - 1));
+        target = back ? null : (els[at]?.dataset.tab ?? null);
       }
-      const from = els.findIndex((el) => el.dataset.tab === key);
-      const back = at === from || (place === "before" ? at === from + 1 : at === from - 1);
-      const target = back ? null : (els[at]?.dataset.tab ?? null);
-      if (current && current.target === target && current.place === place) return;
-      current = { key, target, place };
-      setDrag(current);
+      if (current && current.to === to && current.target === target && current.place === place) return;
+      current = { key, from: group, to, target, place };
+      setTabDrag(current);
     };
 
     // 指针靠近标签栏左右两头时自动滚动
     const autoScroll = () => {
       frame = requestAnimationFrame(autoScroll);
-      const bar = barRef.current;
+      const bar = barUnder;
       if (!bar) return;
       const r = bar.getBoundingClientRect();
       const dx = x < r.left + SCROLL_ZONE ? -SCROLL_STEP : x > r.right - SCROLL_ZONE ? SCROLL_STEP : 0;
@@ -127,6 +147,7 @@ export default function EditorTabs(props: Props) {
 
     const onMoveEv = (ev: MouseEvent) => {
       x = ev.clientX;
+      y = ev.clientY;
       // 在窗口外松开了鼠标
       if (!(ev.buttons & 1)) return stop();
       if (!dragging) {
@@ -143,12 +164,13 @@ export default function EditorTabs(props: Props) {
       const drop = current;
       const dragged = dragging;
       stop();
-      if (!dragged) return;
+      if (!dragged || !drop) return;
       swallowClick();
-      const { tabs, onMove } = latest.current;
+      const { tabs, onMove, onMoveToGroup } = latest.current;
       const moving = tabs.find((x) => selKey(x) === key);
-      const target = drop?.target && tabs.find((x) => selKey(x) === drop.target);
-      if (moving && target) onMove(moving, target, drop.place);
+      if (!moving) return;
+      if (drop.to !== group) onMoveToGroup(moving, drop.to, drop.target ? refOfKey(drop.target) : null, drop.place);
+      else if (drop.target) onMove(moving, refOfKey(drop.target), drop.place);
     };
 
     // Esc 取消拖动
@@ -169,7 +191,7 @@ export default function EditorTabs(props: Props) {
       cancelAnimationFrame(frame);
       document.body.classList.remove("drag-moving");
       stopDrag.current = null;
-      setDrag(null);
+      setTabDrag(null);
     };
 
     stopDrag.current = stop;
@@ -187,10 +209,10 @@ export default function EditorTabs(props: Props) {
       { key: "right", label: "关闭右侧标签", disabled: i === tabs.length - 1 },
       { key: "all", label: "关闭全部标签" },
       ...(t.preview ? [{ type: "divider" as const }, { key: "keep", label: "保持打开" }] : []),
+      { type: "divider" as const },
       ...(split
-        ? []
+        ? [{ key: "move", label: "移到另一边", icon: <SwapOutlined /> }]
         : [
-            { type: "divider" as const },
             { key: "split-row", label: "在右边分屏打开", icon: <BorderVerticleOutlined /> },
             { key: "split-column", label: "在下面分屏打开", icon: <BorderHorizontalOutlined /> },
           ]),
@@ -204,6 +226,7 @@ export default function EditorTabs(props: Props) {
       else if (key === "all") onClose(tabs);
       else if (key === "keep") onKeep(t);
       else if (key === "split-row" || key === "split-column") onSplit(key === "split-row" ? "row" : "column", t);
+      else if (key === "move") props.onMoveToGroup(t, 1 - group, null, "after");
     },
   });
 
@@ -245,8 +268,8 @@ export default function EditorTabs(props: Props) {
             t.preview && "preview",
             t.todo.done && "done",
             dirty && "dirty",
-            drag?.key === key && "drag-source",
-            drag?.target === key && `drop-${drag.place}`,
+            drag?.from === group && drag.key === key && "drag-source",
+            drag?.to === group && drag.target === key && `drop-${drag.place}`,
           ];
           return (
             <Dropdown key={key} menu={menu(t, i)} trigger={["contextMenu"]}>
