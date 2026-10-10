@@ -268,7 +268,7 @@ export const api = {
   pickBackupDir: () => invoke<string | null>("pick_backup_dir"),
   openBackupDir: () => invoke<void>("open_backup_dir"),
 
-  // 导出成 HTML
+  // 导出成 HTML / PDF
 
   /**
    * 弹出「另存为」对话框选导出到哪里，返回路径；取消时返回 null。默认文件名是待办（todo）的标题、项目名或工作区名；
@@ -276,7 +276,7 @@ export const api = {
    */
   pickExportTarget: (format: ExportFormat, workspace: string, project: string | null, todo: string | null, dir: string | null) =>
     invoke<string | null>("pick_export_target", { format, workspace, project, todo, dir }),
-  /** 按排好的顺序导出（后台做，数据多时要几秒） */
+  /** 按排好的顺序导出（后台做，数据多时、导出 PDF 时要几秒） */
   exportTodos: (request: ExportRequest) => invoke<Exported>("export_todos", { request }),
   /** 用默认程序打开导出的文件（只认这次运行期间导出过的） */
   openExported: (path: string) => invoke<void>("open_exported", { path }),

@@ -1,4 +1,5 @@
-//! 把待办导出成 HTML：一个文件，本地图片嵌在里面，拿到别的电脑上也能看。
+//! 把待办导出成 HTML：一个文件，本地图片嵌在里面，拿到别的电脑上也能看。导出 PDF 时 lib.rs 用 WebView2
+//! 把同样的 HTML 打印出来（print_pdf）。
 //!
 //! - 导出哪些待办、什么顺序由前端给（侧栏的 sortTodos 排好的），这里按给的顺序重新读出来，不再排一遍，
 //!   免得两边的排序规则不一致；读的是磁盘上的（前端先存了盘）
@@ -43,12 +44,14 @@ const ALERT_CLASSES: [&str; 5] = [
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Html,
+    Pdf,
 }
 
 impl Format {
     pub fn ext(self) -> &'static str {
         match self {
             Format::Html => "html",
+            Format::Pdf => "pdf",
         }
     }
 
@@ -56,6 +59,7 @@ impl Format {
     pub fn filter_name(self) -> &'static str {
         match self {
             Format::Html => "HTML 文件",
+            Format::Pdf => "PDF 文件",
         }
     }
 }
@@ -1335,6 +1339,7 @@ mod tests {
         assert_eq!(file_name("nul.备份", Format::Html), "nul_.备份.html");
         assert_eq!(file_name("COM1", Format::Html), "COM1_.html");
         assert_eq!(file_name("CONSOLE", Format::Html), "CONSOLE.html");
+        assert_eq!(file_name("周报 / 第 3 周", Format::Pdf), "周报 _ 第 3 周.pdf");
         let long = "长".repeat(100);
         assert_eq!(file_name(&long, Format::Html), format!("{}.html", "长".repeat(80)));
         // 截短后末尾的空格、点也去掉
@@ -1347,6 +1352,8 @@ mod tests {
         assert_eq!(with_extension(Path::new("C:/导出/周报"), Format::Html), PathBuf::from("C:/导出/周报.html"));
         assert_eq!(with_extension(Path::new("C:/导出/周报.HTML"), Format::Html), PathBuf::from("C:/导出/周报.HTML"));
         assert_eq!(with_extension(Path::new("C:/导出/周报.v2"), Format::Html), PathBuf::from("C:/导出/周报.v2.html"));
+        assert_eq!(with_extension(Path::new("C:/导出/周报"), Format::Pdf), PathBuf::from("C:/导出/周报.pdf"));
+        assert_eq!(with_extension(Path::new("C:/导出/周报.html"), Format::Pdf), PathBuf::from("C:/导出/周报.html.pdf"));
     }
 
     #[test]

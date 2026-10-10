@@ -301,8 +301,8 @@ export interface AutoBackupStatus {
   lastRun: AutoBackupRun | null;
 }
 
-/** 导出成什么 */
-export type ExportFormat = "html";
+/** 导出成什么：HTML（一个文件，图片嵌在里面）或 PDF（WebView2 把同样的 HTML 打印出来） */
+export type ExportFormat = "html" | "pdf";
 
 /** 导出的范围：一条待办、一个项目（连同子项目）、整个工作区 */
 export type ExportScope = "todo" | "project" | "workspace";

@@ -27,6 +27,7 @@ use store::{
 use tauri::ipc::{InvokeBody, Request};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::webview::PageLoadEvent;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
@@ -537,15 +538,19 @@ fn quick_window(app: &AppHandle) -> Option<WebviewWindow> {
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false);
-    // 和主窗口用同样的 WebView2 参数：同一个数据目录里参数不同的 WebView 建不起来
-    // （端到端测试版经 TAURI_CONFIG 给主窗口加了远程调试端口）
-    let main_args = app.config().app.windows.iter().find(|w| w.label == "main");
-    if let Some(args) = main_args.and_then(|w| w.additional_browser_args.as_deref()) {
-        builder = builder.additional_browser_args(args);
+    if let Some(args) = main_browser_args(app) {
+        builder = builder.additional_browser_args(&args);
     }
     let built = builder.build();
     // 两处同时在建（启动时预先建的和按了快捷键的）：后建的会因为 label 重复失败，用先建好的
     built.ok().or_else(|| app.get_webview_window(QUICK))
+}
+
+/// 主窗口的 WebView2 参数：别的窗口（快速记录小窗、打印 PDF 用的）要用一样的，同一个数据目录里参数不同的 WebView 建不起来
+/// （端到端测试版经 TAURI_CONFIG 给主窗口加了远程调试端口）
+fn main_browser_args(app: &AppHandle) -> Option<String> {
+    let main = app.config().app.windows.iter().find(|w| w.label == "main")?;
+    main.additional_browser_args.clone()
 }
 
 /// 放在鼠标所在的屏幕上，水平居中、偏上
@@ -1489,7 +1494,7 @@ fn auto_backup_once(app: &AppHandle) {
     let _ = app.emit_to("main", "auto-backup", ());
 }
 
-// ----- 导出成 HTML（export.rs） -----
+// ----- 导出成 HTML / PDF（export.rs） -----
 
 /// 这次运行期间导出过的文件：导出完的提示里「打开」「在文件夹中显示」只认这些
 #[derive(Default)]
@@ -1552,11 +1557,132 @@ async fn export_todos(app: AppHandle, request: export::Request) -> Cmd<export::E
         let doc = export::collect(&app.state::<Store>(), &request)?;
         let html = export::render(&doc, Local::now());
         let path = export::with_extension(Path::new(&request.path), request.format);
-        store::atomic_write(&path, html.as_bytes()).map_err(|e| format!("保存导出的文件失败：{e}"))?;
+        match request.format {
+            export::Format::Html => {
+                store::atomic_write(&path, html.as_bytes()).map_err(|e| format!("保存导出的文件失败：{e}"))?
+            }
+            export::Format::Pdf => print_pdf(app, &html, &path, &doc.title())?,
+        }
         app.state::<ExportedFiles>().add(path.clone());
         Ok(export::Exported { path: path.to_string_lossy().into_owned(), count: doc.count() })
     })
     .await
+}
+
+/// 打印 PDF 用的看不见的窗口的 label 前缀，后面是序号：上一个窗口关掉的消息还没处理完时，新的也建得起来。
+/// 记住窗口位置的插件不管这些窗口
+const PDF_WINDOW: &str = "export-pdf";
+static PDF_WINDOWS: AtomicU64 = AtomicU64::new(0);
+/// 同时只打印一份（打印时 WebView2 要占不少内存）
+static PDF_PRINTING: Mutex<()> = Mutex::new(());
+/// 等导出的内容加载完最多多久：网上的图片太慢、断网时不再等，照样打印，没加载出来的图片就没有
+const PDF_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
+/// 打印最多等多久
+const PDF_PRINT_TIMEOUT: Duration = Duration::from_secs(300);
+/// A4 纵向（英寸），页边距 15 毫米，页眉页脚印在页边距里
+const A4_INCHES: (f64, f64) = (210.0 / 25.4, 297.0 / 25.4);
+const PDF_MARGIN_INCHES: f64 = 15.0 / 25.4;
+
+/// 把导出的 HTML 打印成 PDF 存到 pdf：先写成临时文件，在看不见的窗口里加载，加载完用 WebView2 的 PrintToPdf 打印
+/// （A4 纵向、页边距 15 毫米、印出背景色，页眉是日期和标题，页脚是页码），做完关掉窗口、删掉临时文件。
+/// 要在后台线程里调用：WebView2 在主线程的事件处理里同步建窗口可能卡死（见 quick_window），这里还要等它加载、打印完
+fn print_pdf(app: &AppHandle, html: &str, pdf: &Path, title: &str) -> Cmd<()> {
+    let _one = PDF_PRINTING.lock().unwrap_or_else(|e| e.into_inner());
+    let n = PDF_WINDOWS.fetch_add(1, Ordering::Relaxed) + 1;
+    let tmp = std::env::temp_dir().join(format!("todolist-export-{}-{n}.html", std::process::id()));
+    std::fs::write(&tmp, html).map_err(|e| format!("写临时文件失败：{e}"))?;
+    let result = print_file(app, &format!("{PDF_WINDOW}-{n}"), &tmp, pdf, title);
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
+#[cfg(not(windows))]
+fn print_file(_app: &AppHandle, _label: &str, _html: &Path, _pdf: &Path, _title: &str) -> Cmd<()> {
+    Err("只能在 Windows 上导出 PDF".into())
+}
+
+#[cfg(windows)]
+fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str) -> Cmd<()> {
+    let url = tauri::Url::from_file_path(html).map_err(|_| format!("临时文件的路径不对：{}", html.display()))?;
+    let (loaded, wait_loaded) = mpsc::channel();
+    let loaded = Mutex::new(Some(loaded));
+    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
+        .title("导出 PDF")
+        .inner_size(800.0, 1000.0)
+        .visible(false)
+        .focused(false)
+        .skip_taskbar(true)
+        // 加载完了（连同图片，同 onload）才打印
+        .on_page_load(move |_, payload| {
+            if payload.event() == PageLoadEvent::Finished && payload.url().scheme() == "file" {
+                if let Some(tx) = loaded.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                    let _ = tx.send(());
+                }
+            }
+        });
+    if let Some(args) = main_browser_args(app) {
+        builder = builder.additional_browser_args(&args);
+    }
+    let window = builder.build().map_err(|e| format!("无法打开打印用的窗口：{e}"))?;
+    // 加载超时也照样打印：多半是网上的图片太慢
+    let _ = wait_loaded.recv_timeout(PDF_LOAD_TIMEOUT);
+    let (done, wait_done) = mpsc::channel();
+    let (target, title) = (pdf.to_path_buf(), title.to_string());
+    let started = window.with_webview(move |w| {
+        if let Err(e) = start_print(&w, &target, &title, done.clone()) {
+            let _ = done.send(Err(e));
+        }
+    });
+    let result = match started {
+        Ok(()) => wait_done.recv_timeout(PDF_PRINT_TIMEOUT).unwrap_or_else(|_| Err("打印成 PDF 超时".into())),
+        Err(e) => Err(format!("无法打印成 PDF：{e}")),
+    };
+    let _ = window.destroy();
+    result
+}
+
+/// 在主线程上（with_webview 里）开始打印，打完把结果发给 done
+#[cfg(windows)]
+fn start_print(webview: &tauri::webview::PlatformWebview, pdf: &Path, title: &str, done: mpsc::Sender<Cmd<()>>) -> Cmd<()> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2Environment6, ICoreWebView2_7, COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT,
+    };
+    use webview2_com::PrintToPdfCompletedHandler;
+    use windows_core::{Interface, HSTRING};
+    let too_old = |_| "系统的 WebView2 太旧，不能打印成 PDF，请更新 Microsoft Edge WebView2 Runtime".to_string();
+    // 都在主线程上调 WebView2 的 COM 接口，参数都是这里建好的
+    unsafe {
+        let core: ICoreWebView2_7 = webview.controller().CoreWebView2().map_err(print_error)?.cast().map_err(too_old)?;
+        let env: ICoreWebView2Environment6 = webview.environment().cast().map_err(too_old)?;
+        let settings = env.CreatePrintSettings().map_err(print_error)?;
+        settings.SetOrientation(COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT).map_err(print_error)?;
+        settings.SetPageWidth(A4_INCHES.0).map_err(print_error)?;
+        settings.SetPageHeight(A4_INCHES.1).map_err(print_error)?;
+        settings.SetMarginTop(PDF_MARGIN_INCHES).map_err(print_error)?;
+        settings.SetMarginBottom(PDF_MARGIN_INCHES).map_err(print_error)?;
+        settings.SetMarginLeft(PDF_MARGIN_INCHES).map_err(print_error)?;
+        settings.SetMarginRight(PDF_MARGIN_INCHES).map_err(print_error)?;
+        settings.SetShouldPrintBackgrounds(true).map_err(print_error)?;
+        // 页眉：日期和标题；页脚：页码（不印临时文件的地址）
+        settings.SetShouldPrintHeaderAndFooter(true).map_err(print_error)?;
+        settings.SetHeaderTitle(&HSTRING::from(title)).map_err(print_error)?;
+        settings.SetFooterUri(&HSTRING::new()).map_err(print_error)?;
+        let handler = PrintToPdfCompletedHandler::create(Box::new(move |result, ok| {
+            let _ = done.send(match result {
+                Err(e) => Err(print_error(e)),
+                Ok(()) if !ok => Err("WebView2 没能打印成 PDF，可能是目标位置不能写".into()),
+                Ok(()) => Ok(()),
+            });
+            Ok(())
+        }));
+        core.PrintToPdf(&HSTRING::from(pdf), &settings, &handler).map_err(print_error)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn print_error(e: windows_core::Error) -> String {
+    format!("打印成 PDF 失败：{}", e.message())
 }
 
 /// 用默认程序打开导出的文件（导出完的提示里的「打开」）
@@ -1584,8 +1710,9 @@ pub fn run() {
                 .with_state_flags(window_state_flags())
                 // 主窗口的大小、位置在 setup 里恢复：开机自启只在托盘里时不能恢复最大化（会把窗口显示出来）
                 .skip_initial_state("main")
-                // 快速记录小窗每次都放在鼠标所在的屏幕上，不记位置
+                // 快速记录小窗每次都放在鼠标所在的屏幕上，不记位置；打印 PDF 用的窗口用完就关
                 .with_denylist(&[QUICK])
+                .with_filter(|label| !label.starts_with(PDF_WINDOW))
                 .build(),
         )
         .plugin(

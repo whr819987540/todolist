@@ -6,6 +6,7 @@ import {
   DownloadOutlined,
   EditOutlined,
   ExportOutlined,
+  FilePdfOutlined,
   FlagOutlined,
   FolderAddOutlined,
   FolderOpenOutlined,
@@ -86,13 +87,16 @@ type ClickInfo = Parameters<Handler>[0];
 
 const EXPORT_PREFIX = "export:";
 
-/** 「导出」和它的子菜单：导出为 HTML */
+/** 「导出」和它的子菜单：导出为 HTML / PDF */
 function exportItem(): NonNullable<MenuProps["items"]>[number] {
   return {
     key: "export",
     icon: <DownloadOutlined />,
     label: "导出",
-    children: [{ key: `${EXPORT_PREFIX}html`, icon: <Html5Outlined />, label: "导出为 HTML" }],
+    children: [
+      { key: `${EXPORT_PREFIX}html`, icon: <Html5Outlined />, label: "导出为 HTML" },
+      { key: `${EXPORT_PREFIX}pdf`, icon: <FilePdfOutlined />, label: "导出为 PDF" },
+    ],
   };
 }
 

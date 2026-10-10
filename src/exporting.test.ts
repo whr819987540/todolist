@@ -80,6 +80,7 @@ describe("导出的文字", () => {
     expect(exportTitle("html", "工作", "需求")).toBe("导出项目「需求」为 HTML");
     expect(exportTitle("html", "工作", "需求/前端")).toBe("导出子项目「需求 / 前端」为 HTML");
     expect(exportTitle("html", "工作")).toBe("导出工作区「工作」为 HTML");
+    expect(exportTitle("pdf", "工作", "需求")).toBe("导出项目「需求」为 PDF");
   });
 
   it("导出完的提示写明完整路径和几条", () => {

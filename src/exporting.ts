@@ -1,4 +1,4 @@
-// 导出成 HTML：导出哪些待办、什么顺序（和侧栏同一份排序规则，排好交给 Rust 端），上次导出到的目录（只记在本机），提示的文字。
+// 导出成 HTML / PDF：导出哪些待办、什么顺序（和侧栏同一份排序规则，排好交给 Rust 端），上次导出到的目录（只记在本机），提示的文字。
 // 导出的流程（先存盘、确认、选位置、在后台导出、提示）在 components/exportFlow.tsx
 import { inProject, isSubProject, projectLabel, sortProjects } from "./projects";
 import type { Exported, ExportFormat, ExportGroup, ProjectNode, SortKey } from "./types";
@@ -8,7 +8,7 @@ import { readJson, writeJson } from "./workspaceState";
 /** 上次导出到的目录（localStorage），「另存为」对话框从这里打开 */
 const EXPORT_DIR_KEY = "exportDir";
 
-export const FORMAT_LABELS: Record<ExportFormat, string> = { html: "HTML" };
+export const FORMAT_LABELS: Record<ExportFormat, string> = { html: "HTML", pdf: "PDF" };
 
 /**
  * 导出项目（连同子项目；project 不给时是整个工作区）时导出哪些待办、什么顺序：项目按侧栏的顺序（顶层项目按名字，

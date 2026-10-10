@@ -1,5 +1,5 @@
 // 经 WebView2 的 CDP（远程调试端口）控制测试版的页面：在页面里执行代码、发送真实的键盘 / 鼠标事件
-import { CDP_PORT } from "./app.mjs";
+import { CDP_PORT, VITE_URL } from "./app.mjs";
 import { PRELUDE } from "./page.mjs";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -46,7 +46,8 @@ const WATCH_STOP = `return window.__e2e.stopWatch?.() ?? ""`;
  */
 export async function connect(kind = "main") {
   const targets = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
-  const page = targets.find((t) => t.type === "page" && (kind === "quick") === t.url.includes("quick.html"));
+  // 只认 Vite 上的页面：导出 PDF 时还有一个看不见的窗口开着本地的 HTML
+  const page = targets.find((t) => t.type === "page" && t.url.startsWith(VITE_URL) && (kind === "quick") === t.url.includes("quick.html"));
   if (!page) throw new Error(`找不到${kind === "quick" ? "快速记录小窗" : "主窗口"}的页面`);
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((r, j) => {

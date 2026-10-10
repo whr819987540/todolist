@@ -1,9 +1,12 @@
-// 导出：右键待办 / 编辑区上方的「…」/ 右键项目、工作区「导出」→「导出为 HTML」（「另存为」对话框在页面里换成直接返回路径）；
+// 导出：右键待办 / 编辑区上方的「…」/ 右键项目、工作区「导出」→「导出为 HTML」「导出为 PDF」（「另存为」对话框在页面里换成直接返回路径）；
 // 导出的 HTML 里有标题、状态、所在的位置、渲染后的表格和任务框、嵌进去的相对路径图片、找不到的图片的占位，正文里的 script 去掉了；
 // 导出前有没保存的修改时先存盘、导出的是最新的；项目连同子项目：确认框里的数目、目录和各节都在、顺序同侧栏（父项目自己的在前，
-// 子项目一章在后）、不含已完成的；工作区按项目分章；上次导出到的目录记住；取消、失败时的提示
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// 子项目一章在后）、不含已完成的；工作区按项目分章；上次导出到的目录记住；PDF 的文件头、页数、图片，打印用的窗口和临时文件
+// 用完就没了；取消、失败时的提示
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CDP_PORT } from "../lib/app.mjs";
 
 export const title = "导出";
 
@@ -76,7 +79,7 @@ export default async function (t) {
     await t.sleep(300);
     await pickExport(format);
   };
-  const doneToast = () => t.until(async () => /已导出|导出失败/.test(await m.toast()) && (await m.toast()), 30000);
+  const doneToast = (ms = 30000) => t.until(async () => /已导出|导出失败/.test(await m.toast()) && (await m.toast()), ms);
   /** 导出项目、工作区时的确认框：返回里面的文字；uncheck 时取消「包含已完成的待办」；点「导出…」 */
   const confirmExport = async ({ uncheck = false } = {}) => {
     const text = await m.ev(`const c = await waitFor(() => document.querySelector(".export-options")); return c?.textContent ?? ""`);
@@ -196,6 +199,44 @@ export default async function (t) {
     { chapters, text: wsAsked.text },
   );
 
+  // ----- 导出成 PDF -----
+  const pdfOf = (p) => (existsSync(p) ? readFileSync(p) : Buffer.alloc(0));
+  const pages = (pdf) => (pdf.toString("latin1").match(/\/Type\s*\/Page(?![a-zA-Z])/g) ?? []).length;
+  const onePdf = join(out, "图文.pdf");
+  await stub("pickExportTarget", onePdf);
+  await m.clearToasts();
+  await rightClickExport(["工作", "需求", "图文"], "PDF");
+  toast = await doneToast(120000);
+  let pdf = pdfOf(onePdf);
+  const [pdfArgs] = await calls();
+  check("右键待办「导出为 PDF」：选位置时是 PDF，导出完提示存到了哪里", pdfArgs?.[0] === "pdf" && toast.includes(onePdf), { pdfArgs, toast });
+  check(
+    "导出成 PDF：文件以 %PDF 开头、大小合理、一页，嵌进去的图片印出来了",
+    pdf.subarray(0, 5).toString() === "%PDF-" && pdf.length > 3000 && pages(pdf) === 1 && pdf.toString("latin1").includes("/Subtype /Image"),
+    { size: pdf.length, pages: pages(pdf) },
+  );
+  const projectPdf = join(out, "需求.pdf");
+  await stub("pickExportTarget", projectPdf);
+  await m.clearToasts();
+  await rightClickExport(["工作", "需求"], "PDF");
+  await confirmExport();
+  toast = await doneToast(120000);
+  pdf = pdfOf(projectPdf);
+  check(
+    "导出项目成 PDF：封面和目录一页，长的待办跨页，子项目从新的一页开始，页数大致对",
+    pdf.subarray(0, 5).toString() === "%PDF-" && pages(pdf) >= 4 && pages(pdf) <= 20,
+    { toast, size: pdf.length, pages: pages(pdf) },
+  );
+  const leftovers = async () => {
+    const targets = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
+    return targets.filter((x) => x.url.startsWith("file:")).length;
+  };
+  check(
+    "打印用的看不见的窗口关掉了，临时文件删掉了",
+    (await t.until(async () => (await leftovers()) === 0)) && !readdirSync(tmpdir()).some((n) => /^todolist-export-\d+-\d+\.html$/.test(n)),
+    await leftovers(),
+  );
+
   // ----- 取消、失败 -----
   await stub("pickExportTarget", null);
   await m.clearToasts();
@@ -207,4 +248,9 @@ export default async function (t) {
   await rightClickExport(["工作", "需求", "C"], "HTML");
   toast = await doneToast();
   check("导出失败时写明原因", /导出失败：.+/.test(toast), toast);
+  await stub("pickExportTarget", join(out, "没有这个目录", "x.pdf"));
+  await m.clearToasts();
+  await rightClickExport(["工作", "需求", "C"], "PDF");
+  toast = await doneToast(120000);
+  check("导出 PDF 失败时也写明原因", /导出失败：.+/.test(toast) && !existsSync(join(out, "没有这个目录")), toast);
 }
