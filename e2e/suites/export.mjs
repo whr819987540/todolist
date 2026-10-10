@@ -1,8 +1,8 @@
 // 导出：右键待办 / 编辑区上方的「…」/ 右键项目、工作区「导出」→「导出为 HTML」「导出为 PDF」（「另存为」对话框在页面里换成直接返回路径）；
 // 导出的 HTML 里有标题、状态、所在的位置、渲染后的表格和任务框、嵌进去的相对路径图片、找不到的图片的占位，正文里的 script 去掉了；
 // 导出前有没保存的修改时先存盘、导出的是最新的；项目连同子项目：确认框里的数目、目录和各节都在、顺序同侧栏（父项目自己的在前，
-// 子项目一章在后）、不含已完成的；工作区按项目分章；上次导出到的目录记住；PDF 的文件头、页数、图片，打印用的窗口和临时文件
-// 用完就没了；取消、失败时的提示
+// 子项目一章在后）、不含已完成的；工作区按项目分章；上次导出到的目录记住；PDF 的文件头、页数（每条待办从新的一页开始）、图片，
+// 打印用的窗口和临时文件用完就没了；取消、失败时的提示
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -233,8 +233,8 @@ export default async function (t) {
   toast = await doneToast(120000);
   pdf = pdfOf(projectPdf);
   check(
-    "导出项目成 PDF：封面和目录一页，长的待办跨页，子项目从新的一页开始，页数大致对",
-    pdf.subarray(0, 5).toString() === "%PDF-" && pages(pdf) >= 4 && pages(pdf) <= 20,
+    "导出项目成 PDF：封面和目录一页，每条待办（自己的 5 条）、子项目从新的一页开始，长的待办跨页，页数大致对",
+    pdf.subarray(0, 5).toString() === "%PDF-" && pages(pdf) >= 7 && pages(pdf) <= 20,
     { toast, size: pdf.length, pages: pages(pdf) },
   );
   const leftovers = async () => {

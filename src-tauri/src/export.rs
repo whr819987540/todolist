@@ -1101,8 +1101,14 @@ a:hover { text-decoration: underline; }
   .page { max-width: none; margin: 0; padding: 0; box-shadow: none; }
   .cover { padding-top: 0; }
   .cover-page { margin-bottom: 0; break-after: page; }
-  .chapter:not(.sub) { break-before: page; }
-  .chapter:not(.sub) .chapter-title { margin-top: 0; }
+  .chapter { break-before: page; }
+  .chapter .chapter-title { margin-top: 0; }
+  /* 导出工作区时顶层项目自己没有待办（只有标题）：它的第一个子项目跟在标题后面，标题不单独占一页 */
+  .chapter:not(.sub):not(:has(.todo)) + .chapter.sub { break-before: auto; }
+  /* 导出项目、工作区时每条待办从新的一页开始；紧跟在一章标题后面的、封面后面的第一条不再分页 */
+  .page:not(.single) .todo { break-before: page; }
+  .page:not(.single) .chapter-title + .todo, .page:not(.single) .own > .todo:first-child { break-before: auto; }
+  .todo + .todo { padding-top: 0; border-top: 0; }
   .chapter-title, .todo-head { break-after: avoid; break-inside: avoid; }
   .md img, .md tr, .img-missing { break-inside: avoid; }
   .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { break-after: avoid; }
