@@ -35,6 +35,12 @@ describe("光标不停在藏起来的缩进里", () => {
     expect([sel.anchor, sel.head]).toEqual([6, 0]);
   });
 
+  it("显示成一整块的 > 里面不停：从文字开头按 ← 一下到 > 前面", () => {
+    expect(moveTo("> 甲|", ">| 甲")).toBe("|> 甲");
+    expect(moveTo("|> 甲", ">| 甲")).toBe("> |甲");
+    expect(moveTo(">> 甲|", ">>| 甲")).toBe("|>> 甲");
+  });
+
   it("caretTarget：内容从引用开始的列表项，> 里面不停，按移动方向跳到一头", () => {
     const state = makeState("- > 引用");
     expect(caretTarget(state, 3, -1)).toBe(2);
@@ -52,6 +58,10 @@ describe("← 跳过藏起来的缩进", () => {
   it("在下一级列表项的符号前面按 ←：直接到上一行末尾", () => {
     expect(left("- 甲\n  |- 乙")).toEqual({ handled: true, text: "- 甲|\n  - 乙" });
     expect(left("- 甲\n    |续行")).toEqual({ handled: true, text: "- 甲|\n    续行" });
+  });
+
+  it("引用里的列表：缩进前面是 >，跳到 > 前面", () => {
+    expect(left("> - 甲\n>   |- 乙")).toEqual({ handled: true, text: "> - 甲\n|>   - 乙" });
   });
 
   it("Shift+← 往前选", () => {

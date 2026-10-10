@@ -42,6 +42,15 @@ const DOC = [
   "9. 第九",
   "10. # 标题项",
   "11. 第十一",
+  "",
+  `> 普通的引用${LONG}`,
+  "",
+  ">> 套着的引用",
+  "",
+  "> > 套着的引用，中间有空格",
+  "",
+  "> - 引用里的列表项",
+  ">   > 引用里列表里的引用",
 ].join("\n");
 
 /**
@@ -81,13 +90,14 @@ const MEASURE = `const v = view();
   return { lines: out, fs: parseFloat(getComputedStyle(v.contentDOM).fontSize) };`;
 
 /**
- * 页面里：第 n 行是不是显示着原文（rendered 这些换成了符号 / 序号 / 复选框的都不在）；编辑器没拿到焦点时全都渲染，量了也不算数。
+ * 页面里：第 n 行是不是显示着原文（rendered 这些换成了符号 / 序号 / 复选框的都不在，行首的 > 显示出来了）；
+ * 编辑器没拿到焦点时全都渲染，量了也不算数。
  * 有序任务光标碰到任务框时只有任务框显示原文，序号照样是一块
  */
 const SHOWS_RAW = (n, rendered = ".cm-md-li-bullet, .cm-md-li-num, .cm-md-task") => `const v = view(); const line = v.state.doc.line(${n});
   const at = v.domAtPos(line.from).node;
   const el = (at.nodeType === 3 ? at.parentElement : at).closest(".cm-line");
-  return !!el && !el.querySelector(${JSON.stringify(rendered)})`;
+  return !!el && !el.querySelector(${JSON.stringify(rendered)}) && (!/^\\s*>/.test(line.text) || !!el.querySelector(".cm-md-quote-mark"))`;
 
 /** 页面里：光标所在的行，行首的列表符号 / 引用标记那一块在哪里、里面是什么字，光标在哪里，拼音（zhong…）从哪里开始 */
 const CARET_LINE = `const v = view(); const line = v.state.doc.lineAt(v.state.selection.main.head);
@@ -147,8 +157,13 @@ export default async function (t) {
     nestedCont: lineNo("    子项的续行"),
     h9: lineNo("9. 第九"),
     h10: lineNo("10. # 标题项"),
+    quote: lineNo("> 普通的引用"),
+    quote2: lineNo(">> 套着的引用"),
+    quote3: lineNo("> > 套着的引用"),
+    qList: lineNo("> - 引用里的列表项"),
+    qInner: lineNo(">   > 引用里列表里的引用"),
   };
-  const WRAPPED = ["one", "two", "cont", "three", "n10", "task", "subTask", "oTask", "q1", "q2", "para2", "qItem", "qItem2", "n100", "nested"];
+  const WRAPPED = ["one", "two", "cont", "three", "n10", "task", "subTask", "oTask", "q1", "q2", "para2", "qItem", "qItem2", "n100", "nested", "quote"];
   const near = (a, b) => Math.abs(a - b) <= 1;
   const misaligned = (r) =>
     WRAPPED.map((k) => ({ k, ...r.lines[L[k]] })).filter((x) => !x.rows.length || x.rows.some((y) => !near(y, x.left)));
@@ -181,7 +196,7 @@ export default async function (t) {
   // 光标碰到列表符号时显示原文，正文不动
   const before = r;
   const moved = [];
-  for (const k of ["one", "two", "three", "n10", "task", "subTask", "oTask", "n100", "qItem"]) {
+  for (const k of ["one", "two", "three", "n10", "task", "subTask", "oTask", "n100", "qItem", "q1", "q2", "quote", "quote2", "quote3", "qInner"]) {
     // 光标放在正文开头，再真的按一下 ← 进到列表符号（有序列表里的任务是进到任务框）里：
     // 只在页面里设光标时，WebView2 上编辑器不一定算拿到了焦点，就不显示原文
     await m.ev(`const v = view(); v.focus(); const line = v.state.doc.line(${L[k]});
@@ -194,7 +209,7 @@ export default async function (t) {
     const now = (await m.ev(MEASURE)).lines[L[k]];
     if (!raw || !near(now.left, before.lines[L[k]].left)) moved.push({ k, raw, before: before.lines[L[k]].left, now: now.left });
   }
-  check("光标放到列表符号、任务框上（显示原文）时，这一行的正文不左右跳", !moved.length, moved);
+  check("光标放到列表符号、任务框、引用的 > 上（显示原文）时，这一行的正文不左右跳（普通引用、套着的引用、引用里列表里的引用也是）", !moved.length, moved);
   await m.ev(`view().focus(); return 1`);
   await m.press("Ctrl+A");
   await t.sleep(200);
@@ -203,11 +218,11 @@ export default async function (t) {
     !(await m.ev(`return document.querySelectorAll(".cm-content .cm-md-li-bullet, .cm-content .cm-md-li-num, .cm-content .cm-md-task").length`)),
   );
   r = await m.ev(MEASURE);
-  // 引用的 > 显示原文时还占着文字的位置；标题显示出 # 本来就会挪
+  // 标题显示出 # 本来就会挪
   bad = Object.keys(before.lines)
-    .filter((n) => !/^\s*>|# /.test(before.lines[n].text) && !near(r.lines[n].left, before.lines[n].left))
+    .filter((n) => !/# /.test(before.lines[n].text) && !near(r.lines[n].left, before.lines[n].left))
     .map((n) => ({ n, before: before.lines[n], now: r.lines[n] }));
-  check("全选（全部显示原文）时引用以外的正文都不动", !bad.length, bad);
+  check("全选（全部显示原文）时正文都不动", !bad.length, bad);
 
   // ← 经过列表符号，跳过藏起来的缩进，到上一行
   const head = () => m.ev(`const v = view(); const h = v.state.selection.main.head; const line = v.state.doc.lineAt(h); return [line.number, h - line.from]`);
@@ -259,6 +274,19 @@ export default async function (t) {
     "在有序列表项的正文开头用输入法打字：序号不动，拼音从正文开头开始，上屏后正文是打的字",
     ime.before.mark && near(ime.during.mark, ime.before.mark) && near(ime.during.pinyin, ime.before.caret) && !/zhong/.test(ime.during.markText) && /^10\. 中文$/.test(ime.after.text),
     ime,
+  );
+
+  // 输入法：在引用的文字开头打拼音，> 不动、拼音从文字开头开始
+  // 前面回车续出了一项，行号变了，按文字找这一行
+  await m.ev(`const v = view(); v.focus(); let n = 1; while (!v.state.doc.line(n).text.startsWith("> 普通的引用")) n++;
+    v.dispatch({ selection: { anchor: v.state.doc.line(n).from + 2 } }); return 1`);
+  await m.press("ArrowRight");
+  await m.press("ArrowLeft");
+  const qime = await composeAtCursor(m, t);
+  check(
+    "在引用的文字开头用输入法打字：> 不动，拼音从文字开头开始，上屏后正文是打的字",
+    qime.before.mark && near(qime.during.mark, qime.before.mark) && near(qime.during.pinyin, qime.before.caret) && !/zhong/.test(qime.during.markText) && qime.after.text.startsWith("> 中文普通的引用"),
+    qime,
   );
   await m.viewport();
 }

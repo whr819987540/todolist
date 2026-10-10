@@ -1,6 +1,6 @@
 import { ensureSyntaxTree } from "@codemirror/language";
 import { describe, expect, it } from "vitest";
-import { INDENT, type ListLine, listLine, listLineStyle, type MarkerPart, markerParts, TASK } from "./listLayout";
+import { INDENT, type ListLine, listLine, listLineStyle, type MarkerPart, markerParts, quoteGroups, TASK } from "./listLayout";
 import { makeState } from "./testState";
 
 // docs/requirements.md「待办内容 → 实时渲染里的列表」：每一级缩进约两个字宽，列表符号、序号、任务框放在正文左边那一格里；
@@ -174,6 +174,35 @@ describe("引用和列表", () => {
     expect(q && state.sliceDoc(q.from, q.to)).toBe("> ");
     expect(state.sliceDoc(ls[0]!.textFrom, state.doc.line(1).to)).toBe("引用");
     expect(ls[1]!.quoteMark).toBe(null);
+  });
+});
+
+describe("行首的 > 显示原文时放在哪里", () => {
+  // docs/requirements.md「实时渲染里的引用」：光标进出引用的那一行、显示出 > 时，> 放在引用竖线和文字之间的空当里，文字不动；
+  // 套着的引用（>> 或 > >）空当按层数加宽；列表项里的引用（在列表缩进后面的 >）挂在左边列表缩进的空白里
+  const groups = (doc: string, n = 1) => {
+    const state = makeState(doc);
+    const tree = ensureSyntaxTree(state, state.doc.length, 1000)!;
+    const line = state.doc.line(n);
+    const hidden = listLine(state, line, tree)?.hidden ?? [];
+    return quoteGroups(state, line, tree, hidden).map((g) => `${g.kind} ${g.count} ${JSON.stringify(state.sliceDoc(g.from, g.to))}`);
+  };
+
+  it("行首连着的几个 > 放在一起（>> 和 > > 都算），按个数加宽", () => {
+    expect(groups("> 甲")).toEqual(['gutter 1 "> "']);
+    expect(groups(">> 甲")).toEqual(['gutter 2 ">> "']);
+    expect(groups("> > 甲")).toEqual(['gutter 2 "> > "']);
+    expect(groups(">\n> 甲", 2)).toEqual(['gutter 1 "> "']);
+  });
+
+  it("列表项里的引用：缩进后面的 > 单独一组，挂在列表缩进的空白里；只有它的照样放在引用竖线旁边", () => {
+    expect(groups("> - 甲\n>   > 乙", 2)).toEqual(['gutter 1 "> "', 'inner 1 "> "']);
+    expect(groups("- 甲\n  > 乙", 2)).toEqual(['gutter 1 "> "']);
+  });
+
+  it("不在行首的 > 不管（内容从引用开始的列表项另外放）", () => {
+    expect(groups("- > 甲")).toEqual([]);
+    expect(groups("甲 > 乙")).toEqual([]);
   });
 });
 

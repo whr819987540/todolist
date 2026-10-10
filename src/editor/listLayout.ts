@@ -219,12 +219,14 @@ const em = (n: number, extra = "") =>
 
 /**
  * 实时渲染里这一行的悬挂缩进，写成 CSS 变量（appearance.ts 的 .cm-md-li、.cm-md-quote、.cm-md-li-qfirst 用）。
- * 内容从引用开始的第一行还要让出引用竖线和它后面的空当（--md-quote-bar、--md-quote-gap），竖线画在 --md-li-qbar 处
+ * 内容从引用开始的第一行还要让出引用竖线和它后面的空当（--md-quote-bar、--md-quote-gap），竖线画在 --md-li-qbar 处；
+ * --md-li-inner 是引用里面的那几级，显示原文的 > 要越过它们放到引用竖线旁边
  */
 export function listLineStyle(l: ListLine): string {
   const bar = l.quoteMark ? " + var(--md-quote-bar)" : "";
   const vars = [
     `--md-li-margin: ${em(l.margin)}`,
+    `--md-li-inner: ${em(l.inner)}`,
     `--md-li-pad: ${em(l.inner + l.hang + l.extra, bar)}`,
     `--md-li-hang: ${em(l.hang, l.quoteMark ? `${bar} + var(--md-quote-gap)` : "")}`,
   ];
@@ -272,11 +274,51 @@ export function markerParts(m: ListMarker, touches: (from: number, to: number) =
   return parts;
 }
 
+/** 行首的引用标记 > 在实时渲染里怎么放 */
+export interface QuoteGroup {
+  /** 这几个 > 连同它们后面的空格 */
+  from: number;
+  to: number;
+  /** 有几个 > */
+  count: number;
+  /**
+   * gutter：行首连着的几个（>> 和 > > 都算），显示原文时放在引用竖线右边的空当里，空当按个数加宽；
+   * inner：列表项里的引用（在藏起来的列表缩进后面），显示原文时挂在左边列表缩进的空白里
+   */
+  kind: "gutter" | "inner";
+}
+
+/** 行首的 >，按中间隔没隔着藏起来的列表缩进分成几组；hidden 是这一行藏起来的缩进（listLine 的） */
+export function quoteGroups(state: EditorState, line: Line, tree: Tree, hidden: readonly TextRange[]): QuoteGroup[] {
+  const s = /^[ \t>]*/.exec(line.text)![0].length;
+  if (!line.text.slice(0, s).includes(">")) return [];
+  const groups: QuoteGroup[] = [];
+  tree.iterate({
+    from: line.from,
+    to: line.from + s,
+    enter: (n) => {
+      if (n.name !== "QuoteMark" || n.from >= line.from + s) return;
+      const to = n.to + (state.sliceDoc(n.to, n.to + 1) === " " ? 1 : 0);
+      const last = groups[groups.length - 1];
+      if (last && !hidden.some((h) => h.from >= last.to && h.to <= n.from)) {
+        last.to = to;
+        last.count++;
+      } else {
+        groups.push({ from: n.from, to, count: 1, kind: groups.length ? "inner" : "gutter" });
+      }
+    },
+  });
+  return groups;
+}
+
 /**
  * 实时渲染里光标不能停的地方。zones：行首藏起来的缩进，[from, to) 都不停（停在缩进前面看上去和后面一样，
  * 在那里打字会把列表项拆坏）；atoms：显示成一整块的 >，(from, to) 里面不停
  */
 export function caretStops(state: EditorState, line: Line, tree: Tree = syntaxTree(state)) {
   const l = listLine(state, line, tree);
-  return { zones: l?.hidden ?? [], atoms: l?.quoteMark ? [l.quoteMark] : [] };
+  const hidden = l?.hidden ?? [];
+  const atoms: TextRange[] = quoteGroups(state, line, tree, hidden);
+  if (l?.quoteMark) atoms.push(l.quoteMark);
+  return { zones: hidden, atoms };
 }

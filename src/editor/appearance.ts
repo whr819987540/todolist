@@ -38,9 +38,9 @@ const theme = EditorView.theme({
     // 列表每一级缩进的宽度（同 Typora，约两个字）和任务框占的宽度（listLayout.ts）；按正文字号算，标题等放大的行也和同级对齐
     "--md-indent": `calc(var(--fs-editor) * ${INDENT})`,
     "--md-task": `calc(var(--fs-editor) * ${TASK})`,
-    // 引用的竖线和它右边的空当
+    // 引用的竖线和它右边的空当（约一个字，同 Typora；显示原文时 > 放在这里，要放得下 Segoe UI 的 "> "）
     "--md-quote-bar": "3px",
-    "--md-quote-gap": "12px",
+    "--md-quote-gap": "var(--fs-editor)",
   },
   ".cm-line": { padding: "0" },
   // 列表的行（listLayout.ts 按行设这几个变量）：折行后和正文对齐（悬挂缩进）。引用的竖线在引用里面的那几级缩进左边
@@ -58,7 +58,8 @@ const theme = EditorView.theme({
   ".cm-md-h4": { fontSize: "1.1em", paddingTop: "0.25em" },
   ".cm-md-quote": {
     borderLeft: "var(--md-quote-bar) solid var(--c-border-strong)",
-    paddingLeft: "calc(var(--md-quote-gap) + var(--md-li-pad, 0px))",
+    // 套着的引用（>> 或 > >）空当按层数加宽，显示出几个 > 都放得下
+    paddingLeft: "calc(var(--md-quote-gap) * var(--md-quote-levels, 1) + var(--md-li-pad, 0px))",
     color: "var(--c-text-2)",
   },
   // 内容从引用开始的列表项（"- > 引用"）第一行：引用竖线不画在行首，画在列表符号那一格后面（--md-li-qbar），
@@ -124,6 +125,14 @@ const theme = EditorView.theme({
     whiteSpace: "pre",
     fontSize: "var(--fs-editor)",
     letterSpacing: "-0.05em",
+  },
+  // 显示原文的 >（宽度、挪到哪里由 livePreview.ts 按这一行设）
+  ".cm-md-quote-mark": {
+    display: "inline-block",
+    textAlign: "right",
+    textIndent: "0",
+    whiteSpace: "pre",
+    fontSize: "var(--fs-editor)",
   },
   // "- > 引用" 第一行的 >：占引用竖线和空当那么宽，显示出来时靠右（紧挨着文字）
   ".cm-md-li-qgap": {

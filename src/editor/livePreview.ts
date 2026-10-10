@@ -10,7 +10,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { keepCaretVisible, leftOverIndent } from "./listCaret";
-import { type ListLine, type ListMarker, listLine, listLineStyle, markerParts } from "./listLayout";
+import { type ListLine, type ListMarker, listLine, listLineStyle, markerParts, type QuoteGroup, quoteGroups } from "./listLayout";
 import { linkTarget } from "./links";
 
 // 实时渲染（类似 Typora / Obsidian）：正文始终是原样的 Markdown 文本，只是把 **、#、> 这类标记藏起来，
@@ -65,6 +65,40 @@ class NumberWidget extends WidgetType {
     const num = el.appendChild(document.createElement("span"));
     num.className = "cm-md-li-numtext";
     num.textContent = `${this.text} `;
+    return el;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
+ * 光标在引用那一行时显示的 >：不占文字的位置。行首的几个放进引用竖线右边的空当里（要越过引用里的列表缩进），
+ * 列表项里的引用挂在左边列表缩进的空白里。做成不能编辑的一块：紧挨着正文的是原文的话，输入法的拼音会跑进来
+ */
+class QuoteMarksWidget extends WidgetType {
+  constructor(
+    readonly text: string,
+    readonly count: number,
+    readonly kind: QuoteGroup["kind"],
+  ) {
+    super();
+  }
+  eq(other: QuoteMarksWidget) {
+    return other.text === this.text && other.count === this.count && other.kind === this.kind;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-md-quote-mark";
+    const width = `calc(var(--md-quote-gap) * ${this.count})`;
+    el.style.width = width;
+    if (this.kind === "gutter") {
+      el.style.marginLeft = `calc(-1 * (${width} + var(--md-li-inner, 0px)))`;
+      el.style.marginRight = "var(--md-li-inner, 0px)";
+    } else {
+      el.style.marginLeft = `calc(-1 * ${width})`;
+    }
+    el.textContent = this.text;
     return el;
   }
   ignoreEvent() {
@@ -169,6 +203,10 @@ const markSlot = (slot: number, task: boolean) =>
     }),
   );
 
+/** 套着的引用（>> 或 > >）：引用竖线右边的空当按层数加宽 */
+const quoteLevels = (n: number) =>
+  cachedDeco(`quote ${n}`, () => Decoration.line({ attributes: { style: `--md-quote-levels: ${n}` } }));
+
 function listLineDeco(l: ListLine) {
   const style = listLineStyle(l);
   const cls = l.quoteMark ? "cm-md-li cm-md-li-qfirst" : "cm-md-li";
@@ -223,17 +261,26 @@ function buildPreview(view: EditorView, sel: readonly SelectionRange[] | null): 
       else out.push(taskDone.range(p.from, p.to));
     }
   };
-  const quoteGaps = new Set<number>();
+  // 行首的引用标记（下面逐个节点处理时跳过这些）
+  const quoteMarks = new Set<number>();
   visibleLines(view, (line) => {
     const l = listLine(state, line, tree);
+    const raw = touches(line.from, line.to);
+    // 行首的 >：光标在这一行时显示出来（不占文字的位置），否则藏起来；套着的引用空当按层数加宽，光标进出都一样
+    for (const g of quoteGroups(state, line, tree, l?.hidden ?? [])) {
+      for (let p = g.from; p < g.to; p++) quoteMarks.add(p);
+      if (raw) out.push(Decoration.replace({ widget: new QuoteMarksWidget(doc.sliceString(g.from, g.to), g.count, g.kind) }).range(g.from, g.to));
+      else hide(g.from, g.to);
+      if (g.kind === "gutter" && g.count > 1) out.push(quoteLevels(g.count).range(line.from));
+    }
     if (!l) return;
     out.push(listLineDeco(l).range(line.from));
     for (const h of l.hidden) hide(h.from, h.to);
     l.markers.forEach(marker);
     const q = l.quoteMark;
     if (q) {
-      quoteGaps.add(q.from);
-      const text = touches(line.from, line.to) ? doc.sliceString(q.from, q.to) : "";
+      quoteMarks.add(q.from);
+      const text = raw ? doc.sliceString(q.from, q.to) : "";
       out.push(Decoration.replace({ widget: new QuoteGapWidget(text) }).range(q.from, q.to));
     }
   });
@@ -315,7 +362,7 @@ function buildPreview(view: EditorView, sel: readonly SelectionRange[] | null): 
           }
 
           case "QuoteMark":
-            if (quoteGaps.has(node.from)) return;
+            if (quoteMarks.has(node.from)) return;
             if (!touchesLines(node.from, node.to)) hide(node.from, node.to + (isSpace(node.to) ? 1 : 0));
             return;
 
