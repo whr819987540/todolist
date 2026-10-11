@@ -1,7 +1,7 @@
 // 待办数据的备份与恢复（docs/requirements.md「数据备份」）：恢复的流程（先存盘、停掉界面状态写盘、恢复后整页重新加载），
 // 重新加载后显示的结果，以及提示、确认、自动备份状态的文字。界面在 components/settings/DataBackupSettings.tsx
 
-import { flushAll } from "./hooks";
+import { emitAppEvent, flushAll, holdDataRefresh } from "./hooks";
 import type { AutoBackupStatus, DataBackupDone, DataBackupInfo, DataRestoreDone } from "./types";
 import { fullTime } from "./utils";
 import { resumeUiState, suspendUiState } from "./workspaceState";
@@ -10,18 +10,23 @@ import { resumeUiState, suspendUiState } from "./workspaceState";
 const NOTICE_KEY = "dataRestored";
 
 /**
- * 恢复待办数据：先保存正在编辑的待办（不论 auto save 开没开）、写掉没写盘的界面状态，之后界面状态不再写盘；
- * 恢复成功后记下结果、整页重新加载（回到首页，见 App.tsx），失败时界面状态照常写盘，把错误抛给调用的地方
+ * 恢复待办数据：先保存正在编辑的待办（不论 auto save 开没开）、写掉没写盘的界面状态，之后界面状态不再写盘，
+ * 监听到的变化、窗口获得焦点、F5 也不刷新（hooks.ts 的 holdDataRefresh：数据目录正被整个换掉，监听会看到一大批变化）；
+ * 恢复成功后记下结果、整页重新加载（回到首页，见 App.tsx），失败时界面状态照常写盘、照常刷新（先刷新一次，
+ * 期间外部可能改了什么），把错误抛给调用的地方
  */
 export async function restoreData(run: () => Promise<DataRestoreDone>, reload = () => location.reload()): Promise<DataRestoreDone> {
   // 比隐藏到托盘时多等一会儿：没存完就开始恢复的话，这次的修改可能既没进恢复前的备份，也存不进恢复后的数据
   await flushAll(true, 15_000);
   await suspendUiState();
+  holdDataRefresh(true);
   let done: DataRestoreDone;
   try {
     done = await run();
   } catch (e) {
+    holdDataRefresh(false);
     resumeUiState();
+    emitAppEvent("data-changed");
     throw e;
   }
   try {

@@ -160,6 +160,9 @@ export default async function (t) {
   check("（恢复前）快速记录小窗里有新建的「临时」", groupsBefore.includes("临时"), groupsBefore);
 
   await m.emit("tauri://focus");
+  // 侧栏里同时显示着备份里没有的「临时」：恢复中途刷新的话会读到它不在了
+  await m.selectAllWorkspaces();
+  check("（恢复前）侧栏里显示着「临时」", !!(await t.until(() => m.ev(`return !!row("临时")`))));
   await m.ev(`return await openTodo("工作", "需求", "C")`);
   await m.ev(`const v = view(); v.focus(); v.dispatch({ selection: { anchor: v.state.doc.length } }); return 1`);
   await m.type("恢复前没保存的修改");
@@ -177,12 +180,30 @@ export default async function (t) {
     /\d{4}-\d\d-\d\d \d\d:\d\d:\d\d 的备份（3 个工作区、6 条待办）/.test(confirmText) && confirmText.includes("替换现在的全部待办数据") && confirmText.includes(BK),
     confirmText,
   );
+  // 恢复中途（工作区被整个换掉之后、整页重新加载之前）监听会看到一大批变化：不能刷新出「工作区「临时」不存在」之类的
+  // 提示。页面里记下这期间出现过的提示（sessionStorage 跨过重新加载还在）
+  await m.ev(`sessionStorage.removeItem("e2eToasts"); const seen = [];
+    new MutationObserver(() => {
+      for (const n of document.querySelectorAll(".ant-message-notice")) {
+        const text = n.textContent;
+        if (text && !seen.includes(text)) { seen.push(text); sessionStorage.setItem("e2eToasts", JSON.stringify(seen)); }
+      }
+    }).observe(document.body, { childList: true, subtree: true, characterData: true }); return 1`);
   await clickConfirm("恢复");
   const reloaded = await t.until(
     async () => m.ev(`return window.__beforeRestore === undefined && !!document.querySelector(".ws-card")`).catch(() => false),
     20000,
   );
   check("恢复后整页重新加载，回到首页", !!reloaded);
+  // 监听到的变化（恢复完一会儿才报）可能落在重新加载之后：等它过去
+  await t.sleep(2500);
+  const toastsDuring = JSON.parse((await m.ev(`return sessionStorage.getItem("e2eToasts")`)) ?? "[]");
+  const toastsAfter = await m.toast();
+  check(
+    "恢复中途、重新加载前后都没有刷新出「工作区不存在」之类的错误提示",
+    !toastsDuring.some((x) => /不存在|失败/.test(x)) && !/不存在|失败/.test(toastsAfter),
+    { toastsDuring, toastsAfter },
+  );
   const notice = await m.ev(`const c = await waitFor(() => document.querySelector(".ant-modal-confirm-success .ant-modal-confirm-content")); return c?.textContent ?? ""`);
   const before = beforeRestore();
   check("提示恢复了几个工作区、几条待办，以及恢复前的数据备份在哪里", notice.includes("恢复了 3 个工作区、6 条待办") && before.length === 1 && notice.includes(before[0]), { notice, before });

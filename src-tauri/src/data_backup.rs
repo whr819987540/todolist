@@ -794,6 +794,33 @@ mod tests {
         assert_ne!(fp(), third);
     }
 
+    /// 恢复时解压出来的、换下来的、从 WebDAV 下载的都在数据目录里的临时文件夹（点开头）里：监听数据目录时不算
+    /// （watch.rs 的 classify），恢复中途不会把那里的一大批变化报给前端
+    #[test]
+    fn staging_is_ignored_by_the_watcher() {
+        use crate::store::PathState;
+        let (_tmp, s) = setup("staging-watch");
+        let staging = staging_dir(s.root(), time(12)).unwrap();
+        let name = staging.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with('.') && staging.parent() == Some(s.root()), "{}", staging.display());
+        let file = PathState::File { modified: None, len: 1 };
+        for rel in [
+            vec![name.as_str()],
+            vec![&name, "new", "工作"],
+            vec![&name, "new", "工作", "需求", "A.md"],
+            vec![&name, "old", "工作", "需求", ".todos.json"],
+            vec![&name, "old", ".state.json"],
+            vec![&name, "download.zip"],
+        ] {
+            for now in [PathState::Dir, PathState::Absent, file] {
+                assert_eq!(crate::watch::classify(&rel, true, now), None, "{rel:?}");
+                assert_eq!(crate::watch::classify(&rel, false, now), None, "{rel:?}");
+            }
+        }
+        clean_staging(&staging);
+        assert!(!staging.exists());
+    }
+
     /// 工作区、项目的 (名字, 在那一层里排第几) 和工作区是不是手动排序
     fn project_ranks(s: &Store, ws: &str) -> (bool, Vec<(String, Option<i64>)>) {
         let tree = s.load_workspace(ws).unwrap();

@@ -3,7 +3,21 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef } from "react";
 
-/** 窗口获得/失去焦点时回调（从外部编辑器切回来时用于刷新） */
+/**
+ * 恢复待办数据期间（dataBackup.ts 的 restoreData）：数据目录里的工作区正被整个换掉，监听到的变化（data-changed）、
+ * 窗口获得焦点、F5 都不刷新，免得读到换掉之后、整页重新加载之前的数据，报「工作区不存在」、关掉标签、退回首页。
+ * 恢复成功后整页重新加载（这里跟着重来）；失败时（数据没换）放开
+ */
+let refreshHeld = false;
+
+export function holdDataRefresh(held: boolean) {
+  refreshHeld = held;
+}
+
+/** 现在是不是在恢复待办数据、不刷新（见 holdDataRefresh） */
+export const dataRefreshHeld = () => refreshHeld;
+
+/** 窗口获得/失去焦点时回调（从外部编辑器切回来时用于刷新）；恢复待办数据期间获得焦点的不回调 */
 export function useWindowFocus(onChange: (focused: boolean) => void) {
   const ref = useRef(onChange);
   useEffect(() => {
@@ -13,7 +27,10 @@ export function useWindowFocus(onChange: (focused: boolean) => void) {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     getCurrentWindow()
-      .onFocusChanged(({ payload }) => ref.current(payload))
+      .onFocusChanged(({ payload }) => {
+        if (payload && refreshHeld) return;
+        ref.current(payload);
+      })
       .then((u) => {
         if (disposed) u();
         else unlisten = u;
@@ -69,7 +86,8 @@ const localEvent = (name: string) => `app-event:${name}`;
 
 /**
  * 收到 Rust 端发给这个窗口的事件时回调，如 data-changed（数据目录在外部变了，带着变了什么，见 watch.ts；
- * 快速记录存好后等也发，不带内容）、open-todo（打开刚记下的待办）；前端自己用 emitAppEvent 发的同名事件也收
+ * 快速记录存好后等也发，不带内容）、open-todo（打开刚记下的待办）；前端自己用 emitAppEvent 发的同名事件也收。
+ * 恢复待办数据期间 data-changed 不回调（见 holdDataRefresh）
  */
 export function useAppEvent<T>(name: string, onEvent: (payload: T) => void) {
   const ref = useRef(onEvent);
@@ -79,13 +97,17 @@ export function useAppEvent<T>(name: string, onEvent: (payload: T) => void) {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
+    const deliver = (payload: T) => {
+      if (name === "data-changed" && refreshHeld) return;
+      ref.current(payload);
+    };
     getCurrentWebviewWindow()
-      .listen<T>(name, (e) => ref.current(e.payload))
+      .listen<T>(name, (e) => deliver(e.payload))
       .then((u) => {
         if (disposed) u();
         else unlisten = u;
       });
-    const onLocal = (e: Event) => ref.current((e as CustomEvent<T>).detail);
+    const onLocal = (e: Event) => deliver((e as CustomEvent<T>).detail);
     window.addEventListener(localEvent(name), onLocal);
     return () => {
       disposed = true;

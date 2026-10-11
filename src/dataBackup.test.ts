@@ -89,6 +89,37 @@ describe("恢复待办数据", () => {
     expect(backup.takeRestoreNotice()).toBeNull();
   });
 
+  // 「监听数据目录」「恢复数据」：恢复时数据目录里的工作区被整个换掉，监听会看到一大批变化；这期间不刷新，
+  // 免得读到换掉之后、整页重新加载之前的数据，报「工作区不存在」
+  it("恢复期间不刷新（监听到的变化、窗口获得焦点、F5），成功后一直到整页重新加载都不刷新", async () => {
+    const changed = vi.fn();
+    window.addEventListener("app-event:data-changed", changed);
+    let during: boolean | null = null;
+    expect(hooks.dataRefreshHeld()).toBe(false);
+    await backup.restoreData(async () => {
+      during = hooks.dataRefreshHeld();
+      return DONE;
+    }, vi.fn());
+    expect(during).toBe(true);
+    expect(hooks.dataRefreshHeld()).toBe(true);
+    expect(changed).not.toHaveBeenCalled();
+    window.removeEventListener("app-event:data-changed", changed);
+  });
+
+  it("恢复失败（数据没换）：照常刷新，先刷新一次", async () => {
+    const changed = vi.fn();
+    window.addEventListener("app-event:data-changed", changed);
+    await expect(
+      backup.restoreData(async () => {
+        expect(hooks.dataRefreshHeld()).toBe(true);
+        throw "恢复失败，「工作」可能有文件正被其他程序占用";
+      }, vi.fn()),
+    ).rejects.toContain("恢复失败");
+    expect(hooks.dataRefreshHeld()).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(1);
+    window.removeEventListener("app-event:data-changed", changed);
+  });
+
   it("记下的结果坏了时不显示", () => {
     sessionStorage.setItem("dataRestored", "{坏了");
     expect(backup.takeRestoreNotice()).toBeNull();

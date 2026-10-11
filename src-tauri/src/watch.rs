@@ -336,6 +336,12 @@ mod tests {
             assert_eq!(moved(rel, FILE), None, "{rel}");
             assert_eq!(moved(rel, GONE), None, "{rel}");
         }
+        // 导出的 HTML / PDF 选了存在数据目录里：不是 .md，哪一层都不算（导出 PDF 前试着写又删掉的空文件，
+        // 删掉后不知道原来是不是文件夹，由 export.rs 的 check_writable 记成软件自己写的）
+        for rel in ["导出.html", "工作/工作.pdf", "工作/需求/需求.html", "工作/需求/前端/页面.pdf"] {
+            assert_eq!(moved(rel, FILE), None, "{rel}");
+            assert_eq!(edited(rel, FILE), None, "{rel}");
+        }
         // 直接放在数据目录、工作区文件夹里的文件（如设置备份的 zip），项目里不是 .md 的文件
         assert_eq!(moved("TodoList-settings-20261009-120000.zip", FILE), None);
         assert_eq!(moved("工作/说明.md", FILE), None);

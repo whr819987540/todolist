@@ -303,7 +303,8 @@ pub fn with_extension(path: &Path, format: Format) -> PathBuf {
 }
 
 /// 导出 PDF 之前先看能不能写到 path：文件夹不在了、文件被别的程序占用时返回原因（这时不退回打印对话框，
-/// 换个地方就行）。已有的文件不动，为了试而新建的空文件随即删掉
+/// 换个地方就行）。已有的文件不动，为了试而新建的空文件随即删掉；选的位置在数据目录里时，记成软件自己写的
+/// （store.rs 的 OwnWrites），监听数据目录时不会因为它不在了（不知道原来是不是文件夹）而刷新
 pub fn check_writable(path: &Path) -> Result<()> {
     let existed = path.exists();
     std::fs::OpenOptions::new()
@@ -313,6 +314,7 @@ pub fn check_writable(path: &Path) -> Result<()> {
         .map_err(|e| format!("无法保存到 {}：{e}", path.display()))?;
     if !existed {
         let _ = std::fs::remove_file(path);
+        store::note_own(path);
     }
     Ok(())
 }
@@ -1527,6 +1529,8 @@ mod tests {
         let new = tmp.0.join("新的.pdf");
         assert!(check_writable(&new).is_ok());
         assert!(!new.exists());
+        // 试着写又删掉的记成软件自己写的（导出到数据目录里时监听不刷新）
+        assert!(store::own_writes().is_own(&new, store::PathState::Absent, std::time::Instant::now()));
         let old = tmp.0.join("已有.pdf");
         fs::write(&old, "%PDF-旧的").unwrap();
         assert!(check_writable(&old).is_ok());

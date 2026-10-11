@@ -2829,7 +2829,7 @@ pub(crate) fn own_writes() -> MutexGuard<'static, OwnWrites> {
 }
 
 /// 记下软件自己刚写过 path（文件或文件夹；移走、删掉了的记成不在）
-fn note_own(path: &Path) {
+pub(crate) fn note_own(path: &Path) {
     let state = PathState::of(path);
     own_writes().note(path, state, Instant::now());
 }

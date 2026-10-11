@@ -2,7 +2,7 @@ import { App as AntApp, Spin, type InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, errMsg } from "../api";
 import { isFiltering, useTodoFilter } from "../filter";
-import { useAppEvent, useWindowFocus } from "../hooks";
+import { dataRefreshHeld, useAppEvent, useWindowFocus } from "../hooks";
 import { rangePick, togglePick } from "../picking";
 import { useContentSearch } from "../search";
 import { type How, visit } from "../navHistory";
@@ -711,7 +711,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       }
       if (isRefreshShortcut(e)) {
         e.preventDefault();
-        reload().then(() => message.success("已刷新"));
+        if (!dataRefreshHeld()) reload().then(() => message.success("已刷新"));
       } else if (ctrl && key === "s") {
         e.preventDefault();
         // 有冲突（弹出了冲突对话框）、保存失败（已提示）时不提示「已保存」
