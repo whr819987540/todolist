@@ -72,13 +72,28 @@ export function projectMoveProblem(o: {
   return null;
 }
 
-/** 顶层项目按名字排，每个后面跟着它的子项目（也按名字排） */
-export function sortProjects<T extends { name: string }>(projects: readonly T[]): T[] {
+/** 手动排序时两个项目在同一层里谁在前：排过的按位置，没排过的（null、undefined）排在后面；都没排过时一样 */
+function compareOrder(a: number | null | undefined, b: number | null | undefined): number {
+  if (a == null || b == null) return Number(a == null) - Number(b == null);
+  return a - b;
+}
+
+/**
+ * 每个顶层项目后面跟着它的子项目。按名称（manual 为 false）时各层都按名字排；手动排序时各层（工作区的顶层、父项目里）
+ * 排过的按位置（order），没排过的（新建的、移进来的）排在后面，彼此按名字
+ */
+export function sortProjects<T extends { name: string; order?: number | null }>(projects: readonly T[], manual = false): T[] {
+  const orderOf = new Map(projects.map((p) => [p.name, p.order]));
+  const byOrder = (a: string, b: string) => (manual ? compareOrder(orderOf.get(a), orderOf.get(b)) : 0);
   const top = (p: T) => parentOf(p.name) ?? p.name;
-  return [...projects].sort(
-    (a, b) =>
-      compareName(top(a), top(b)) ||
+  return [...projects].sort((a, b) => {
+    const ta = top(a);
+    const tb = top(b);
+    if (ta !== tb) return byOrder(ta, tb) || compareName(ta, tb);
+    return (
       Number(isSubProject(a.name)) - Number(isSubProject(b.name)) ||
-      compareName(leafName(a.name), leafName(b.name)),
-  );
+      byOrder(a.name, b.name) ||
+      compareName(leafName(a.name), leafName(b.name))
+    );
+  });
 }

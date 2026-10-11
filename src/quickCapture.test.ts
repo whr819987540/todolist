@@ -10,15 +10,19 @@ import {
   targetOptions,
   writeDraft,
 } from "./quickCapture";
+import type { WorkspaceProjects } from "./types";
 
 // docs/requirements.md「快速记录」：选择存到哪个项目（默认收件箱 / 快速记录，不在时保存时新建），
-// Enter 保存，Shift+Enter 换行，Ctrl+Enter 保存并打开；没存的草稿留着
+// Enter 保存，Shift+Enter 换行，Ctrl+Enter 保存并打开；没存的草稿留着。「项目的顺序」：列表里的项目按项目的顺序
 
-const list = [
-  { name: "生活", projects: ["购物", "旅行"] },
-  { name: "工作", projects: ["需求开发", "日常事务"] },
-  { name: "空的", projects: [] },
-];
+const ws = (name: string, projects: string[], order: Record<string, number> = {}, manualOrder = false): WorkspaceProjects => ({
+  name,
+  projects,
+  manualOrder,
+  order,
+});
+
+const list = [ws("生活", ["购物", "旅行"]), ws("工作", ["需求开发", "日常事务"]), ws("空的", [])];
 
 describe("存到哪个项目", () => {
   it("按工作区分组，名称排序，没有项目的工作区不列", () => {
@@ -45,13 +49,35 @@ describe("存到哪个项目", () => {
   });
 
   it("子项目跟在父项目后面，写成「父项目 / 子项目」；可以存到子项目里", () => {
-    const withSubs = [{ name: "工作", projects: ["需求开发/后端", "日常事务", "需求开发", "需求开发/前端"] }];
+    const withSubs = [ws("工作", ["需求开发/后端", "日常事务", "需求开发", "需求开发/前端"])];
     const sub = { workspace: "工作", project: "需求开发/前端" };
     const [group] = targetOptions(withSubs, sub);
     expect(group.options.map((o) => o.label)).toEqual(["日常事务", "需求开发", "需求开发 / 后端", "需求开发 / 前端"]);
     expect(group.options[3].title).toBe("工作 / 需求开发 / 前端");
     expect(parseTargetKey(group.options[3].value)).toEqual(sub);
     expect(targetExists(withSubs, sub)).toBe(true);
+  });
+
+  it("项目手动排序时按记下的顺序，没排过的排在后面（同侧栏）", () => {
+    const manual = [
+      ws("工作", ["需求开发", "日常事务", "需求开发/后端", "需求开发/前端", "杂项"], { 需求开发: 0, 日常事务: 1, "需求开发/前端": 0 }, true),
+    ];
+    expect(targetOptions(manual, null)[0].options.map((o) => o.label)).toEqual([
+      "需求开发",
+      "需求开发 / 前端",
+      "需求开发 / 后端",
+      "日常事务",
+      "杂项",
+    ]);
+    // 换成按名称时记下的顺序不管
+    const byName = [{ ...manual[0], manualOrder: false }];
+    expect(targetOptions(byName, null)[0].options.map((o) => o.label)).toEqual([
+      "日常事务",
+      "需求开发",
+      "需求开发 / 后端",
+      "需求开发 / 前端",
+      "杂项",
+    ]);
   });
 
   it("名字里有斜杠、引号也能对回去", () => {

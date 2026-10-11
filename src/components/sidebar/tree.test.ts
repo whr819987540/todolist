@@ -36,6 +36,7 @@ const todo = (id: string, done: boolean): TodoSummary => ({
 const project = (name: string, ...done: boolean[]): ProjectNode => ({
   name,
   todos: done.map((d, i) => todo(`${name}-${i}`, d)),
+  order: null,
 });
 
 describe("全部完成的项目", () => {
@@ -181,8 +182,9 @@ describe("「全部折叠 / 全部展开」看哪些项目", () => {
   const work: WorkspaceTree = {
     name: "工作",
     projects: [project("全完成", true, true), project("没完成", true, false), project("空的")],
+    manualOrder: false,
   };
-  const life: WorkspaceTree = { name: "生活", projects: [project("杂事", false)] };
+  const life: WorkspaceTree = { name: "生活", projects: [project("杂事", false)], manualOrder: false };
   /** 各工作区里折叠了哪些项目，没写的展开着（藏起来的全部完成的项目默认就是展开着的） */
   const folded =
     (m: Record<string, string[]>) =>
@@ -223,17 +225,21 @@ describe("「全部折叠 / 全部展开」看哪些项目", () => {
   });
 
   it("父项目折叠着：其中的子项目看不见，展开着也不算", () => {
-    const ws: WorkspaceTree = { name: "工作", projects: [project("p", false), project("p/a", false)] };
+    const ws: WorkspaceTree = { name: "工作", projects: [project("p", false), project("p/a", false)], manualOrder: false };
     expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p"] }), hiding())).toBe(false);
     expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p/a"] }), hiding())).toBe(true);
     expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p", "p/a"] }), hiding())).toBe(false);
   });
 
   it("单独藏起来的子项目展开着也不算", () => {
-    const ws: WorkspaceTree = { name: "工作", projects: [project("p", false), project("p/a", true)] };
+    const ws: WorkspaceTree = { name: "工作", projects: [project("p", false), project("p/a", true)], manualOrder: false };
     expect(anyVisibleProjectOpen([ws], folded({ 工作: ["p"] }), hiding())).toBe(false);
     expect(anyVisibleProjectOpen([ws], folded({}), hiding())).toBe(true);
-    const parentDone: WorkspaceTree = { name: "工作", projects: [project("p", true), project("p/a", true), project("q")] };
+    const parentDone: WorkspaceTree = {
+      name: "工作",
+      projects: [project("p", true), project("p/a", true), project("q")],
+      manualOrder: false,
+    };
     expect(anyVisibleProjectOpen([parentDone], folded({ 工作: ["q"] }), hiding())).toBe(false);
   });
 
@@ -250,6 +256,7 @@ describe("筛选时筛掉哪些项目", () => {
   const tagged = (name: string, ...todos: [string, boolean?][]): ProjectNode => ({
     name,
     todos: todos.map(([tag, done = false], i) => ({ ...todo(`${name}-${i}`, done), tags: tag ? [tag] : [] })),
+    order: null,
   });
   const work: TodoFilter = { ...NO_FILTER, tags: ["工作"] };
   const names = (s: ReadonlySet<string>) => [...s].sort();

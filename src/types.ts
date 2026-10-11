@@ -25,12 +25,16 @@ export interface ProjectNode {
   name: string;
   /** 只是这个项目自己的待办，不含子项目的 */
   todos: TodoSummary[];
+  /** 手动排序时在它那一层（工作区的顶层，或父项目里）的位置（从小到大）；没排过的（新建的、移进来的）为 null，排在后面 */
+  order: number | null;
 }
 
 export interface WorkspaceTree {
   name: string;
-  /** 全部项目，包括子项目（排好序后每个顶层项目后面跟着它的子项目） */
+  /** 全部项目，包括子项目（排好序后每个顶层项目后面跟着它的子项目，见 projects.ts 的 sortProjects） */
   projects: ProjectNode[];
+  /** 这个工作区的项目手动排序（在侧栏里拖动调整过）；false 时按名字排 */
+  manualOrder: boolean;
 }
 
 export interface WorkspaceInfo {
@@ -140,6 +144,10 @@ export interface QuickTarget {
 export interface WorkspaceProjects {
   name: string;
   projects: string[];
+  /** 这个工作区的项目手动排序 */
+  manualOrder: boolean;
+  /** 排过的项目（路径）在它那一层的位置，同 ProjectNode 的 order；没排过的不在里面 */
+  order: Record<string, number>;
 }
 
 /** 可以单独调字号的区域：左侧列表、右侧待办编辑区 */

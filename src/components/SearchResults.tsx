@@ -38,7 +38,7 @@ export default function SearchResults({ kw, workspaces, trees, hits, renderCard,
     const todos: { workspace: string; project: string; todo: TodoSummary; snippet: string | null }[] = [];
     for (const tree of trees ?? []) {
       const found = hits?.get(tree.name);
-      for (const p of sortProjects(tree.projects)) {
+      for (const p of sortProjects(tree.projects, tree.manualOrder)) {
         if (k && leafName(p.name).toLowerCase().includes(k))
           projects.push({ workspace: tree.name, project: p, todos: deepTodos(tree.projects, p.name) });
         for (const t of p.todos) {

@@ -10,7 +10,8 @@ import type { BatchActions } from "./workspaceActions";
 
 const tree = (name: string, ...projects: string[]): WorkspaceTree => ({
   name,
-  projects: projects.map((p) => ({ name: p, todos: [] })),
+  projects: projects.map((p) => ({ name: p, todos: [], order: null })),
+  manualOrder: false,
 });
 const todo: TodoSummary = {
   id: "a",

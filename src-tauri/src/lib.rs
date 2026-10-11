@@ -134,7 +134,8 @@ async fn delete_project(store: State<'_, Store>, workspace: String, name: String
     store.delete_project(&workspace, &name)
 }
 
-/// 项目（或子项目）移到工作区 target_workspace 的顶层，或放进它的项目 target_parent 里成为子项目；返回移过去后的路径
+/// 项目（或子项目）移到工作区 target_workspace 的顶层，或放进它的项目 target_parent 里成为子项目；返回移过去后的路径。
+/// order 是放下的位置：那一层从前到后的名字（含移过去的），记成那一层的顺序；没给时在那里排在后面
 #[tauri::command]
 async fn move_project(
     store: State<'_, Store>,
@@ -143,13 +144,32 @@ async fn move_project(
     name: String,
     target_workspace: String,
     target_parent: Option<String>,
+    order: Option<Vec<String>>,
 ) -> Cmd<String> {
-    let moved = store.move_project(&workspace, &name, &target_workspace, target_parent.as_deref())?;
+    let moved =
+        store.move_project(&workspace, &name, &target_workspace, target_parent.as_deref(), order.as_deref())?;
     follow_quick_target(&settings, |t| {
         let project = reparent(&t.project, &name, &moved)?;
         (t.workspace == workspace).then(|| QuickTarget { workspace: target_workspace.clone(), project })
     });
     Ok(moved)
+}
+
+/// 手动排序项目：names 是工作区的顶层（parent 为空）或父项目 parent 里的子项目从前到后的名字；这个工作区改成手动排序
+#[tauri::command]
+async fn reorder_projects(
+    store: State<'_, Store>,
+    workspace: String,
+    parent: Option<String>,
+    names: Vec<String>,
+) -> Cmd<()> {
+    store.reorder_projects(&workspace, parent.as_deref(), &names)
+}
+
+/// 工作区的项目改成手动排序（manual 为 true）或按名称；按名称时记下的顺序留着，换回手动排序时恢复
+#[tauri::command]
+async fn set_projects_manual(store: State<'_, Store>, workspace: String, manual: bool) -> Cmd<()> {
+    store.set_projects_manual(&workspace, manual)
 }
 
 /// 项目 from 改名、移动成 to 之后，路径 project 变成什么：就是它或它的子项目时跟着改，不相干时返回 None
@@ -1280,6 +1300,8 @@ pub fn run() {
             rename_project,
             delete_project,
             move_project,
+            reorder_projects,
+            set_projects_manual,
             create_todo,
             read_todo,
             save_todo_content,

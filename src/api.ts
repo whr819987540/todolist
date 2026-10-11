@@ -48,10 +48,25 @@ export const api = {
     invoke<string>("delete_project", { workspace, name }),
   /**
    * 连同其中的待办（和子项目）移到工作区 targetWorkspace 的顶层，或放进那里的顶层项目 targetParent 成为子项目；
-   * 名字不变，返回移过去后的路径
+   * 名字不变，返回移过去后的路径。order 是放下的位置：那一层从前到后的名字（含移过去的这个），记成那一层的顺序
+   * （那个工作区改成手动排序）；不给时在那里是没排过的，排在后面
    */
-  moveProject: (workspace: string, name: string, targetWorkspace: string, targetParent?: string) =>
-    invoke<string>("move_project", { workspace, name, targetWorkspace, targetParent: targetParent ?? null }),
+  moveProject: (workspace: string, name: string, targetWorkspace: string, targetParent?: string, order?: string[]) =>
+    invoke<string>("move_project", {
+      workspace,
+      name,
+      targetWorkspace,
+      targetParent: targetParent ?? null,
+      order: order ?? null,
+    }),
+  /**
+   * 手动排序项目：names 是工作区的顶层（parent 不给）或父项目 parent 里的子项目从前到后的名字，这个工作区改成手动排序。
+   * 本来按名称排时，别的层留着的旧顺序不再用
+   */
+  reorderProjects: (workspace: string, parent: string | undefined, names: string[]) =>
+    invoke<void>("reorder_projects", { workspace, parent: parent ?? null, names }),
+  /** 工作区的项目改成手动排序或按名称；按名称时记下的顺序留着，换回手动排序时恢复 */
+  setProjectsManual: (workspace: string, manual: boolean) => invoke<void>("set_projects_manual", { workspace, manual }),
 
   /**
    * content 是正文，不传时新建空白待办；带正文时正文和待办在同一次调用里建好。
