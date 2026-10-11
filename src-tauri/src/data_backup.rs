@@ -915,6 +915,67 @@ mod tests {
         assert_eq!(fp(), third);
     }
 
+    /// 自动备份的「数据有没有变」（docs/requirements.md「数据备份 → 自动备份」）：只调整了顶层项目的顺序（工作区里的
+    /// .projects.json）、只有父项目里的 .projects.json 在外部变了（网盘同步来的）、只换成了按名称、只在顶层项目的附件目录里
+    /// 加了图片，指纹都变
+    #[test]
+    fn fingerprint_sees_top_level_order_parent_order_and_images() {
+        let (_tmp, s) = setup("fingerprint-order");
+        let fp = || fingerprint(&collect(s.root()).unwrap());
+        let first = fp();
+        s.reorder_projects("工作", None, &["空项目".into(), "需求".into()]).unwrap();
+        let second = fp();
+        assert_ne!(second, first, "调整了顶层项目的顺序");
+        let pdir = s.project_path("工作", "需求").unwrap();
+        fs::write(pdir.join(store::ORDER_FILE), r#"{"order":["前端"]}"#).unwrap();
+        let third = fp();
+        assert_ne!(third, second, "父项目里的 .projects.json 在外部变了");
+        s.set_projects_manual("工作", false).unwrap();
+        let fourth = fp();
+        assert_ne!(fourth, third, "换成了按名称");
+        let todo = s.load_workspace("工作").unwrap().projects.into_iter().find(|p| p.name == "需求").unwrap().todos[0].id.clone();
+        s.save_image("工作", "需求", &todo, "png", &[137, 80, 78, 71]).unwrap();
+        assert_ne!(fp(), fourth, "顶层项目的附件目录里加了图片");
+    }
+
+    /// 工作区是不是手动排序，和各项目在它那一层里排第几
+    fn project_ranks(s: &Store, ws: &str) -> (bool, Vec<(String, Option<i64>)>) {
+        let tree = s.load_workspace(ws).unwrap();
+        let mut ranks: Vec<(String, Option<i64>)> = tree.projects.iter().map(|p| (p.name.clone(), p.order)).collect();
+        ranks.sort();
+        (tree.manual_order, ranks)
+    }
+
+    /// docs/requirements.md「数据备份 → 备份的内容」：备份之后工作区换回了按名称、父项目里的顺序在外部改了，
+    /// 恢复后又是手动排序，顶层项目、子项目的顺序和备份时一样
+    #[test]
+    fn switching_to_by_name_after_backup_is_restored() {
+        let (tmp, s) = setup("order");
+        s.create_sub_project("工作", "需求", "后端").unwrap();
+        s.reorder_projects("工作", None, &["需求".into(), "空项目".into()]).unwrap();
+        s.reorder_projects("工作", Some("需求"), &["后端".into(), "前端".into()]).unwrap();
+        let ordered = project_ranks(&s, "工作");
+        assert!(ordered.0 && ordered.1.iter().any(|(p, o)| p == "需求/后端" && *o == Some(0)), "{ordered:?}");
+
+        let backups = default_dir(s.root());
+        fs::create_dir_all(&backups).unwrap();
+        let zip = backups.join(file_name(time(10)));
+        pack(&s, &zip, time(10)).unwrap();
+        let names = entries(&zip);
+        for want in ["工作/.projects.json", "工作/需求/.projects.json"] {
+            assert!(names.contains(want), "缺 {want}：{names:?}");
+        }
+
+        s.set_projects_manual("工作", false).unwrap();
+        let pdir = s.project_path("工作", "需求").unwrap();
+        fs::write(pdir.join(store::ORDER_FILE), r#"{"order":["前端","后端"]}"#).unwrap();
+        assert_ne!(project_ranks(&s, "工作"), ordered);
+
+        restore_file(&s, &zip, &backups, time(11)).unwrap();
+        assert_eq!(project_ranks(&s, "工作"), ordered, "又是手动排序，项目的顺序和备份时一样");
+        drop(tmp);
+    }
+
     #[test]
     fn restore_replaces_data_and_keeps_the_rest() {
         let (tmp, s) = setup("restore");

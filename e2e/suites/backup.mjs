@@ -1,7 +1,8 @@
 // 待办数据的备份与恢复：启动后自动备份到数据目录旁边的 data-backups、设置里的状态，手动备份到本地（「另存为」「打开」对话框
 // 换成直接返回路径）、备份里有什么（多级子项目、各级的项目顺序 .projects.json、深处的附件目录），拿错了的备份和不安全的路径，
-// 恢复（分屏时两边打开着的待办先存盘、有存不上的就不恢复，换掉数据、各级的项目顺序和图片换回来、回收站不动、修改时间不变、
-// 整页重新加载、恢复出来的 .state.json 不被覆盖、快速记录小窗列出新的项目），自动备份的保留份数、数据没变时跳过、失败时在设置里写明原因
+// 恢复（分屏时两边打开着的待办先存盘、有存不上的就不恢复，换掉数据、各级的项目顺序（换成了按名称的又是手动排序）和图片换回来、
+// 回收站不动、修改时间不变、整页重新加载、恢复出来的 .state.json 不被覆盖、快速记录小窗列出新的项目），自动备份的保留份数、
+// 数据没变时跳过（只调整了项目的顺序也算变了）、失败时在设置里写明原因
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeZip, zipEntries, zipText } from "../lib/win.mjs";
@@ -176,8 +177,10 @@ export default async function (t) {
   await m.closeModal();
 
   // ----- 恢复 -----
-  // 备份之后：附件删了、新建了工作区和项目，深处的子项目的顺序在外部改了、图片删了、空的子项目删了、又建了第五级子项目
+  // 备份之后：附件删了、新建了工作区和项目，项目换回按名称，深处的子项目的顺序在外部改了、图片删了、空的子项目删了、
+  // 又建了第五级子项目
   rmSync(t.file("工作/需求/.assets"), { recursive: true, force: true });
+  await m.invoke("set_projects_manual", { workspace: "工作", manual: false });
   await m.invoke("create_workspace", { name: "临时" });
   await m.invoke("create_project", { workspace: "临时", name: "新项目" });
   t.write("工作/需求/.projects.json", JSON.stringify({ order: ["前端", "后端"] }));
@@ -274,6 +277,13 @@ export default async function (t) {
     !t.read("工作/需求/C.md").includes("没保存的修改") && !t.read("工作/需求/B.md").includes("没保存的修改") && t.exists("工作/需求/.assets/图.png"),
   );
   check("各级的项目顺序和备份时一样（外部改了的也换回来）", JSON.stringify(readOrders()) === JSON.stringify(ordersAtBackup), { now: readOrders(), ordersAtBackup });
+  const tree = await m.invoke("load_workspace", { workspace: "工作" });
+  const rank = (p) => tree.projects.find((x) => x.name === p)?.order;
+  check(
+    "备份之后换成了按名称：恢复后又是手动排序，日常在需求前面、后端在前端前面",
+    tree.manualOrder === true && rank("日常") < rank("需求") && rank("需求/后端") < rank("需求/前端"),
+    { manual: tree.manualOrder, ranks: tree.projects.map((p) => [p.name, p.order]) },
+  );
   check(
     "多级子项目换成备份里的：深处的图片、删掉的空子项目回来了，后来建的第五级子项目不在了",
     t.exists(deepImage) && t.exists("工作/需求/后端") && !t.exists(`工作/${DEEP}/更深`),
@@ -319,13 +329,14 @@ export default async function (t) {
   status = await t.until(async () => /没有变化/.test(await statusText()) && (await statusText()));
   check("设置里说明数据没有变化", /没有变化/.test(status), await statusText());
 
-  t.write("工作/需求/新.md", "新的待办");
+  // 只调整了顶层项目的顺序（只有工作区里的 .projects.json 变了）也算数据变了
+  await m.invoke("reorder_projects", { workspace: "工作", parent: null, names: ["需求", "日常"] });
   const options = { enabled: true, dir: "", keep: 2, webdav: false };
   await m.invoke("set_auto_backup", options);
   await t.until(() => auto().length === 2 && !auto()[1].startsWith("TodoList-data-2020"), 15000);
   const kept = auto();
   check(
-    "数据变了就备份；只留最近 2 份，删掉最旧的，恢复前的那份不删",
+    "数据变了（只调整了项目的顺序也算）就备份；只留最近 2 份，删掉最旧的，恢复前的那份不删",
     kept.length === 2 && kept[0] === "TodoList-data-20200103-000000.zip" && !kept[1].startsWith("TodoList-data-2020") && beforeRestore().length === 1,
     { kept, before: beforeRestore() },
   );
