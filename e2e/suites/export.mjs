@@ -1,5 +1,5 @@
 // 导出：右键待办 / 编辑区上方的「…」/ 右键项目、工作区「导出」→「导出为 HTML」「导出为 PDF」（「另存为」对话框在页面里换成直接返回路径）；
-// 导出的 HTML 里有标题、状态、所在的位置、渲染后的表格和任务框、嵌进去的相对路径图片、找不到的图片的占位，正文里的 script 去掉了；
+// 导出的 HTML 里有标题、状态、优先级和标签、所在的位置、渲染后的表格和任务框、嵌进去的相对路径图片、找不到的图片的占位，正文里的 script 去掉了；
 // 导出前有没保存的修改时先存盘、导出的是最新的；项目连同子项目：确认框里的数目、目录和各节都在、顺序同侧栏（父项目自己的在前，
 // 子项目一章在后）、不含已完成的；工作区按项目分章；上次导出到的目录记住；PDF 的文件头、页数（每条待办从新的一页开始）、图片，
 // 打印用的窗口和临时文件用完就没了；取消、失败时的提示（导出 PDF 时选的文件被占用着：不打印、原来的文件不动）
@@ -62,6 +62,9 @@ export default async function (t) {
   // 一条已完成（沉底）、一条置顶（在最前）；等侧栏跟着变
   await m.invoke("set_todo_done", { workspace: "工作", project: "需求", id: "A", done: true });
   await m.invoke("set_todo_pinned", { workspace: "工作", project: "需求", id: "C", pinned: true });
+  // 图文有标签和优先级
+  await m.invoke("set_todo_tags", { workspace: "工作", project: "需求", id: "图文", tags: ["工作", "等回复"] });
+  await m.invoke("set_todo_priority", { workspace: "工作", project: "需求", id: "图文", priority: 3 });
   await m.emit("tauri://focus");
   await t.until(() =>
     m.ev(`return !!row("工作", "需求", "A")?.querySelector(".check.checked") && !!row("工作", "需求", "C")?.querySelector(".pin-mark")`),
@@ -120,6 +123,15 @@ export default async function (t) {
     "导出的 HTML：标题、状态、所在的位置、创建时间",
     html.includes(">图文</h1>") && html.includes("进行中") && html.includes("工作 / 需求") && /创建于 \d{4}-\d\d-\d\d \d\d:\d\d/.test(html),
     html.slice(0, 2000),
+  );
+  // 标签的颜色和软件里的同一个规则（tags.ts 的 tagColor）
+  const colors = await m.ev(`const url = performance.getEntriesByType("resource").map((e) => e.name).find((n) => n.includes("/src/tags.ts")) ?? "/src/tags.ts";
+    const { tagColor } = await import(url); return ["工作", "等回复"].map((x) => tagColor(x))`);
+  check(
+    "元信息里写上优先级（小旗子和「高优先级」）和标签（颜色同软件里的）",
+    /<span class="prio prio-3"><svg[^>]*>[\s\S]*?<\/svg>高优先级<\/span>/.test(html) &&
+      html.includes(`<span class="label tag-c${colors[0]}">工作</span><span class="label tag-c${colors[1]}">等回复</span>`),
+    { colors, meta: html.split('<div class="todo-meta">')[1]?.split("</div>")[0] },
   );
   check(
     "正文渲染成表格（带对齐）和只读的任务框",
