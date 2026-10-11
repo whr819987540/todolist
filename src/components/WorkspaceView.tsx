@@ -1001,6 +1001,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         menu={todoMenu(ta, project, todo, moveTargets(trees, ws))}
         onSummary={(s) => patchTodo(ws, project, s)}
         onToggleDone={() => ta.toggleDone(project, todo)}
+        onPriority={(priority) => ta.setPriority(project, todo, priority)}
         allTags={allTags}
         onTags={(tags) => ta.setTags(project, todo, tags)}
         onOpenExternal={() => ta.openExternal(project, todo)}

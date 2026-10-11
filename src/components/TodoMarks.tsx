@@ -1,10 +1,43 @@
-import { CloseOutlined, PlusOutlined } from "@ant-design/icons";
-import { App as AntApp, AutoComplete } from "antd";
+import { CloseOutlined, FlagFilled, FlagOutlined, PlusOutlined } from "@ant-design/icons";
+import { App as AntApp, AutoComplete, Select } from "antd";
 import { useRef, useState } from "react";
+import { PRIORITIES, priorityText } from "../priority";
 import { tagHit } from "../search";
 import { cleanTag, hasTag, suggestTags, tagClass, type TagCount, visibleTags } from "../tags";
+import type { Priority } from "../types";
 
-// 待办标题旁边的标记：标签（tag，和右侧的标签页不是一回事）
+// 待办标题旁边的标记：优先级的小旗子、标签（tag，和右侧的标签页不是一回事）
+
+/** 优先级的小旗子：高红、中橙、低蓝（浅色、深色各一套，在 styles.css 里），无优先级时什么都不显示 */
+export function PriorityFlag({ priority }: { priority: Priority }) {
+  if (!priority) return null;
+  return <FlagFilled className={`prio-flag prio-${priority}`} title={priorityText(priority)} aria-label={priorityText(priority)} />;
+}
+
+/** 选优先级用的一项：小旗子和文字（无优先级是空心的灰旗子） */
+export function PriorityLabel({ priority }: { priority: Priority }) {
+  return (
+    <span className="prio-label">
+      {priority ? <FlagFilled className={`prio-flag prio-${priority}`} /> : <FlagOutlined className="prio-flag prio-0" />}
+      {priorityText(priority)}
+    </span>
+  );
+}
+
+/** 编辑区上方元信息一行里的优先级下拉 */
+export function PrioritySelect({ value, onChange }: { value: Priority; onChange: (p: Priority) => void }) {
+  return (
+    <Select
+      className="prio-select"
+      size="small"
+      variant="borderless"
+      value={value}
+      onChange={onChange}
+      popupMatchSelectWidth={false}
+      options={PRIORITIES.map((p) => ({ value: p, label: <PriorityLabel priority={p} /> }))}
+    />
+  );
+}
 
 /**
  * 待办标题后面的标签：放不下时只显示前 max 个，后面是「+N」（悬停看全部）；搜索时名字里有关键字的加一圈描边

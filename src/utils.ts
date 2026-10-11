@@ -98,6 +98,9 @@ export function sortTodos(todos: TodoSummary[], key: SortKey): TodoSummary[] {
         return b.updatedAt - a.updatedAt;
       case "title":
         return compareName(displayTitle(a).text, displayTitle(b).text);
+      case "priority":
+        // 高的在前，同一档里按创建时间新的在前
+        return b.priority - a.priority || b.createdAt - a.createdAt;
       case "manual":
         // 没排过位置的（新建的、移过来的）在前，按创建时间新的在前；排过的按位置
         if (a.order == null || b.order == null)

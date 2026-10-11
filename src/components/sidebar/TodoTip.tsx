@@ -1,3 +1,4 @@
+import { priorityText } from "../../priority";
 import type { TodoSummary } from "../../types";
 import { displayTitle, fullTime } from "../../utils";
 
@@ -9,6 +10,7 @@ export default function TodoTip({ t }: { t: TodoSummary }) {
       <div>
         状态：{t.done ? "已完成" : "未完成"}
         {t.pinned && "，已置顶"}
+        {t.priority > 0 && `，${priorityText(t.priority)}`}
       </div>
       {t.tags.length > 0 && <div className="todo-tip-tags">标签：{t.tags.join("、")}</div>}
       <div>创建时间：{fullTime(t.createdAt)}</div>

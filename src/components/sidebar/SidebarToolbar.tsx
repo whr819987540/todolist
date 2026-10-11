@@ -25,6 +25,7 @@ const SORT_LABELS: Record<SortKey, string> = {
   created: "按创建时间",
   updated: "按修改时间",
   title: "按标题",
+  priority: "按优先级",
   manual: "手动排序",
 };
 
