@@ -3,7 +3,7 @@
 // 图片（深层项目里的也是）、找不到的图片的占位，正文里的 script 去掉了；导出前有没保存的修改时先存盘（分屏两边开着的都存）、
 // 导出的是最新的；项目连同各级子项目：确认框里的数目、目录和各节都在、顺序同侧栏（项目自己的待办在前，各级子项目一层层作为
 // 下一级的章，标题跟着加深）、不含已完成的；深层的子项目单独导出；工作区按项目一层层分章；上次导出到的目录记住；PDF 的文件头、
-// 页数、图片（深层项目里的也是），打印用的窗口和临时文件用完就没了；取消、失败时的提示
+// 页数（每条待办、每章从新的一页开始）、图片（深层项目里的也是），打印用的窗口和临时文件用完就没了；取消、失败时的提示
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -346,8 +346,8 @@ export default async function (t) {
   toast = await doneToast(120000);
   pdf = pdfOf(projectPdf);
   check(
-    "导出项目成 PDF：封面和目录一页，长的待办跨页，一级的子项目从新的一页开始，页数大致对",
-    pdf.subarray(0, 5).toString() === "%PDF-" && pages(pdf) >= 4 && pages(pdf) <= 20,
+    "导出项目成 PDF：封面和目录一页，每条待办（自己的 5 条）、各级子项目（「前端」和它的「页面」、「组件」和它的「按钮」）从新的一页开始，长的待办跨页，页数大致对",
+    pdf.subarray(0, 5).toString() === "%PDF-" && pages(pdf) >= 8 && pages(pdf) <= 24,
     { toast, size: pdf.length, pages: pages(pdf) },
   );
   // 深层的子项目：封面目录一页、自己的「页面」、下一级的「组件」从新的一页开始；「按钮」的图片印出来了

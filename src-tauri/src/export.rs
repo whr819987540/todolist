@@ -1190,9 +1190,15 @@ h4.todo-title, h5.todo-title, h6.todo-title { font-size: 18px; }
   .page { max-width: none; margin: 0; padding: 0; box-shadow: none; }
   .cover { padding-top: 0; }
   .cover-page { margin-bottom: 0; break-after: page; }
-  /* 一级的章（导出项目时的子项目、导出工作区时的顶层项目）从新的一页开始，更深的章接着排 */
-  .chapter.depth-1 { break-before: page; }
-  .chapter.depth-1 > .chapter-title { margin-top: 0; }
+  /* 每章（各级的子项目）从新的一页开始；一章自己没有待办、下面有子项目时，它的第一个子项目接在它的标题后面，
+     标题不单独占一页（导出的项目自己没有待办时，第一章本来就接在封面后面的分页上） */
+  .chapter { break-before: page; }
+  .chapter > .chapter-title { margin-top: 0; }
+  .chapter-title + .chapter { break-before: auto; }
+  /* 导出项目、工作区时每条待办从新的一页开始；紧跟在一章标题后面的、封面后面的第一条不再分页 */
+  .page:not(.single) .todo { break-before: page; }
+  .page:not(.single) .chapter-title + .todo, .page:not(.single) .own > .todo:first-child { break-before: auto; }
+  .todo + .todo { padding-top: 0; border-top: 0; }
   .chapter-title, .todo-head { break-after: avoid; break-inside: avoid; }
   .md img, .md tr, .img-missing { break-inside: avoid; }
   .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { break-after: avoid; }
