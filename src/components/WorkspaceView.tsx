@@ -461,25 +461,32 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const initialProject = initialSel.project;
   useEffect(() => reveal(initialWorkspace, initialProject), [initialWorkspace, initialProject, reveal]);
 
+  /** 右侧在有焦点的一边改显示工作区里的一处：它所在的工作区没选中时选中，展开它所在的分支（各级父项目） */
+  const showSel = (s: Selection) => {
+    if (!workspacesRef.current.includes(s.workspace)) setWorkspaces((list) => sortNames([...list, s.workspace]));
+    reveal(s.workspace, s.project);
+    setFocusTitleId(null);
+    setFocusBodyKey(null);
+    setSel(s);
+  };
+  /**
+   * 同 show，但先从磁盘重新加载（要打开的待办可能是刚在别处新建、外部改过的）。完成记录里点了一条时用默认的 showSel：
+   * 同搜索结果，分屏另一边已经开着它时也开在有焦点的这一边
+   */
+  const openFresh = async (s: Selection, show = showSel) => {
+    // 还没选中的工作区选中后会整个加载；已经显示着的先重新加载，否则新的待办还不在列表里，会被当成已删除退回上一级
+    if (workspacesRef.current.includes(s.workspace)) await reloadRef.current();
+    show(s);
+  };
+
   useImperativeHandle(handleRef, () => {
     const show = (s: Selection) => {
-      if (!workspacesRef.current.includes(s.workspace)) setWorkspaces((list) => sortNames([...list, s.workspace]));
-      reveal(s.workspace, s.project);
-      setFocusTitleId(null);
-      setFocusBodyKey(null);
-      // 要去的正是分屏另一边正显示着的待办：焦点移到那一边，不在这一边再开一个
+      // 要去的正是分屏另一边正显示着的待办（后退 / 前进）：焦点移到那一边，不在这一边再开一个
       const other = s.todoId ? otherTodos.findIndex((t) => !!t && sameTodo(t, s as TodoRef)) : -1;
       if (other >= 0) focusEditorGroup(other);
-      setSel(s);
+      showSel(s);
     };
-    return {
-      show,
-      async open(s) {
-        // 还没选中的工作区选中后会整个加载；已经显示着的先重新加载，否则新的待办还不在列表里，会被当成已删除退回上一级
-        if (workspacesRef.current.includes(s.workspace)) await reloadRef.current();
-        show(s);
-      },
-    };
+    return { show, open: (s) => openFresh(s, show) };
   });
 
   /**
@@ -1113,6 +1120,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         onTodoDoubleClick={onTodoDoubleClick}
         pickedMenu={pickedMenu}
         tagActions={tagActions}
+        doneHistory={{ version: loaded, onOpen: (t) => openFresh(t), onUndone: patchTodo }}
       />
       <div className="resizer" onMouseDown={startResize} onDoubleClick={() => setWidth(300)} title="拖动调整宽度，双击恢复默认" />
       <main className="main" ref={mainRef} tabIndex={-1}>
