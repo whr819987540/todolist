@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
-import { type Actions, batchMenu, moveTargets, projectMenu, todoMenu } from "./menus";
+import { type Actions, batchMenu, moveTargets, projectMenu, todoMenu, workspaceMenu } from "./menus";
 import type { BatchActions } from "./workspaceActions";
 
 // docs/requirements.md「右键工作区 / 项目 / 待办弹出操作菜单」：待办的「移动到」——只显示一个工作区时列出同一工作区的其他项目；
@@ -40,10 +40,20 @@ const shown = (label: unknown) =>
 const labels = (items: Item[] | undefined) => (items ?? []).map((i) => full(i.label));
 
 function actions() {
-  return { moveTodo: vi.fn(), togglePinned: vi.fn(), moveProject: vi.fn() } as unknown as Actions & {
+  return {
+    moveTodo: vi.fn(),
+    togglePinned: vi.fn(),
+    moveProject: vi.fn(),
+    exportTodo: vi.fn(),
+    exportProject: vi.fn(),
+    exportWorkspace: vi.fn(),
+  } as unknown as Actions & {
     moveTodo: ReturnType<typeof vi.fn>;
     togglePinned: ReturnType<typeof vi.fn>;
     moveProject: ReturnType<typeof vi.fn>;
+    exportTodo: ReturnType<typeof vi.fn>;
+    exportProject: ReturnType<typeof vi.fn>;
+    exportWorkspace: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -259,5 +269,41 @@ describe("批量菜单的「设置优先级」", () => {
     const low = (menu.items as Item[]).find((i) => i?.key === "priority")!.children![2];
     click(menu, low.key!);
     expect(b.setPriority).toHaveBeenCalledWith(items, 1);
+  });
+});
+
+// docs/requirements.md「导出」：待办、项目（哪一级的子项目都有）、工作区的菜单里「导出」→「导出为 HTML」；多选的批量操作里没有
+describe("菜单里的「导出」", () => {
+  const exportItem = (menu: MenuProps) => (menu.items as Item[]).find((i) => i?.key === "export");
+
+  it("待办、项目、各级子项目、工作区的菜单里都有，子菜单是「导出为 HTML」", () => {
+    for (const menu of [
+      todoMenu(actions(), "需求", todo, []),
+      todoMenu(actions(), "需求/前端/组件", todo, []),
+      projectMenu(actions(), "需求", []),
+      projectMenu(actions(), "需求/前端", []),
+      projectMenu(actions(), "需求/前端/组件/按钮", []),
+      workspaceMenu(actions()),
+    ]) {
+      const item = exportItem(menu)!;
+      expect(item.label).toBe("导出");
+      expect(labels(item.children)).toEqual(["导出为 HTML"]);
+    }
+  });
+
+  it("点了交给对应的导出：这条待办、这个项目（深层的子项目是它自己的路径）、这个工作区", () => {
+    const a = actions();
+    const pick = (menu: MenuProps) => click(menu, exportItem(menu)!.children![0].key!);
+    pick(todoMenu(a, "需求/前端/组件", todo, []));
+    pick(projectMenu(a, "需求/前端/组件", []));
+    pick(workspaceMenu(a));
+    expect(a.exportTodo).toHaveBeenCalledWith("需求/前端/组件", todo, "html");
+    expect(a.exportProject).toHaveBeenCalledWith("需求/前端/组件", "html");
+    expect(a.exportWorkspace).toHaveBeenCalledWith("html");
+  });
+
+  it("多选的批量操作里没有", () => {
+    const items: TodoAt[] = [{ workspace: "工作", project: "需求", todo }];
+    expect(exportItem(batchMenu(items, [], {} as BatchActions, () => {}))).toBeUndefined();
   });
 });

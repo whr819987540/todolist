@@ -23,6 +23,7 @@ import { addTags, allTodos, cleanTag, countTags, MAX_TAG_CHARS, removeTags, same
 import { priorityText } from "../priority";
 import type { Priority, TodoSummary, WorkspaceTree } from "../types";
 import type { TodoAt } from "./DragMove";
+import { useExport } from "./exportFlow";
 import { compareName, displayTitle, reorderedIds, sortTodos } from "../utils";
 import {
   forgetProjectState,
@@ -72,7 +73,7 @@ export interface ActionContext {
   /** 先存盘再返回首页 */
   goHome: () => void;
   /**
-   * 结构性操作（重命名、移动、删除）之前先把编辑器里的内容落盘（分屏时两边的都存）；返回没存好的那几条打开着的待办
+   * 结构性操作（重命名、移动、删除）、导出之前先把编辑器里的内容落盘（分屏时两边的都存）；返回没存好的那几条打开着的待办
    * （正文有冲突、弹出了冲突对话框，保存失败、已提示），都存好了（或没打开着待办）时是空的
    */
   flushEditors: () => Promise<TodoRef[]>;
@@ -129,6 +130,7 @@ export interface TagActions {
 export function useWorkspaceActions(ctx: ActionContext) {
   const { message, modal } = AntApp.useApp();
   const undoDelete = useUndoDelete();
+  const runExport = useExport();
   // 撤销删除时（提示停留的几秒里选中的工作区可能变了）用最新的 reload
   const reloadRef = useRef(ctx.reload);
   useEffect(() => {
@@ -307,6 +309,15 @@ export function useWorkspaceActions(ctx: ActionContext) {
         );
       },
       openWorkspaceFolder: () => run(() => api.openFolder(ws)),
+      exportWorkspace: (format) =>
+        runExport({
+          format,
+          scope: "workspace",
+          workspace: ws,
+          sortKey: listOptions.get(ws).sortKey,
+          // 分屏时两边开着的这个工作区里的待办都算
+          saveFirst: () => saveFirst("导出", (t) => t.workspace === ws),
+        }),
 
       newProject: () =>
         openDialog({
@@ -394,6 +405,16 @@ export function useWorkspaceActions(ctx: ActionContext) {
           updateTree(ws, (t) => ({ ...t, manualOrder: manual }));
         }),
       openProjectFolder: (project) => run(() => api.openFolder(ws, project)),
+      exportProject: (project, format) =>
+        runExport({
+          format,
+          scope: "project",
+          workspace: ws,
+          project,
+          sortKey: listOptions.get(ws).sortKey,
+          // 这个项目和它各级子项目里的，两边开着的都算
+          saveFirst: () => saveFirst("导出", inProjectOf(ws, project)),
+        }),
 
       newTodo: (project, title = "", open = true) =>
         run(async () => {
@@ -486,6 +507,16 @@ export function useWorkspaceActions(ctx: ActionContext) {
           await api.openTodoExternal(ws, project, t.id);
         }),
       revealTodo: (project, t) => run(() => api.revealTodo(ws, project, t.id)),
+      exportTodo: (project, t, format) =>
+        runExport({
+          format,
+          scope: "todo",
+          workspace: ws,
+          project,
+          todo: t.id,
+          sortKey: listOptions.get(ws).sortKey,
+          saveFirst: () => saveFirst("导出", isTodo(ws, project, t.id)),
+        }),
     };
   };
 
