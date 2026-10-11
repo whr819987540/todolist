@@ -1,6 +1,6 @@
 // 项目路径：顶层项目是它的名字，子项目是「父项目/子项目」（只有一层子项目；名字里不能有 /，不会和名字混淆）。
 // 和后端（store.rs）的约定相同。选中项、标签、.state.json、折叠状态、拖动、搜索结果等处的「项目」都是路径
-import type { ProjectNode, TodoSummary } from "./types";
+import type { ProjectNode, TodoSummary, WorkspaceTree } from "./types";
 import { compareName } from "./utils";
 
 export const PROJECT_SEP = "/";
@@ -70,6 +70,39 @@ export function projectMoveProblem(o: {
   const taken = o.to.some((p) => parentOf(p.name) === parent && leafName(p.name).toLowerCase() === name);
   if (taken) return { code: "taken", reason: parent === undefined ? "那里已有同名项目" : `「${parent}」里已有同名子项目` };
   return null;
+}
+
+/** projects 里 parent 那一层（parent 为 undefined 时是顶层）的项目自己的名字，按 projects 里的先后 */
+export const levelNames = (projects: readonly { name: string }[], parent: string | undefined): string[] =>
+  projects.filter((p) => parentOf(p.name) === parent).map((p) => leafName(p.name));
+
+/**
+ * 拖动调整项目的顺序后那一层从前到后的名字：level 是那一层现在的顺序（sortProjects 排好的，含藏起来的），
+ * 把 name 放到 target 的前面 / 后面；name 不在这一层时（从别处移过来的）插进去。target 不在了（刚被删掉）时不变
+ */
+export function reorderedNames(level: readonly string[], name: string, target: string, place: "before" | "after"): string[] {
+  const names = level.filter((n) => n !== name);
+  const at = names.indexOf(target);
+  if (at < 0 || name === target) return [...level];
+  names.splice(place === "before" ? at : at + 1, 0, name);
+  return names;
+}
+
+/**
+ * 记下 parent 那一层的顺序 names 之后的工作区（同 Rust 端 reorder_projects，没重新排序）：改成手动排序，这一层按 names
+ * 排（不分大小写，没列出的没排过）；本来按名称排的，别的层留着的旧顺序不再用
+ */
+export function withProjectOrder(tree: WorkspaceTree, parent: string | undefined, names: readonly string[]): WorkspaceTree {
+  const rank = new Map<string, number>();
+  names.forEach((n, i) => {
+    if (!rank.has(n.toLowerCase())) rank.set(n.toLowerCase(), i);
+  });
+  const projects = tree.projects.map((p) => {
+    const order =
+      parentOf(p.name) === parent ? (rank.get(leafName(p.name).toLowerCase()) ?? null) : tree.manualOrder ? p.order : null;
+    return order === p.order ? p : { ...p, order };
+  });
+  return { ...tree, manualOrder: true, projects };
 }
 
 /** 手动排序时两个项目在同一层里谁在前：排过的按位置，没排过的（null、undefined）排在后面；都没排过时一样 */

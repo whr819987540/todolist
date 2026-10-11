@@ -7,10 +7,14 @@ import {
   inProject,
   isSubProject,
   leafName,
+  levelNames,
+  parentOf,
   projectLabel,
+  reorderedNames,
   reparent,
   subProjectsOf,
   topProjects,
+  withProjectOrder,
 } from "../projects";
 import { dropTagFromFilter, renameTagInFilter, setFilter } from "../filter";
 import { addTags, allTodos, cleanTag, countTags, MAX_TAG_CHARS, removeTags, sameTag } from "../tags";
@@ -81,6 +85,8 @@ export interface ActionContext {
   /** 展开项目所在的分支（工作区、父项目和它自己） */
   reveal: (ws: string, project?: string) => void;
   updateTodos: (ws: string, project: string, fn: (todos: TodoSummary[]) => TodoSummary[]) => void;
+  /** 改一个已加载的工作区（项目的顺序），改完按项目的顺序重新排 */
+  updateTree: (ws: string, fn: (t: WorkspaceTree) => WorkspaceTree) => void;
   patchTodo: (ws: string, project: string, s: TodoSummary) => void;
   /** 新建的待办打开后聚焦标题 */
   setFocusTitleId: (id: string | null) => void;
@@ -144,6 +150,7 @@ export function useWorkspaceActions(ctx: ActionContext) {
     expand,
     reveal,
     updateTodos,
+    updateTree,
     patchTodo,
     setFocusTitleId,
     clearPicked,
@@ -223,6 +230,29 @@ export function useWorkspaceActions(ctx: ActionContext) {
     /** 右侧显示的是这个项目或它的子项目（概览或其中的待办）：改名、移动、删除它时要先存盘、跟过去 */
     const showsProject = (project: string) => inSel && sel.project !== undefined && inProject(sel.project, project);
     const isSelTodo = (project: string, id: string) => isSelProject(project) && sel.todoId === id;
+
+    /**
+     * 项目移到工作区 targetWs 的顶层，或那里的顶层项目 parent 里成为子项目；order 是放下的位置（那一层从前到后的名字），
+     * 不给时在那里排在后面。先存盘，状态（标签、编辑位置、折叠等）跟过去
+     */
+    const moveProjectTo = async (project: string, targetWs: string, parent: string | undefined, order?: string[]) => {
+      const isSel = showsProject(project);
+      if (isSel) await saveFirst("移动");
+      // 移过去后的路径：放进项目后是「父项目/名字」，子项目移出来后是名字
+      const to = await api.moveProject(ws, project, targetWs, parent, order);
+      if (isSel) editorRef.current?.detach();
+      moveProjectState(ws, project, targetWs, to);
+      // 折叠状态跟过去；展开目标工作区、放进的项目，看得到移过去的项目
+      moveCollapsed(ws, project, targetWs, to);
+      reveal(targetWs, to);
+      await reload();
+      if (isSel && sel.project)
+        setSel({ ...sel, workspace: targetWs, project: reparent(sel.project, project, to) }, "replace");
+      const there = targetWs === ws ? "" : `${targetWs} / `;
+      if (parent !== undefined) message.success(`已放进「${there}${parent}」`);
+      else if (targetWs === ws) message.success(order ? "已移出来" : "已移出来，放在顶层");
+      else message.success(`已移动到工作区「${targetWs}」`);
+    };
 
     return {
       goHome,
@@ -332,24 +362,27 @@ export function useWorkspaceActions(ctx: ActionContext) {
           },
         );
       },
-      moveProject: (project, targetWs, parent) =>
+      moveProject: (project, targetWs, parent) => run(() => moveProjectTo(project, targetWs, parent)),
+      placeProject: (project, targetWs, sibling, place) =>
         run(async () => {
-          const isSel = showsProject(project);
-          if (isSel) await saveFirst("移动");
-          // 移过去后的路径：放进项目后是「父项目/名字」，子项目移出来后是名字
-          const to = await api.moveProject(ws, project, targetWs, parent);
-          if (isSel) editorRef.current?.detach();
-          moveProjectState(ws, project, targetWs, to);
-          // 折叠状态跟过去；展开目标工作区、放进的项目，看得到移过去的项目
-          moveCollapsed(ws, project, targetWs, to);
-          reveal(targetWs, to);
-          await reload();
-          if (isSel && sel.project)
-            setSel({ ...sel, workspace: targetWs, project: reparent(sel.project, project, to) }, "replace");
-          const there = targetWs === ws ? "" : `${targetWs} / `;
-          if (parent !== undefined) message.success(`已放进「${there}${parent}」`);
-          else if (targetWs === ws) message.success("已移出来，放在顶层");
-          else message.success(`已移动到工作区「${targetWs}」`);
+          const target = treeOf(targetWs);
+          if (!target) return;
+          // 那一层现在的顺序（含藏起来的），把它放到 sibling 旁边
+          const parent = parentOf(sibling);
+          const names = reorderedNames(levelNames(target.projects, parent), leafName(project), leafName(sibling), place);
+          const wasManual = target.manualOrder;
+          if (targetWs === ws && parentOf(project) === parent) {
+            await api.reorderProjects(ws, parent, names);
+            updateTree(ws, (t) => withProjectOrder(t, parent, names));
+          } else await moveProjectTo(project, targetWs, parent, names);
+          if (!wasManual)
+            message.info(workspaces.length > 1 ? `「${targetWs}」的项目已改为手动排序` : "项目已改为手动排序", 4);
+        }),
+      setManualProjectOrder: (manual) =>
+        run(async () => {
+          if (!tree || tree.manualOrder === manual) return;
+          await api.setProjectsManual(ws, manual);
+          updateTree(ws, (t) => ({ ...t, manualOrder: manual }));
         }),
       openProjectFolder: (project) => run(() => api.openFolder(ws, project)),
 

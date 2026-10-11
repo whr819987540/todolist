@@ -4,15 +4,18 @@ import {
   deepTodos,
   inProject,
   leafName,
+  levelNames,
   parentOf,
   projectMoveProblem,
   projectLabel,
+  reorderedNames,
   reparent,
   sortProjects,
   subProjectsOf,
   topProjects,
+  withProjectOrder,
 } from "./projects";
-import type { ProjectNode, TodoSummary } from "./types";
+import type { ProjectNode, TodoSummary, WorkspaceTree } from "./types";
 
 // docs/requirements.md「基础」：项目下可以建子项目，只有一层；子项目是项目文件夹里的子文件夹，路径写成「父项目/子项目」。
 // 「工作区界面 → 子项目」：侧栏里子项目列在父项目下面，按名字排；显示路径的地方写成「父项目 / 子项目」；
@@ -118,6 +121,70 @@ describe("项目的顺序", () => {
   it("没排过的父项目的子项目也照样跟着它", () => {
     const l = [at("乙/b", 0), at("乙"), at("甲", 0), at("乙/a", 1)];
     expect(sortProjects(l, true).map((p) => p.name)).toEqual(["甲", "乙", "乙/b", "乙/a"]);
+  });
+});
+
+// 「拖动移动项目」：拖到项目的上沿 / 下沿放在它前面 / 后面，放到的是它所在的那一层；藏起来的项目也算在那一层里。
+// 「项目的顺序」：调整后那个工作区改成手动排序；本来按名称排的，别的层留着的旧顺序不再用
+describe("拖动调整项目的顺序", () => {
+  const level = ["甲", "乙", "丙", "丁"];
+
+  it("一层的项目：顶层或一个父项目里的子项目，按现在的顺序", () => {
+    const ps = [{ name: "乙" }, { name: "乙/b" }, { name: "乙/a" }, { name: "甲" }, { name: "甲/c" }];
+    expect(levelNames(ps, undefined)).toEqual(["乙", "甲"]);
+    expect(levelNames(ps, "乙")).toEqual(["b", "a"]);
+    expect(levelNames(ps, "丙")).toEqual([]);
+  });
+
+  it("同一层里挪到目标的前面 / 后面", () => {
+    expect(reorderedNames(level, "甲", "丙", "before")).toEqual(["乙", "甲", "丙", "丁"]);
+    expect(reorderedNames(level, "甲", "丙", "after")).toEqual(["乙", "丙", "甲", "丁"]);
+    expect(reorderedNames(level, "丁", "甲", "before")).toEqual(["丁", "甲", "乙", "丙"]);
+    expect(reorderedNames(level, "乙", "丁", "after")).toEqual(["甲", "丙", "丁", "乙"]);
+  });
+
+  it("放回原处、放在自己旁边、目标不在了时不变", () => {
+    expect(reorderedNames(level, "乙", "丙", "before")).toEqual(level);
+    expect(reorderedNames(level, "乙", "甲", "after")).toEqual(level);
+    expect(reorderedNames(level, "乙", "乙", "after")).toEqual(level);
+    expect(reorderedNames(level, "甲", "戊", "before")).toEqual(level);
+  });
+
+  it("从别处移过来的插进去", () => {
+    expect(reorderedNames(level, "戊", "乙", "after")).toEqual(["甲", "乙", "戊", "丙", "丁"]);
+    expect(reorderedNames([], "戊", "乙", "after")).toEqual([]);
+  });
+
+  const at = (name: string, order: number | null = null): ProjectNode => ({ name, todos: [], order });
+  const work = (manualOrder: boolean): WorkspaceTree => ({
+    name: "工作",
+    manualOrder,
+    projects: [at("需求", 0), at("需求/前端", 1), at("需求/后端", 0), at("日常", 1), at("日常/杂项", 0), at("零散")],
+  });
+  const shown = (t: WorkspaceTree) => sortProjects(t.projects, t.manualOrder).map((p) => `${p.name}:${p.order}`);
+
+  it("记下一层的顺序：改成手动排序，这一层按给的顺序（不分大小写），没给的没排过；别的层不动", () => {
+    const t = withProjectOrder(work(true), undefined, ["零散", "需求"]);
+    expect(t.manualOrder).toBe(true);
+    expect(shown(t)).toEqual(["零散:0", "需求:1", "需求/后端:0", "需求/前端:1", "日常:null", "日常/杂项:0"]);
+    const sub = withProjectOrder(work(true), "需求", ["前端", "后端"]);
+    expect(shown(sub)).toEqual(["需求:0", "需求/前端:0", "需求/后端:1", "日常:1", "日常/杂项:0", "零散:null"]);
+  });
+
+  it("本来按名称排的：别的层留着的旧顺序不再用，和调整前看到的一样按名字", () => {
+    const t = withProjectOrder(work(false), "需求", ["后端", "前端"]);
+    expect(t.manualOrder).toBe(true);
+    // 中文按拼音：零散、日常、需求
+    expect(shown(t)).toEqual(["零散:null", "日常:null", "日常/杂项:null", "需求:null", "需求/后端:0", "需求/前端:1"]);
+  });
+
+  it("位置没变的项目还是原来的对象（侧栏的行不必重新渲染）", () => {
+    const before = work(true);
+    const after = withProjectOrder(before, undefined, ["日常", "需求", "零散"]);
+    expect(after.projects[1]).toBe(before.projects[1]);
+    expect(after.projects[4]).toBe(before.projects[4]);
+    expect(after.projects[3]).not.toBe(before.projects[3]);
+    expect(after.projects[3].order).toBe(0);
   });
 });
 

@@ -366,6 +366,19 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     [],
   );
 
+  /** 改一个工作区（项目的顺序），改完重新排；fn 原样返回时什么都不改 */
+  const updateTree = useCallback((ws: string, fn: (t: WorkspaceTree) => WorkspaceTree) => {
+    setLoaded((ts) => {
+      if (!ts) return ts;
+      const next = ts.map((t) => {
+        if (t.name !== ws) return t;
+        const changed = fn(t);
+        return changed === t ? t : sortTree(changed);
+      });
+      return sameItems(next, ts) ? ts : next;
+    });
+  }, []);
+
   /** 只替换已有条目：保存回调晚到时不会把已删除/移走的待办加回来；内容没变时什么都不改（侧栏不必重新渲染） */
   const patchTodo = useCallback(
     (ws: string, project: string, s: TodoSummary) =>
@@ -446,6 +459,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     expand,
     reveal,
     updateTodos,
+    updateTree,
     patchTodo,
     setFocusTitleId,
     clearPicked,
@@ -528,8 +542,10 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         return;
       }
       const a = actionsFor(item.workspace);
-      if (item.kind === "project") a.moveProject(item.project, target.workspace, target.project);
-      else if (target.todoId && target.place) a.reorderTodo(item.project, item.todo.id, target.todoId, target.place);
+      if (item.kind === "project") {
+        if (target.sibling && target.place) a.placeProject(item.project, target.workspace, target.sibling, target.place);
+        else a.moveProject(item.project, target.workspace, target.project);
+      } else if (target.todoId && target.place) a.reorderTodo(item.project, item.todo.id, target.todoId, target.place);
       else if (target.project) a.moveTodo(item.project, item.todo, target.project, target.workspace);
     },
   });

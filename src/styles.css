@@ -1154,6 +1154,32 @@ body.drag-moving .tree-row:hover .row-count {
 .list-row.drop-after {
   box-shadow: inset 0 -2px 0 var(--c-primary);
 }
+/* 项目放在另一个项目旁边：插入线画在那个项目整块（连同展开着的子项目、待办）的上面 / 下面；放不下时标红 */
+.project-branch {
+  position: relative;
+}
+.project-branch.drop-before::before,
+.project-branch.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--c-primary);
+  pointer-events: none;
+  z-index: 1;
+}
+.project-branch.drop-before::before {
+  top: -1px;
+}
+.project-branch.drop-after::after {
+  bottom: -1px;
+}
+.project-branch.drop-line-refused::before,
+.project-branch.drop-line-refused::after {
+  background: var(--c-error);
+}
 .drop-target {
   border-radius: 8px;
   background: color-mix(in srgb, var(--c-primary) 7%, transparent);

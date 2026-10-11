@@ -43,6 +43,13 @@ export interface Actions {
   deleteProject(project: string): void;
   /** 连同其中的待办（和子项目）移到工作区 targetWorkspace 的顶层，或放进那里的顶层项目 targetParent 成为子项目 */
   moveProject(project: string, targetWorkspace: string, targetParent?: string): void;
+  /**
+   * 放在工作区 targetWorkspace 里的项目 sibling 的前面 / 后面：同一层是调整顺序，不在同一层是移过去放在那里；
+   * 那个工作区改成手动排序
+   */
+  placeProject(project: string, targetWorkspace: string, sibling: string, place: "before" | "after"): void;
+  /** 这个工作区的项目改成手动排序（manual 为 true）或按名称 */
+  setManualProjectOrder(manual: boolean): void;
   openProjectFolder(project: string): void;
 
   /** open=true 时创建后立即打开并聚焦标题；返回是否创建成功（失败时已弹出提示） */

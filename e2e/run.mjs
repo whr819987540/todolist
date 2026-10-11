@@ -30,6 +30,7 @@ const SUITES = [
   "recycle",
   "hidedone",
   "subprojects",
+  "projectorder",
   "tabs",
   "conflict",
   "watch",
