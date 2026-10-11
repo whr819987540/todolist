@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { makeZip, zipEntries, zipText } from "../lib/win.mjs";
 
 export const title = "待办数据的备份与恢复";
+/** 测试数据默认关着自动备份（fixtures.mjs）：这个套件用软件的默认设置（开着） */
+export const settings = { autoBackup: undefined };
 
 export default async function (t) {
   const { check } = t;

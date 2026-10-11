@@ -175,7 +175,8 @@ async function main() {
       const suite = await import(`./suites/${name}.mjs`);
       console.log(`\n■ ${suite.title ?? name}`);
       try {
-        await t.restart({ fresh: true });
+        // 套件可以导出 settings，盖在测试数据默认的设置上（fixtures.mjs）
+        await t.restart({ fresh: true, settings: suite.settings });
         await suite.default(t);
       } catch (e) {
         failed++;

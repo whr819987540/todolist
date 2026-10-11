@@ -19,8 +19,18 @@ const dayName = (ms) => {
   return `${year}${d.getMonth() + 1}月${d.getDate()}日 ${WEEK[d.getDay()]}`;
 };
 
+/** 离半夜 12 点不到这么久时先等过了半夜再跑：「今天」「昨天」、最近 7 天的范围在跑的中途换了的话，分组和条数都对不上 */
+const MIDNIGHT_MARGIN = 5 * 60_000;
+
 export default async function (t) {
   const { main: m, check } = t;
+  const midnight = new Date();
+  midnight.setHours(24, 0, 0, 0);
+  const left = midnight.getTime() - Date.now();
+  if (left < MIDNIGHT_MARGIN) {
+    console.log(`  … 离半夜 12 点不到 ${Math.ceil(left / 1000)} 秒，等过了半夜再跑`);
+    await t.sleep(left + 15_000);
+  }
   await m.viewport(1200, 900);
 
   // 测试数据：A 刚完成，接口里没有标题的一条刚完成，B 昨天 21:30，D 3 天前 9:15，E 10 天前（不在最近 7 天里），
