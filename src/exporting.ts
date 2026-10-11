@@ -11,13 +11,19 @@ const EXPORT_DIR_KEY = "exportDir";
 export const FORMAT_LABELS: Record<ExportFormat, string> = { html: "HTML", pdf: "PDF" };
 
 /**
- * 导出项目（连同子项目；project 不给时是整个工作区）时导出哪些待办、什么顺序：项目按侧栏的顺序（顶层项目按名字，
- * 每个后面跟着它的子项目，所以父项目自己的待办在前、子项目在后），项目里的待办按侧栏的排序（sortTodos：置顶的在前、
- * 已完成的沉底）。已完成的也列上，导不导由「包含已完成的待办」决定（Rust 端去掉），侧栏里隐藏了的也一样
+ * 导出项目（连同子项目；project 不给时是整个工作区）时导出哪些待办、什么顺序：项目按侧栏的顺序（sortProjects：
+ * 这个工作区按名称时按名字，手动排序（manual）时按调整过的顺序；每个顶层项目后面跟着它的子项目，所以父项目自己的待办在前、
+ * 子项目在后），项目里的待办按侧栏的排序（sortTodos：置顶的在前、已完成的沉底，含按优先级）。已完成的也列上，
+ * 导不导由「包含已完成的待办」决定（Rust 端去掉），侧栏里隐藏了的也一样
  */
-export function exportGroups(projects: readonly ProjectNode[], project: string | undefined, sortKey: SortKey): ExportGroup[] {
+export function exportGroups(
+  projects: readonly ProjectNode[],
+  project: string | undefined,
+  sortKey: SortKey,
+  manual = false,
+): ExportGroup[] {
   const chosen = project === undefined ? projects : projects.filter((p) => inProject(p.name, project));
-  return sortProjects(chosen).map((p) => ({ project: p.name, ids: sortTodos(p.todos, sortKey).map((t) => t.id) }));
+  return sortProjects(chosen, manual).map((p) => ({ project: p.name, ids: sortTodos(p.todos, sortKey).map((t) => t.id) }));
 }
 
 /** 导出的范围里一共几条、已完成几条（确认框里写的） */

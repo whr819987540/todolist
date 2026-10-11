@@ -12,7 +12,7 @@ import {
 } from "./exporting";
 import type { ProjectNode, TodoSummary } from "./types";
 
-// docs/requirements.md「导出」：导出项目时父项目自己的待办在前，子项目各一章在后（按名字排，同侧栏）；导出工作区时
+// docs/requirements.md「导出」：导出项目时父项目自己的待办在前，子项目各一章在后（按项目的顺序，同侧栏）；导出工作区时
 // 每个顶层项目一章，子项目跟在它后面；待办的顺序同侧栏（排序方式、置顶的在前、已完成的沉底），侧栏里隐藏的已完成也交给
 // Rust 端（导不导看「包含已完成的待办」）。默认目录是上次导出到的目录，只记在本机
 
@@ -76,6 +76,59 @@ describe("导出哪些待办、什么顺序", () => {
       "需求/前端",
       "需求池",
     ]);
+  });
+
+  // docs/requirements.md「项目的顺序」「导出 → 导出的内容」：工作区手动排序时，章的顺序按调整过的；没排过的排在后面、彼此按名字
+  const ordered = (name: string, order: number | null): ProjectNode => ({ ...project(name), order });
+  const manualProjects = [
+    ordered("日常", 1),
+    ordered("需求", 0),
+    ordered("需求/后端", null),
+    ordered("需求/前端", 0),
+    ordered("需求/测试", 1),
+    ordered("新建的", null),
+  ];
+
+  it("工作区手动排序时：顶层项目、子项目都按调整过的顺序，没排过的在后面", () => {
+    expect(exportGroups(manualProjects, undefined, "created", true).map((g) => g.project)).toEqual([
+      "需求",
+      "需求/前端",
+      "需求/测试",
+      "需求/后端",
+      "日常",
+      "新建的",
+    ]);
+    expect(exportGroups(manualProjects, "需求", "created", true).map((g) => g.project)).toEqual([
+      "需求",
+      "需求/前端",
+      "需求/测试",
+      "需求/后端",
+    ]);
+  });
+
+  it("按名称时记着的顺序不算（按拼音）", () => {
+    expect(exportGroups(manualProjects, undefined, "created", false).map((g) => g.project)).toEqual([
+      "日常",
+      "新建的",
+      "需求",
+      "需求/测试",
+      "需求/后端",
+      "需求/前端",
+    ]);
+  });
+
+  it("侧栏按优先级排时：高的在前，同一档里新建的在前；置顶的仍在前、已完成的仍沉底", () => {
+    const list = [
+      project("需求", [
+        todo({ id: "低", priority: 1, createdAt: 9 }),
+        todo({ id: "高旧", priority: 3, createdAt: 1 }),
+        todo({ id: "高新", priority: 3, createdAt: 2 }),
+        todo({ id: "无", createdAt: 8 }),
+        todo({ id: "置顶", pinned: true }),
+        todo({ id: "完成的高", priority: 3, done: true }),
+      ]),
+    ];
+    expect(exportGroups(list, "需求", "priority")[0].ids).toEqual(["置顶", "高新", "高旧", "低", "无", "完成的高"]);
   });
 
   it("确认框里的数目：范围里一共几条、已完成几条（含子项目里的）", () => {

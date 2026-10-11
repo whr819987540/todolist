@@ -30,7 +30,7 @@ export interface ExportPlan {
 const DONE_SECONDS = 10;
 
 /**
- * 导出成 HTML / PDF 的流程：先存盘（存不上不导出）→ 导出项目、工作区时重新读一遍数据，按侧栏的排序排好，确认
+ * 导出成 HTML / PDF 的流程：先存盘（存不上不导出）→ 导出项目、工作区时重新读一遍数据，按侧栏的排序和项目的顺序排好，确认
  * 「包含已完成的待办」→「另存为」对话框（Rust 端，从上次导出到的目录打开）→ 在后台导出，期间显示「正在导出…」→
  * 提示存到了哪里，带「打开」「在文件夹中显示」；失败时写明原因
  */
@@ -78,9 +78,9 @@ export function useExport() {
           if (!plan.project || !plan.todo) return;
           groups = [{ project: plan.project, ids: [plan.todo] }];
         } else {
-          // 按现在磁盘上的数据：刚存的标题、外部的修改都算上
+          // 按现在磁盘上的数据：刚存的标题、外部的修改、项目的顺序（.projects.json）都算上
           const tree = await api.loadWorkspace(plan.workspace);
-          groups = exportGroups(tree.projects, plan.project, plan.sortKey);
+          groups = exportGroups(tree.projects, plan.project, plan.sortKey, tree.manualOrder);
           const { total, done } = exportCounts(tree.projects, groups);
           const choice = await askIncludeDone(exportTitle(plan.format, plan.workspace, plan.project), plan.scope, total, done);
           if (choice === null) return;
