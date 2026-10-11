@@ -1,7 +1,7 @@
 //! 待办数据的备份与恢复（设置的备份见 backup.rs）。
 //!
 //! 备份包是 zip，文件名 `TodoList-data-年月日-时分秒.zip`：数据目录里的各工作区文件夹（项目、子项目、待办正文、
-//! `.todos.json`，项目里点开头的附件目录等，保存时的临时文件除外）和 `.state.json`，外加说明文件 `backup.json`
+//! `.todos.json`、项目的顺序 `.projects.json`、图片的附件目录 `.assets` 等，保存时的临时文件除外）和 `.state.json`，外加说明文件 `backup.json`
 //! （类型、软件版本、备份时间、工作区数和待办数、指纹、各文件和文件夹的修改时间）。
 //! 不含软件的回收站 `.recycle`、`.trash`、设置文件、WebDAV 设置，也不含数据目录里工作区文件夹以外的别的文件。
 //!
@@ -792,6 +792,70 @@ mod tests {
         // 正文改了（大小变了）
         s.save_todo_content("工作", "新项目", &t.id, "改过的正文", None, true).unwrap();
         assert_ne!(fp(), third);
+    }
+
+    /// 工作区、项目的 (名字, 在那一层里排第几) 和工作区是不是手动排序
+    fn project_ranks(s: &Store, ws: &str) -> (bool, Vec<(String, Option<i64>)>) {
+        let tree = s.load_workspace(ws).unwrap();
+        let mut ranks: Vec<(String, Option<i64>)> = tree.projects.iter().map(|p| (p.name.clone(), p.order)).collect();
+        ranks.sort();
+        (tree.manual_order, ranks)
+    }
+
+    /// docs/requirements.md「数据备份 → 备份的内容」：项目的顺序（工作区、父项目文件夹里的 .projects.json）和正文里的图片
+    /// （项目文件夹里的附件目录 .assets/{待办 id}/）都在备份里，恢复后项目的顺序、图片和备份时一样
+    #[test]
+    fn project_order_and_images_are_backed_up_and_restored() {
+        let (tmp, s) = setup("order");
+        s.create_sub_project("工作", "需求", "后端").unwrap();
+        s.reorder_projects("工作", None, &["需求".into(), "空项目".into()]).unwrap();
+        s.reorder_projects("工作", Some("需求"), &["后端".into(), "前端".into()]).unwrap();
+        let todo = s.create_todo("工作", "需求/前端", "截图", "").unwrap();
+        let img = s.save_image("工作", "需求/前端", &todo.id, "png", &[137, 80, 78, 71]).unwrap();
+        s.save_todo_content("工作", "需求/前端", &todo.id, &format!("![截图]({})", img.link), None, true).unwrap();
+        let ordered = project_ranks(&s, "工作");
+        assert!(ordered.0 && ordered.1.iter().any(|(p, o)| p == "需求/后端" && *o == Some(0)), "{ordered:?}");
+
+        let backups = default_dir(s.root());
+        fs::create_dir_all(&backups).unwrap();
+        let zip = backups.join(file_name(time(10)));
+        pack(&s, &zip, time(10)).unwrap();
+        let names = entries(&zip);
+        let image = format!("工作/需求/前端/{}", img.link);
+        for want in ["工作/.projects.json", "工作/需求/.projects.json", image.as_str()] {
+            assert!(names.contains(want), "缺 {want}：{names:?}");
+        }
+
+        // 备份之后：工作区换回按名称，子项目的顺序在外部改了（网盘同步来的），图片删了
+        s.set_projects_manual("工作", false).unwrap();
+        let pdir = s.project_path("工作", "需求").unwrap();
+        fs::write(pdir.join(store::ORDER_FILE), r#"{"order":["前端","后端"]}"#).unwrap();
+        fs::remove_dir_all(s.project_path("工作", "需求/前端").unwrap().join(store::ASSETS_DIR)).unwrap();
+        assert_ne!(project_ranks(&s, "工作"), ordered);
+
+        restore_file(&s, &zip, &backups, time(11)).unwrap();
+        assert_eq!(project_ranks(&s, "工作"), ordered, "项目的顺序和备份时一样");
+        assert!(s.image_file("工作", "需求/前端", &img.link).is_ok(), "图片恢复了");
+        drop(tmp);
+    }
+
+    /// 自动备份的「数据有没有变」：只调整了项目的顺序、只在附件目录里加了图片也算变了
+    #[test]
+    fn fingerprint_sees_project_order_and_images() {
+        let (_tmp, s) = setup("fingerprint-order");
+        let fp = || fingerprint(&collect(s.root()).unwrap());
+        let first = fp();
+        s.reorder_projects("工作", None, &["空项目".into(), "需求".into()]).unwrap();
+        let second = fp();
+        assert_ne!(second, first, "调整了顶层项目的顺序（工作区里的 .projects.json）");
+        // 父项目里子项目的顺序（只改了它，比如网盘同步过来的）
+        let pdir = s.project_path("工作", "需求").unwrap();
+        fs::write(pdir.join(store::ORDER_FILE), r#"{"order":["前端"]}"#).unwrap();
+        let third = fp();
+        assert_ne!(third, second, "父项目里的 .projects.json");
+        let todo = s.load_workspace("工作").unwrap().projects.into_iter().find(|p| p.name == "需求").unwrap().todos[0].id.clone();
+        s.save_image("工作", "需求", &todo, "png", &[137, 80, 78, 71]).unwrap();
+        assert_ne!(fp(), third, "附件目录里加了图片");
     }
 
     #[test]

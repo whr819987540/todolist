@@ -1,6 +1,7 @@
 // 待办数据的备份与恢复：启动后自动备份到数据目录旁边的 data-backups、设置里的状态，手动备份到本地（「另存为」「打开」对话框
-// 换成直接返回路径）、备份里有什么，拿错了的备份和不安全的路径，恢复（先存盘、换掉数据、回收站不动、修改时间不变、整页重新加载、
-// 恢复出来的 .state.json 不被覆盖、快速记录小窗列出新的项目），自动备份的保留份数、数据没变时跳过、失败时在设置里写明原因
+// 换成直接返回路径）、备份里有什么（含项目的顺序 .projects.json、图片的附件目录），拿错了的备份和不安全的路径，恢复（先存盘、
+// 换掉数据、项目的顺序跟着换回来、回收站不动、修改时间不变、整页重新加载、恢复出来的 .state.json 不被覆盖、快速记录小窗列出新的项目），
+// 自动备份的保留份数、数据没变时跳过（只调整了项目的顺序也算变了）、失败时在设置里写明原因
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeZip, zipEntries, zipText } from "../lib/win.mjs";
@@ -58,6 +59,11 @@ export default async function (t) {
   writeFileSync(t.file("工作/需求/.assets/图.png"), Buffer.from([137, 80, 78, 71]));
   writeFileSync(t.file("工作/需求/.A.md.tmp"), "保存到一半");
   await m.invoke("delete_todo", { workspace: "工作", project: "日常", id: "D" });
+  // 项目手动排序：工作区里「需求」在「日常」前面，「需求」里的子项目「后端」在「前端」前面（记在两个 .projects.json 里）
+  for (const name of ["前端", "后端"]) await m.invoke("create_project", { workspace: "工作", name, parent: "需求" });
+  await m.invoke("reorder_projects", { workspace: "工作", parent: null, names: ["需求", "日常"] });
+  await m.invoke("reorder_projects", { workspace: "工作", parent: "需求", names: ["后端", "前端"] });
+  const orderAtBackup = { top: t.read("工作/.projects.json"), sub: t.read("工作/需求/.projects.json") };
   // 打开 A：.state.json 里记着它的标签（预览标签），强制写盘
   await m.enter("工作");
   await m.ev(`return await openTodo("工作", "需求", "A")`);
@@ -81,6 +87,11 @@ export default async function (t) {
     "备份里有项目里点开头的附件目录、.todos.json 和 .state.json",
     ["工作/需求/.assets/图.png", "工作/需求/.todos.json", ".state.json"].every((e) => manualEntries.includes(e)),
     manualEntries,
+  );
+  check(
+    "备份里有项目的顺序：工作区里的、父项目里的 .projects.json",
+    existsSync(manual) && zipText(manual, "工作/.projects.json") === orderAtBackup.top && zipText(manual, "工作/需求/.projects.json") === orderAtBackup.sub,
+    { entries: manualEntries.filter((e) => e.endsWith(".projects.json")), orderAtBackup },
   );
   check(
     "备份里没有软件回收站、保存时的临时文件、设置文件",
@@ -127,8 +138,10 @@ export default async function (t) {
   await m.closeModal();
 
   // ----- 恢复 -----
-  // 备份之后：附件删了、新建了工作区和项目、C 的正文改了还没保存（auto save 关着）
+  // 备份之后：附件删了、项目换回按名称、子项目的顺序在外部改了、新建了工作区和项目、C 的正文改了还没保存（auto save 关着）
   rmSync(t.file("工作/需求/.assets"), { recursive: true, force: true });
+  await m.invoke("set_projects_manual", { workspace: "工作", manual: false });
+  t.write("工作/需求/.projects.json", JSON.stringify({ order: ["前端", "后端"] }));
   await m.invoke("create_workspace", { name: "临时" });
   await m.invoke("create_project", { workspace: "临时", name: "新项目" });
   // 快速记录小窗弹出时列出现在的项目（有「临时」）
@@ -176,6 +189,14 @@ export default async function (t) {
   const cards = await m.ev(`return [...document.querySelectorAll(".ws-card .card-name")].map((c) => c.textContent)`);
   check("首页是备份里的工作区，后来建的不在了", !cards.includes("临时") && ["工作", "生活", "学习"].every((w) => cards.includes(w)) && !t.exists("临时"), cards);
   check("正文、附件换成备份里的", !t.read("工作/需求/C.md").includes("恢复前没保存的修改") && t.exists("工作/需求/.assets/图.png"));
+  const tree = await m.invoke("load_workspace", { workspace: "工作" });
+  const rank = (p) => tree.projects.find((x) => x.name === p)?.order;
+  check(
+    "项目的顺序换回备份里的：手动排序，需求在日常前面、后端在前端前面",
+    t.read("工作/.projects.json") === orderAtBackup.top && t.read("工作/需求/.projects.json") === orderAtBackup.sub &&
+      tree.manualOrder && rank("需求") < rank("日常") && rank("需求/后端") < rank("需求/前端"),
+    { manual: tree.manualOrder, ranks: tree.projects.map((p) => [p.name, p.order]) },
+  );
   check("文件的修改时间和备份时一样", Math.floor(statSync(t.file("工作/需求/B.md")).mtimeMs) === bMtime, [statSync(t.file("工作/需求/B.md")).mtimeMs, bMtime]);
   check("软件回收站里的东西不动", readdirSync(t.file(".recycle")).length === recycledBefore && recycledBefore === 1);
   const beforeZip = before.length ? join(BK, before[0]) : "";
@@ -209,13 +230,14 @@ export default async function (t) {
   status = await t.until(async () => /没有变化/.test(await statusText()) && (await statusText()));
   check("设置里说明数据没有变化", /没有变化/.test(status), await statusText());
 
-  t.write("工作/需求/新.md", "新的待办");
+  // 只调整了项目的顺序（只有 .projects.json 变了）也算数据变了
+  await m.invoke("reorder_projects", { workspace: "工作", parent: null, names: ["日常", "需求"] });
   const options = { enabled: true, dir: "", keep: 2, webdav: false };
   await m.invoke("set_auto_backup", options);
   await t.until(() => auto().length === 2 && !auto()[1].startsWith("TodoList-data-2020"), 15000);
   const kept = auto();
   check(
-    "数据变了就备份；只留最近 2 份，删掉最旧的，恢复前的那份不删",
+    "数据变了（只调整了项目的顺序也算）就备份；只留最近 2 份，删掉最旧的，恢复前的那份不删",
     kept.length === 2 && kept[0] === "TodoList-data-20200103-000000.zip" && !kept[1].startsWith("TodoList-data-2020") && beforeRestore().length === 1,
     { kept, before: beforeRestore() },
   );
