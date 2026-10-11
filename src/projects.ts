@@ -146,14 +146,31 @@ export function projectMoveProblem(o: {
 /** 同一级的名字按名字排（数字按大小）；只差大小写等、按名字排算一样的再按原文排，排出来的顺序总是固定的 */
 const compareSegment = (a: string, b: string) => compareName(a, b) || (a < b ? -1 : a > b ? 1 : 0);
 
-/** 同资源管理器的树：每个项目后面跟着它的各级子项目（列完一个项目的再列下一个），同一级的按名字排 */
-export function sortProjects<T extends { name: string }>(projects: readonly T[]): T[] {
-  const keyed = projects.map((p) => ({ p, parts: p.name.split(PROJECT_SEP) }));
+/** 手动排序时两个项目在同一层里谁在前：排过的按位置，没排过的（null、undefined）排在后面；都没排过时一样 */
+function compareOrder(a: number | null | undefined, b: number | null | undefined): number {
+  if (a == null || b == null) return Number(a == null) - Number(b == null);
+  return a - b;
+}
+
+/**
+ * 同资源管理器的树：每个项目后面跟着它的各级子项目（列完一个项目的再列下一个）。按名称（manual 为 false）时同一级的
+ * 按名字排；手动排序时每一层（工作区的顶层、哪一级的父项目里）排过的按位置（order，只在同一层里比），没排过的
+ * （新建的、移进来的）排在后面，彼此按名字
+ */
+export function sortProjects<T extends { name: string; order?: number | null }>(projects: readonly T[], manual = false): T[] {
+  const orderOf = new Map(projects.map((p) => [p.name, p.order]));
+  const keyed = projects.map((p) => {
+    const parts = p.name.split(PROJECT_SEP);
+    // 自己和各级父项目在各自那一层的位置：第 i 个是前 i + 1 级那个项目的
+    const ranks = manual ? parts.map((_, i) => orderOf.get(parts.slice(0, i + 1).join(PROJECT_SEP))) : [];
+    return { p, parts, ranks };
+  });
   keyed.sort((a, b) => {
     const n = Math.min(a.parts.length, b.parts.length);
     for (let i = 0; i < n; i++) {
-      const c = compareSegment(a.parts[i], b.parts[i]);
-      if (c) return c;
+      if (a.parts[i] === b.parts[i]) continue;
+      // 第一处不一样的是同一层里的两个项目（它们的父项目相同）
+      return (manual && compareOrder(a.ranks[i], b.ranks[i])) || compareSegment(a.parts[i], b.parts[i]);
     }
     return a.parts.length - b.parts.length;
   });

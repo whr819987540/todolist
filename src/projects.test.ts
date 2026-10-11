@@ -38,7 +38,7 @@ const todo = (id: string, done = false): TodoSummary => ({
   tags: [],
   priority: 0,
 });
-const project = (name: string, ...todos: TodoSummary[]): ProjectNode => ({ name, todos });
+const project = (name: string, ...todos: TodoSummary[]): ProjectNode => ({ name, todos, order: null });
 
 describe("项目路径", () => {
   it("子项目的路径是「父项目/子项目」，顶层项目就是名字", () => {
@@ -184,6 +184,81 @@ describe("多级子项目", () => {
     expect(counts.get("需求/前端/组件/按钮")).toEqual({ total: 1, undone: 1 });
     expect(counts.get("需求二")).toEqual({ total: 1, undone: 1 });
     expect(deepCounts([project("空的"), project("空的/子")]).get("空的")).toEqual({ total: 0, undone: 0 });
+  });
+});
+
+// 「项目的顺序」：按名称时各层按名字排；手动排序时各层（顶层、哪一级的父项目里）排过的按位置，没排过的排在后面、
+// 彼此按名字；子项目总跟在父项目后面
+describe("项目的顺序", () => {
+  const at = (name: string, order: number | null = null): ProjectNode => ({ name, todos: [], order });
+  const list = [
+    at("需求", 1),
+    at("需求/后端"),
+    at("需求/前端", 0),
+    at("需求/测试", 1),
+    at("日常", 0),
+    at("杂项"),
+    at("备忘"),
+    at("日常/零散", 5),
+  ];
+  const names = (manual: boolean) => sortProjects(list, manual).map((p) => p.name);
+
+  it("按名称时不看记下的位置", () => {
+    expect(names(false)).toEqual(["备忘", "日常", "日常/零散", "需求", "需求/测试", "需求/后端", "需求/前端", "杂项"]);
+  });
+
+  it("手动排序：排过的按位置，没排过的排在后面、彼此按名字；子项目跟在父项目后面，各父项目里各排各的", () => {
+    expect(names(true)).toEqual(["日常", "日常/零散", "需求", "需求/前端", "需求/测试", "需求/后端", "备忘", "杂项"]);
+  });
+
+  it("位置只在同一层里比，不连续也行", () => {
+    const l = [at("乙", 7), at("甲", 3), at("甲/x", 9), at("甲/y", 2), at("乙/z", 0)];
+    expect(sortProjects(l, true).map((p) => p.name)).toEqual(["甲", "甲/y", "甲/x", "乙", "乙/z"]);
+  });
+
+  it("没排过的父项目的子项目也照样跟着它", () => {
+    const l = [at("乙/b", 0), at("乙"), at("甲", 0), at("乙/a", 1)];
+    expect(sortProjects(l, true).map((p) => p.name)).toEqual(["甲", "乙", "乙/b", "乙/a"]);
+  });
+
+  it("层数不限：每一级的子项目在它的父项目里按位置，整枝跟着父项目", () => {
+    const l = [
+      at("A", 1),
+      at("A/B", 0),
+      at("A/B/甲"),
+      at("A/B/乙", 1),
+      at("A/B/丙", 0),
+      at("A/B/丙/深", 0),
+      at("A/C"),
+      at("Z", 0),
+      at("Z/Y"),
+      at("Z/X"),
+    ];
+    expect(sortProjects(l, true).map((p) => p.name)).toEqual([
+      "Z",
+      "Z/X",
+      "Z/Y",
+      "A",
+      "A/B",
+      "A/B/丙",
+      "A/B/丙/深",
+      "A/B/乙",
+      "A/B/甲",
+      "A/C",
+    ]);
+    // 按名称：各层都按名字
+    expect(sortProjects(l).map((p) => p.name)).toEqual([
+      "A",
+      "A/B",
+      "A/B/丙",
+      "A/B/丙/深",
+      "A/B/甲",
+      "A/B/乙",
+      "A/C",
+      "Z",
+      "Z/X",
+      "Z/Y",
+    ]);
   });
 });
 

@@ -9,7 +9,9 @@
 //!       .todos.json          标题、完成状态、置顶、标签、优先级、创建/修改时间等元数据
 //!       20260926-153012.md   待办正文（Markdown 纯文本）
 //!       .assets/{待办 id}/   这条待办的图片（附件目录），正文里写成相对地址 `.assets/{待办 id}/{文件名}`
-//!       {子项目}/            项目文件夹里的子文件夹是子项目，里面同样是 .todos.json、.md 和 .assets；子项目里还可以有子项目，层数不限
+//!       .projects.json       有子项目时：下一级子项目的顺序（手动排序时）
+//!       {子项目}/            项目文件夹里的子文件夹是子项目，里面同样是 .todos.json、.md、.assets 和 .projects.json；子项目里还可以有子项目，层数不限
+//!     .projects.json         顶层项目的顺序，和这个工作区的项目是不是手动排序
 //!   .state.json              界面状态：上次的位置、各待办的编辑位置等，内容由前端决定
 //!   .recycle/                软件的回收站：删除的工作区、项目、待办先放在这里，可以恢复
 //!     {条目 id}/entry.json   原来在哪里、标题和完成状态等
@@ -22,6 +24,10 @@
 //! Windows 上很多程序（资源管理器、用默认程序打开的编辑器、系统回收站）打不开超过 MAX_PATH（260）的路径，
 //! Rust 自己倒是能读写。层级多、名字长时路径会超过它，所以新建、移动、改名、恢复前先算好完整路径的长度，超过了就不做，
 //! 说明原因；还给软件的回收站留出了路径变长的余地，删除后还能整个移到系统回收站（[`PATH_LIMIT`]、`check_grow`）。
+//!
+//! 项目的顺序（.projects.json，每一层一个：工作区文件夹里的是顶层项目的，哪一级的项目文件夹里的是它下一级子项目的）
+//! 按项目的名字记、不分大小写。按名字排要用中文的拼音顺序，在前端排；这里只给出各项目在它那一层的顺序里排第几
+//! （没排过的没有）和工作区是不是手动排序，改名、移动、删除、恢复时跟着改。
 //!
 //! Markdown 文件是“待办是否存在”的唯一依据：元数据里有但文件不在的条目会被清理，
 //! 文件在但元数据里没有的（例如用户手动拷进来的 .md）会被自动补登记。
@@ -52,6 +58,9 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const META_FILE: &str = ".todos.json";
+/// 项目的顺序：工作区文件夹里的记着顶层项目的顺序和这个工作区是不是手动排序，项目（哪一级都行）文件夹里的记着它的
+/// 下一级子项目的顺序
+pub const ORDER_FILE: &str = ".projects.json";
 pub const UI_STATE_FILE: &str = ".state.json";
 const TRASH_DIR: &str = ".trash";
 pub const RECYCLE_DIR: &str = ".recycle";
@@ -148,6 +157,49 @@ impl MetaFile {
     }
 }
 
+/// 一层项目（工作区的顶层，或一个项目里的下一级子项目）的顺序（ORDER_FILE）。手改得读不懂的项当没有，
+/// 整个读不出来时当成没有这个文件（照常按名字排）
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ProjectOrder {
+    #[serde(default)]
+    version: u32,
+    /// 这个工作区的项目手动排序（只看工作区文件夹里的）；换成按名称时顺序留着，换回手动排序时恢复
+    #[serde(default, skip_serializing_if = "is_false", deserialize_with = "lenient_bool")]
+    manual: bool,
+    /// 这一层的项目（自己的名字）从前到后；没列出的排在后面
+    #[serde(default, deserialize_with = "lenient_names")]
+    order: Vec<String>,
+}
+
+impl ProjectOrder {
+    /// 名字（小写）→ 排第几；同一个名字（不分大小写）写了几次的按第一次
+    fn ranks(&self) -> HashMap<String, i64> {
+        let mut out = HashMap::new();
+        for (i, name) in self.order.iter().enumerate() {
+            out.entry(name.to_lowercase()).or_insert(i as i64);
+        }
+        out
+    }
+
+    /// 名字是 name（不分大小写）的排在第几
+    fn position(&self, name: &str) -> Option<usize> {
+        let name = name.to_lowercase();
+        self.order.iter().position(|n| n.to_lowercase() == name)
+    }
+}
+
+/// 读 `manual`：不是 true / false 的当 false
+fn lenient_bool<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(d)?.as_bool().unwrap_or(false))
+}
+
+/// 读 `order`：一组文字里的文字留下，别的去掉；不是一组时当没有
+fn lenient_names<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<String>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let raw = v.as_array().map(Vec::as_slice).unwrap_or_default();
+    Ok(raw.iter().filter_map(|n| n.as_str().map(str::to_string)).collect())
+}
+
 // ---------------------------------------------------------------------------
 // 返回给前端的结构
 // ---------------------------------------------------------------------------
@@ -180,14 +232,18 @@ pub struct ProjectNode {
     pub name: String,
     /// 只是这个项目自己的待办，不含子项目的
     pub todos: Vec<TodoSummary>,
+    /// 手动排序时在它那一层（工作区的顶层，或它的父项目里）排第几（从小到大）；没排过的为 null，排在后面
+    pub order: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceTree {
     pub name: String,
-    /// 全部项目：每个项目后面跟着它的各级子项目
+    /// 全部项目：每个项目后面跟着它的各级子项目（同一级的还没排序，前端按名字或手动排序的顺序排）
     pub projects: Vec<ProjectNode>,
+    /// 这个工作区的项目手动排序；false 时按名字排
+    pub manual_order: bool,
 }
 
 /// 一个工作区里的项目路径（快速记录选择存到哪里时用，不读待办），各级子项目跟在它的父项目后面
@@ -196,6 +252,10 @@ pub struct WorkspaceTree {
 pub struct WorkspaceProjects {
     pub name: String,
     pub projects: Vec<String>,
+    /// 这个工作区的项目手动排序
+    pub manual_order: bool,
+    /// 排过的项目（路径）在它那一层排第几，同 ProjectNode 的 order；没排过的不在里面
+    pub order: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -469,6 +529,23 @@ impl Store {
         Ok(())
     }
 
+    /// 同 create_dirs，建的是项目（和不在的各级父项目）的文件夹：新建的项目是没排过的，它那一层的顺序里记着的同名旧名字
+    /// （外部删掉、改名的）去掉，免得占了那个位置
+    fn create_project_dirs(&self, dir: &Path) -> io::Result<()> {
+        let missing: Vec<PathBuf> = dir
+            .ancestors()
+            .take_while(|d| *d != self.root && !d.is_dir())
+            .map(Path::to_path_buf)
+            .collect();
+        self.create_dirs(dir)?;
+        for d in &missing {
+            if let (Some(level), Some(name)) = (d.parent().filter(|p| *p != self.root), d.file_name()) {
+                let _ = forget_in_order(level, &name.to_string_lossy());
+            }
+        }
+        Ok(())
+    }
+
     // ----- 路径（给“打开 / 在资源管理器中显示”用） -----
 
     pub fn workspace_path(&self, ws: &str) -> Result<PathBuf> {
@@ -509,14 +586,16 @@ impl Store {
         Ok(out)
     }
 
-    /// 全部工作区和其中的项目路径（包括子项目），只列目录
+    /// 全部工作区和其中的项目路径（包括各级子项目）和项目的顺序，只列目录
     pub fn list_projects(&self) -> Result<Vec<WorkspaceProjects>> {
         let _g = self.guard();
         list_subdirs(&self.root)?
             .into_iter()
             .map(|(name, dir)| {
-                let projects = project_dirs(&dir)?.into_iter().map(|(p, _)| p).collect();
-                Ok(WorkspaceProjects { name, projects })
+                let dirs = project_dirs(&dir)?;
+                let (manual_order, order) = project_ranks(&dir, &dirs);
+                let projects = dirs.into_iter().map(|(p, _)| p).collect();
+                Ok(WorkspaceProjects { name, projects, manual_order, order: order.into_iter().collect() })
             })
             .collect()
     }
@@ -556,10 +635,13 @@ impl Store {
     pub fn load_workspace(&self, ws: &str) -> Result<WorkspaceTree> {
         let mut g = self.guard();
         let dir = self.ws_dir(ws)?;
+        let dirs = project_dirs(&dir)?;
+        let (manual_order, ranks) = project_ranks(&dir, &dirs);
         let mut projects = Vec::new();
         let mut scanned = HashSet::new();
-        for (name, pdir) in project_dirs(&dir)? {
+        for (name, pdir) in dirs {
             projects.push(ProjectNode {
+                order: ranks.get(&name).copied(),
                 name,
                 todos: scan_project(&pdir, Some(&mut g))?,
             });
@@ -570,17 +652,20 @@ impl Store {
         Ok(WorkspaceTree {
             name: ws.to_string(),
             projects,
+            manual_order,
         })
     }
 
     // ----- 项目 -----
 
+    /// 新建项目。新建的是没排过的，手动排序时排在后面（项目的顺序里留着同名的旧名字时去掉）
     pub fn create_project(&self, ws: &str, name: &str) -> Result<String> {
         let _g = self.guard();
         let dir = self.ws_dir(ws)?;
         let name = normalize_name(name, "项目")?;
         check_new_folder(&dir.join(&name), &place_label(ws, Some(&name)))?;
         create_child_dir(&dir, &name, "项目")?;
+        let _ = forget_in_order(&dir, &name);
         Ok(name)
     }
 
@@ -592,10 +677,12 @@ impl Store {
         let path = join_project(Some(parent), &name);
         check_new_folder(&dir.join(&name), &place_label(ws, Some(&path)))?;
         create_child_dir(&dir, &name, "子项目")?;
+        let _ = forget_in_order(&dir, &name);
         Ok(path)
     }
 
-    /// 改项目（或子项目）自己的名字，返回改名后的路径；子项目改名后还在原来的父项目里，它的各级子项目跟着
+    /// 改项目（或子项目）自己的名字，返回改名后的路径；子项目改名后还在原来的父项目里，它的各级子项目跟着。
+    /// 在项目的顺序里位置不变
     pub fn rename_project(&self, ws: &str, project: &str, new_name: &str) -> Result<String> {
         let _g = self.guard();
         let pdir = self.project_dir(ws, project)?;
@@ -608,10 +695,13 @@ impl Store {
             check_grow(&pdir, &pdir, &parent_dir.join(&new_name), &place_label(ws, Some(&renamed)))?;
         }
         rename_dir(&pdir, parent_dir, name, &new_name, what)?;
+        if name != new_name {
+            let _ = rename_in_order(parent_dir, name, &new_name);
+        }
         Ok(renamed)
     }
 
-    /// 放进软件的回收站（连同它的各级子项目），返回回收站里这一项的 id
+    /// 放进软件的回收站（连同它的各级子项目），返回回收站里这一项的 id；它那一层的顺序里去掉它
     pub fn delete_project(&self, ws: &str, project: &str) -> Result<String> {
         let mut g = self.guard();
         let pdir = self.project_dir(ws, project)?;
@@ -622,13 +712,26 @@ impl Store {
         }
         let id = self.recycle(&pdir, None, RecycleFile::new(RecycleKind::Project, ws, Some(project), name, count))?;
         g.forget_under(&pdir);
+        if let Some(level) = pdir.parent() {
+            let _ = forget_in_order(level, name);
+        }
         Ok(id)
     }
 
     /// 把项目（或子项目）连同其中的待办和各级子项目移到工作区 target 的顶层（parent 为 None），或者放进那里的
     /// 项目 parent（可以是子项目）里成为它的子项目；名字不变，返回移过去后的路径。
-    /// 不能放进它自己或它自己的子项目里；那里已有同名项目、移过去后路径太长时不移动
-    pub fn move_project(&self, ws: &str, project: &str, target: &str, parent: Option<&str>) -> Result<String> {
+    /// 不能放进它自己或它自己的子项目里；那里已有同名项目、移过去后路径太长时不移动。
+    /// 原来那一层的顺序里去掉它，它自己里面各级子项目的顺序跟着它走；只是从按名称排的工作区移到手动排序的工作区时去掉
+    /// （留着的是以前手动排序时的，没在用，看到的是按名字的，移过去后照样按名字）。order 是放下的位置：新的那一层从前到后的
+    /// 名字（含它），记成那一层的顺序（同 reorder_projects，那个工作区改成手动排序），没给时它在那里是没排过的
+    pub fn move_project(
+        &self,
+        ws: &str,
+        project: &str,
+        target: &str,
+        parent: Option<&str>,
+        order: Option<&[String]>,
+    ) -> Result<String> {
         let _g = self.guard();
         let pdir = self.project_dir(ws, project)?;
         let (_, name) = split_project(project);
@@ -652,10 +755,76 @@ impl Store {
         }
         let moved = join_project(parent, name);
         check_grow(&pdir, &pdir, &dst, &place_label(target, Some(&moved)))?;
+        let src_manual = read_order(&self.ws_dir(ws)?).manual;
+        let dst_manual = read_order(&self.ws_dir(target)?).manual;
         fs::rename(&pdir, &dst).map_err(|e| format!("移动失败，可能有文件正被其他程序占用：{e}"))?;
         note_own(&pdir);
         note_own(&dst);
+        // 顺序是附带的：已经移过去了，记不下时不报错（只是排在后面）
+        if let Some(from) = pdir.parent() {
+            let _ = forget_in_order(from, name);
+        }
+        if !src_manual && dst_manual {
+            clear_orders_under(&dst);
+        }
+        match order {
+            // 那个工作区本来按名称排时，别的各层留着的旧顺序去掉；从手动排序的工作区移过来的这个，里面的顺序是看得到的，留着
+            Some(names) => {
+                let _ = self.place_projects(target, parent, names, src_manual.then_some(dst.as_path()));
+            }
+            // 在那里是没排过的：那一层记着的同名旧名字（外部删掉、改名的）去掉
+            None => {
+                let _ = forget_in_order(&dst_parent, name);
+            }
+        }
         Ok(moved)
+    }
+
+    // ----- 项目的顺序 -----
+
+    /// 手动排序项目：names 是工作区 ws 的顶层（parent 为 None）或项目 parent（哪一级都行）里的下一级子项目从前到后的
+    /// 名字，记成那一层的顺序，这个工作区改成手动排序。不算修改，修改时间不变
+    pub fn reorder_projects(&self, ws: &str, parent: Option<&str>, names: &[String]) -> Result<()> {
+        let _g = self.guard();
+        self.place_projects(ws, parent, names, None)
+    }
+
+    /// 同 reorder_projects（调用方拿着锁）。本来按名称排时，别的各层（各级项目里）留着的旧顺序（上次手动排序留下的）
+    /// 也去掉：调整前看到的是按名字的，调整后别的层还是那样；keep（从手动排序的工作区移过来的项目）里面的不去掉
+    fn place_projects(&self, ws: &str, parent: Option<&str>, names: &[String], keep: Option<&Path>) -> Result<()> {
+        let ws_dir = self.ws_dir(ws)?;
+        let dir = match parent {
+            None => ws_dir.clone(),
+            Some(p) => self.project_dir(ws, p)?,
+        };
+        let mut top = read_order(&ws_dir);
+        if !top.manual {
+            top.order.clear();
+            for (_, pdir) in project_dirs(&ws_dir)? {
+                if pdir != dir && !keep.is_some_and(|k| pdir.starts_with(k)) {
+                    clear_order(&pdir)?;
+                }
+            }
+        }
+        top.manual = true;
+        if parent.is_some() {
+            write_order(&dir, ProjectOrder { order: names.to_vec(), ..Default::default() })?;
+        } else {
+            top.order = names.to_vec();
+        }
+        write_order(&ws_dir, top)
+    }
+
+    /// 工作区 ws 的项目改成手动排序（manual 为 true）或按名称。按名称时记下的顺序留着，换回手动排序时恢复
+    pub fn set_projects_manual(&self, ws: &str, manual: bool) -> Result<()> {
+        let _g = self.guard();
+        let dir = self.ws_dir(ws)?;
+        let mut o = read_order(&dir);
+        if o.manual == manual {
+            return Ok(());
+        }
+        o.manual = manual;
+        write_order(&dir, o)
     }
 
     // ----- 待办 -----
@@ -761,7 +930,7 @@ impl Store {
             let dir = project.split(PROJECT_SEP).fold(self.root.join(&ws), |d, p| d.join(p));
             if !dir.is_dir() {
                 check_new_folder(&dir, &place_label(&ws, Some(&project)))?;
-                self.create_dirs(&dir)
+                self.create_project_dirs(&dir)
                     .map_err(|e| format!("创建项目「{}」失败：{e}", project_label(&project)))?;
             }
         }
@@ -1347,7 +1516,7 @@ impl Store {
                 let project = f.project.clone().ok_or_else(gone)?;
                 // 项目（和它的各级父项目）不在了时逐级重新建
                 let pdir = project_parts(&project)?.iter().fold(self.root.join(&f.workspace), |d, p| d.join(p));
-                self.create_dirs(&pdir).map_err(|e| format!("恢复失败：{e}"))?;
+                self.create_project_dirs(&pdir).map_err(|e| format!("恢复失败：{e}"))?;
                 let mut meta = read_meta(&pdir)?;
                 let stem = f.name.strip_suffix(".md").unwrap_or(&f.name).to_string();
                 let mut todo = f.todo.clone().unwrap_or_else(|| {
@@ -1415,10 +1584,12 @@ impl Store {
                 let project = join_project(parent, &name);
                 // 恢复到原来的地方、用原来的名字时一定能恢复（删除前就在那里）；名字被占用、加了「（恢复）」变长了才检查
                 check_grow(&payload, &dir.join(&f.name), &dir.join(&name), &place_label(&f.workspace, Some(&project)))?;
-                self.create_dirs(&dir).map_err(|e| format!("恢复失败：{e}"))?;
+                self.create_project_dirs(&dir).map_err(|e| format!("恢复失败：{e}"))?;
                 fs::rename(&payload, dir.join(&name)).map_err(|e| format!("恢复失败：{e}"))?;
                 note_own(&dir.join(&name));
                 g.forget_under(&dir.join(&name));
+                // 恢复的是没排过的，手动排序时排在后面
+                let _ = forget_in_order(&dir, &name);
                 Restored { kind: f.kind, workspace: f.workspace.clone(), project: Some(project), todo_id: None, renamed }
             }
             RecycleKind::Workspace => {
@@ -1848,6 +2019,131 @@ fn write_meta(dir: &Path, meta: &MetaFile) -> Result<()> {
     };
     let json = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
     atomic_write(&dir.join(META_FILE), &json).map_err(|e| format!("写入元数据失败：{e}"))
+}
+
+// ---------------------------------------------------------------------------
+// 项目的顺序：每一层（工作区的顶层、各级项目里的下一级子项目）一个 ORDER_FILE，放在那一层的文件夹（工作区、父项目）里
+// ---------------------------------------------------------------------------
+
+/// 读文件夹 dir 里记着的那一层项目的顺序；没有、读不出来、手改坏了（不是 JSON、格式不对）的当成没有
+fn read_order(dir: &Path) -> ProjectOrder {
+    fs::read(dir.join(ORDER_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(strip_bom(&bytes)).ok())
+        .unwrap_or_default()
+}
+
+/// 写那一层项目的顺序：先去掉已经没有对应项目（dir 里的文件夹）的名字和重复的；什么都不用记（没有顺序、
+/// 不是手动排序）时删掉这个文件
+fn write_order(dir: &Path, mut o: ProjectOrder) -> Result<()> {
+    let present: HashSet<String> = list_subdirs(dir)?.into_iter().map(|(n, _)| n.to_lowercase()).collect();
+    let mut seen = HashSet::new();
+    o.order.retain(|n| {
+        let key = n.to_lowercase();
+        present.contains(&key) && seen.insert(key)
+    });
+    if !o.manual && o.order.is_empty() {
+        return clear_order(dir);
+    }
+    o.version = 1;
+    let json = serde_json::to_vec_pretty(&o).map_err(|e| e.to_string())?;
+    let path = dir.join(ORDER_FILE);
+    if fs::read(&path).is_ok_and(|old| old == json) {
+        return Ok(());
+    }
+    let time = dir_time(dir);
+    atomic_write(&path, &json).map_err(|e| format!("保存项目的顺序失败：{e}"))?;
+    restore_dir_time(dir, time);
+    Ok(())
+}
+
+/// 删掉文件夹 dir 里记着的项目的顺序；没有时什么都不做
+fn clear_order(dir: &Path) -> Result<()> {
+    let path = dir.join(ORDER_FILE);
+    let time = dir_time(dir);
+    match fs::remove_file(&path) {
+        Ok(()) => {
+            note_own(&path);
+            restore_dir_time(dir, time);
+            Ok(())
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("保存项目的顺序失败：{e}")),
+    }
+}
+
+/// 那一层的顺序里去掉名字是 name（不分大小写）的项目：删掉、移走了，或者新建、恢复了同名的（没排过，排在后面）。
+/// 没记着它时什么都不写
+fn forget_in_order(dir: &Path, name: &str) -> Result<()> {
+    let mut o = read_order(dir);
+    let Some(i) = o.position(name) else { return Ok(()) };
+    o.order.remove(i);
+    write_order(dir, o)
+}
+
+/// 项目改名后，在那一层的顺序里的位置不变；没记着它时什么都不写。记着的旧名字（外部删掉、改名的）里有和新名字同名的
+/// 去掉：不然写的时候去重会留下前面那个，位置就变了
+fn rename_in_order(dir: &Path, old: &str, new: &str) -> Result<()> {
+    let mut o = read_order(dir);
+    let Some(i) = o.position(old) else { return Ok(()) };
+    let new_key = new.to_lowercase();
+    let mut at = 0;
+    o.order.retain(|n| {
+        let keep = at == i || n.to_lowercase() != new_key;
+        at += 1;
+        keep
+    });
+    let i = o.position(old).unwrap_or(0);
+    o.order[i] = new.to_string();
+    write_order(dir, o)
+}
+
+/// 文件夹 dir 和它下面各级项目文件夹里记着的项目的顺序都去掉（项目从按名称排的工作区移到手动排序的工作区时）
+fn clear_orders_under(dir: &Path) {
+    let _ = clear_order(dir);
+    for (_, d) in project_dirs(dir).unwrap_or_default() {
+        let _ = clear_order(&d);
+    }
+}
+
+/// 文件夹现在的修改时间（写项目的顺序前记下，写完放回去）
+fn dir_time(dir: &Path) -> Option<SystemTime> {
+    fs::metadata(dir).and_then(|m| m.modified()).ok()
+}
+
+/// 把文件夹的修改时间放回 time：项目的顺序写在工作区、父项目的文件夹里，写临时文件再改名、删掉文件都会改掉文件夹的
+/// 修改时间，首页工作区卡片的「更新于」看的就是工作区文件夹的修改时间，调整顺序不算修改。放不回去时不管
+fn restore_dir_time(dir: &Path, time: Option<SystemTime>) {
+    let Some(time) = time else { return };
+    #[cfg(windows)]
+    let f = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // 打开文件夹要带 FILE_FLAG_BACKUP_SEMANTICS
+        OpenOptions::new().write(true).custom_flags(0x0200_0000).open(dir)
+    };
+    #[cfg(not(windows))]
+    let f = File::open(dir);
+    if let Ok(f) = f {
+        let _ = f.set_modified(time);
+    }
+}
+
+/// 工作区 ws_dir 里的项目（project_dirs 列出的路径和目录）在各自那一层的顺序里排第几（路径 → 位置，没排过的不在里面），
+/// 和这个工作区的项目是不是手动排序。哪一级的项目都按它所在的文件夹（工作区、父项目）里的顺序；每个文件夹只读一次，
+/// 只读有子项目的
+fn project_ranks(ws_dir: &Path, projects: &[(String, PathBuf)]) -> (bool, HashMap<String, i64>) {
+    let top = read_order(ws_dir);
+    let mut levels: HashMap<&Path, HashMap<String, i64>> = HashMap::new();
+    levels.insert(ws_dir, top.ranks());
+    let mut out = HashMap::new();
+    for (path, dir) in projects {
+        let Some(level) = dir.parent() else { continue };
+        let ranks = levels.entry(level).or_insert_with(|| read_order(level).ranks());
+        if let Some(&r) = ranks.get(&split_project(path).1.to_lowercase()) {
+            out.insert(path.clone(), r);
+        }
+    }
+    (top.manual, out)
 }
 
 fn summary_of(m: &TodoMeta, file_mtime: i64, preview: String) -> TodoSummary {
@@ -3249,11 +3545,11 @@ mod tests {
         let t = s.create_todo("甲", "项目", "带着走", "").unwrap();
         s.set_todo_done("甲", "项目", &t.id, true).unwrap();
 
-        assert!(s.move_project("甲", "项目", "甲", None).is_err());
-        assert!(s.move_project("甲", "重名", "乙", None).is_err());
-        assert!(s.move_project("甲", "不存在", "乙", None).is_err());
-        assert!(s.move_project("甲", "项目", "丙", None).is_err());
-        assert_eq!(s.move_project("甲", "项目", "乙", None).unwrap(), "项目");
+        assert!(s.move_project("甲", "项目", "甲", None, None).is_err());
+        assert!(s.move_project("甲", "重名", "乙", None, None).is_err());
+        assert!(s.move_project("甲", "不存在", "乙", None, None).is_err());
+        assert!(s.move_project("甲", "项目", "丙", None, None).is_err());
+        assert_eq!(s.move_project("甲", "项目", "乙", None, None).unwrap(), "项目");
 
         let names = |ws: &str| s.load_workspace(ws).unwrap().projects.into_iter().map(|p| p.name).collect::<Vec<_>>();
         assert_eq!(names("甲"), ["重名"]);
@@ -3412,26 +3708,26 @@ mod tests {
         let t = s.create_todo("甲", "P/Q", "跟着走", "").unwrap();
 
         // 有子项目的项目放进别的项目的子项目里，下面各级跟着
-        assert_eq!(s.move_project("甲", "P", "甲", Some("A/B/C")).unwrap(), "A/B/C/P");
+        assert_eq!(s.move_project("甲", "P", "甲", Some("A/B/C"), None).unwrap(), "A/B/C/P");
         assert!(s.read_todo("甲", "A/B/C/P/Q", &t.id).is_ok());
         // 孙项目移到别的工作区的子项目里、移到顶层
-        assert_eq!(s.move_project("甲", "A/B/C/P/Q", "乙", Some("X")).unwrap(), "X/Q");
-        assert_eq!(s.move_project("乙", "X/Q", "乙", None).unwrap(), "Q");
+        assert_eq!(s.move_project("甲", "A/B/C/P/Q", "乙", Some("X"), None).unwrap(), "X/Q");
+        assert_eq!(s.move_project("乙", "X/Q", "乙", None, None).unwrap(), "Q");
         assert!(s.read_todo("乙", "Q", &t.id).is_ok());
 
         // 不行的：放进它自己、它自己的子项目、孙项目里；已经在那里；那里有同名的（不分大小写）；目标不在
-        assert!(s.move_project("甲", "A", "甲", Some("A")).is_err());
-        assert!(s.move_project("甲", "A", "甲", Some("A/B")).is_err());
-        assert!(s.move_project("甲", "A/B", "甲", Some("A/B/C/P")).is_err());
-        assert!(s.move_project("甲", "A/B/C", "甲", Some("A/B")).is_err());
-        assert!(s.move_project("乙", "Q", "乙", Some("X/Y")).is_err());
+        assert!(s.move_project("甲", "A", "甲", Some("A"), None).is_err());
+        assert!(s.move_project("甲", "A", "甲", Some("A/B"), None).is_err());
+        assert!(s.move_project("甲", "A/B", "甲", Some("A/B/C/P"), None).is_err());
+        assert!(s.move_project("甲", "A/B/C", "甲", Some("A/B"), None).is_err());
+        assert!(s.move_project("乙", "Q", "乙", Some("X/Y"), None).is_err());
         s.create_project("甲", "Q").unwrap();
-        assert!(s.move_project("甲", "Q", "乙", None).is_err());
+        assert!(s.move_project("甲", "Q", "乙", None, None).is_err());
         if cfg!(windows) {
             s.create_project("甲", "y").unwrap();
-            assert!(s.move_project("甲", "y", "乙", Some("X")).is_err());
+            assert!(s.move_project("甲", "y", "乙", Some("X"), None).is_err());
         }
-        assert!(s.move_project("甲", "Q", "甲", Some("A/B/不在")).is_err());
+        assert!(s.move_project("甲", "Q", "甲", Some("A/B/不在"), None).is_err());
         assert!(s.root().join("甲/A/B/C/P").is_dir());
     }
 
@@ -3502,13 +3798,13 @@ mod tests {
 
         // 整个移进另一个项目里放不下：不移；移到更短的地方（顶层）可以
         s.create_project("w", "丁").unwrap();
-        let e = s.move_project("w", &back, "w", Some("丁")).unwrap_err();
+        let e = s.move_project("w", &back, "w", Some("丁"), None).unwrap_err();
         assert!(e.contains("路径太长"), "{e}");
         assert!(s.project_path("w", &deepest).is_ok());
         let (_, leaf) = deepest.rsplit_once('/').unwrap();
-        let top_level = s.move_project("w", &deepest, "w", None).unwrap();
+        let top_level = s.move_project("w", &deepest, "w", None, None).unwrap();
         assert_eq!(top_level, leaf);
-        let deepest = s.move_project("w", &top_level, "w", Some(deepest.rsplit_once('/').unwrap().0)).unwrap();
+        let deepest = s.move_project("w", &top_level, "w", Some(deepest.rsplit_once('/').unwrap().0), None).unwrap();
         // 快速记录存到放不下的地方：不建
         assert!(s.quick_capture("w", &format!("{deepest}/x"), "记一下").unwrap_err().contains("路径太长"));
         assert!(s.project_path("w", &format!("{deepest}/x")).is_err());
@@ -3575,9 +3871,9 @@ mod tests {
         let ext = ext.replacen(&top, &short, 1);
         assert!(s.read_todo("w", &ext, "a").is_ok());
         // 移到路径更短的地方、再移回来（还在 227 以内）都可以
-        let moved = s.move_project("w", &ext, "w", None).unwrap();
+        let moved = s.move_project("w", &ext, "w", None, None).unwrap();
         assert!(s.read_todo("w", &moved, "a").is_ok());
-        let back = s.move_project("w", &moved, "w", Some(ext.rsplit_once('/').unwrap().0)).unwrap();
+        let back = s.move_project("w", &moved, "w", Some(ext.rsplit_once('/').unwrap().0), None).unwrap();
         assert_eq!(back, ext);
     }
 
@@ -3659,29 +3955,371 @@ mod tests {
         let t = s.create_todo("甲", "日常", "带着走", "").unwrap();
 
         // 放进同一工作区的项目里，成为子项目
-        assert_eq!(s.move_project("甲", "日常", "甲", Some("需求")).unwrap(), "需求/日常");
+        assert_eq!(s.move_project("甲", "日常", "甲", Some("需求"), None).unwrap(), "需求/日常");
         assert!(s.read_todo("甲", "需求/日常", &t.id).is_ok());
         // 子项目移出来到顶层
-        assert_eq!(s.move_project("甲", "需求/日常", "甲", None).unwrap(), "日常");
+        assert_eq!(s.move_project("甲", "需求/日常", "甲", None, None).unwrap(), "日常");
         // 子项目移到别的工作区的项目里
-        assert_eq!(s.move_project("甲", "需求/前端", "乙", Some("重名")).unwrap(), "重名/前端");
+        assert_eq!(s.move_project("甲", "需求/前端", "乙", Some("重名"), None).unwrap(), "重名/前端");
         // 有子项目的项目整个移到别的工作区顶层，子项目跟着
         s.create_sub_project("甲", "需求", "后端").unwrap();
-        assert_eq!(s.move_project("甲", "需求", "乙", None).unwrap(), "需求");
+        assert_eq!(s.move_project("甲", "需求", "乙", None, None).unwrap(), "需求");
         assert!(project_names(&s, "乙").contains(&"需求/后端".to_string()));
 
         // 有子项目的项目放进别的项目、项目放进子项目里也行
-        assert_eq!(s.move_project("乙", "需求", "乙", Some("重名")).unwrap(), "重名/需求");
-        assert_eq!(s.move_project("甲", "日常", "乙", Some("重名/需求/后端")).unwrap(), "重名/需求/后端/日常");
-        assert_eq!(s.move_project("乙", "重名/需求/后端/日常", "甲", None).unwrap(), "日常");
+        assert_eq!(s.move_project("乙", "需求", "乙", Some("重名"), None).unwrap(), "重名/需求");
+        assert_eq!(s.move_project("甲", "日常", "乙", Some("重名/需求/后端"), None).unwrap(), "重名/需求/后端/日常");
+        assert_eq!(s.move_project("乙", "重名/需求/后端/日常", "甲", None, None).unwrap(), "日常");
 
         // 不行的：放进自己、已经在那里、重名
-        assert!(s.move_project("甲", "日常", "甲", Some("日常")).is_err());
-        assert!(s.move_project("乙", "重名/前端", "乙", Some("重名")).is_err());
-        assert!(s.move_project("甲", "日常", "甲", None).is_err());
-        assert!(s.move_project("甲", "零散", "乙", Some("重名")).is_err());
-        assert!(s.move_project("甲", "日常", "乙", Some("不存在")).is_err());
+        assert!(s.move_project("甲", "日常", "甲", Some("日常"), None).is_err());
+        assert!(s.move_project("乙", "重名/前端", "乙", Some("重名"), None).is_err());
+        assert!(s.move_project("甲", "日常", "甲", None, None).is_err());
+        assert!(s.move_project("甲", "零散", "乙", Some("重名"), None).is_err());
+        assert!(s.move_project("甲", "日常", "乙", Some("不存在"), None).is_err());
         assert!(s.read_todo("甲", "日常", &t.id).is_ok());
+    }
+
+    /// 各项目在它那一层的顺序里排第几（没排过的是 None），和工作区是不是手动排序
+    fn ranks(s: &Store, ws: &str) -> (bool, Vec<(String, Option<i64>)>) {
+        let tree = s.load_workspace(ws).unwrap();
+        let mut out: Vec<_> = tree.projects.into_iter().map(|p| (p.name, p.order)).collect();
+        out.sort();
+        (tree.manual_order, out)
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|n| n.to_string()).collect()
+    }
+
+    fn order_file(s: &Store, rel: &str) -> serde_json::Value {
+        serde_json::from_slice(&fs::read(s.root().join(rel).join(ORDER_FILE)).unwrap()).unwrap()
+    }
+
+    // requirements.md「项目的顺序」：每层一个顺序，存在那一层的文件夹里（工作区、哪一级的父项目）；没排过的排在后面；
+    // 改名后位置不变，移走、删除后去掉，移过去时按放下的位置，没指定位置的、恢复的、新建的是没排过的；
+    // 项目里面各级子项目的顺序跟着它走
+    #[test]
+    fn project_order_follows_renames_moves_and_deletes() {
+        let (_tmp, s) = store("project-order");
+        s.create_workspace("w").unwrap();
+        for p in ["乙", "甲", "丙"] {
+            s.create_project("w", p).unwrap();
+        }
+        // 没调整过：按名称，都没排过
+        assert_eq!(ranks(&s, "w"), (false, vec![("丙".into(), None), ("乙".into(), None), ("甲".into(), None)]));
+        assert!(!s.root().join("w").join(ORDER_FILE).exists());
+
+        // 调整顶层的顺序：工作区改成手动排序，记在工作区文件夹的 .projects.json 里
+        s.reorder_projects("w", None, &names(&["丙", "甲", "乙"])).unwrap();
+        assert_eq!(ranks(&s, "w"), (true, vec![("丙".into(), Some(0)), ("乙".into(), Some(2)), ("甲".into(), Some(1))]));
+        assert_eq!(order_file(&s, "w"), serde_json::json!({ "version": 1, "manual": true, "order": ["丙", "甲", "乙"] }));
+
+        // 新建的没排过；改名后位置不变（只改大小写也是）
+        s.create_project("w", "丁").unwrap();
+        s.rename_project("w", "甲", "甲二").unwrap();
+        s.create_project("w", "abc").unwrap();
+        s.reorder_projects("w", None, &names(&["丙", "abc", "甲二", "乙", "丁"])).unwrap();
+        s.rename_project("w", "abc", "ABC").unwrap();
+        let (_, r) = ranks(&s, "w");
+        assert_eq!(r, [("ABC".into(), Some(1)), ("丁".into(), Some(4)), ("丙".into(), Some(0)), ("乙".into(), Some(3)), ("甲二".into(), Some(2))]);
+
+        // 子项目的顺序记在父项目文件夹里
+        s.create_sub_project("w", "乙", "前端").unwrap();
+        s.create_sub_project("w", "乙", "后端").unwrap();
+        s.reorder_projects("w", Some("乙"), &names(&["后端", "前端"])).unwrap();
+        assert_eq!(order_file(&s, "w/乙"), serde_json::json!({ "version": 1, "order": ["后端", "前端"] }));
+        assert!(s.reorder_projects("w", Some("乙/不在"), &names(&["x"])).is_err());
+
+        // 顶层项目放进父项目、放在指定的位置：原来那一层去掉它，新的那一层按给的顺序
+        assert_eq!(s.move_project("w", "丁", "w", Some("乙"), Some(&names(&["后端", "丁", "前端"]))).unwrap(), "乙/丁");
+        assert_eq!(order_file(&s, "w/乙")["order"], serde_json::json!(["后端", "丁", "前端"]));
+        assert_eq!(order_file(&s, "w")["order"], serde_json::json!(["丙", "ABC", "甲二", "乙"]));
+        // 没指定位置的（右键「移动到」）：在那里没排过
+        s.move_project("w", "乙/前端", "w", None, None).unwrap();
+        let (_, r) = ranks(&s, "w");
+        assert!(r.contains(&("前端".into(), None)) && r.contains(&("乙/丁".into(), Some(1))), "{r:?}");
+        assert_eq!(order_file(&s, "w/乙")["order"], serde_json::json!(["后端", "丁"]));
+
+        // 删除后去掉；恢复的没排过
+        let rid = s.delete_project("w", "丙").unwrap();
+        assert_eq!(order_file(&s, "w")["order"], serde_json::json!(["ABC", "甲二", "乙"]));
+        assert!(s.restore(&[rid]).errors.is_empty());
+        assert!(ranks(&s, "w").1.contains(&("丙".into(), None)));
+
+        // 父项目连同子项目的顺序移到别的工作区；那边还没调整过，移过去的没排过
+        s.create_workspace("v").unwrap();
+        s.move_project("w", "乙", "v", None, None).unwrap();
+        assert_eq!(ranks(&s, "v"), (false, vec![("乙".into(), None), ("乙/丁".into(), Some(1)), ("乙/后端".into(), Some(0))]));
+        // 列出项目（快速记录用）也带着顺序
+        let listed = s.list_projects().unwrap().into_iter().find(|w| w.name == "v").unwrap();
+        assert!(!listed.manual_order);
+        assert_eq!(listed.order.into_iter().collect::<Vec<_>>(), [("乙/丁".to_string(), 1), ("乙/后端".to_string(), 0)]);
+        // 放进那个项目、指定了位置：那个工作区改成手动排序
+        s.move_project("w", "前端", "v", Some("乙"), Some(&names(&["前端", "后端", "丁"]))).unwrap();
+        let (manual, r) = ranks(&s, "v");
+        assert!(manual);
+        assert!(r.contains(&("乙/前端".into(), Some(0))) && r.contains(&("乙/丁".into(), Some(2))), "{r:?}");
+
+        // 最后一个子项目移走了：那一层没有要记的了，删掉文件
+        s.create_sub_project("w", "甲二", "x").unwrap();
+        s.reorder_projects("w", Some("甲二"), &names(&["x"])).unwrap();
+        s.move_project("w", "甲二/x", "w", None, None).unwrap();
+        assert!(!s.root().join("w/甲二").join(ORDER_FILE).exists(), "没有要记的了，删掉文件");
+        // 有子项目的放进别的项目、成了子项目：它里面子项目的顺序跟着它（层数不限，不再去掉）
+        s.create_sub_project("w", "ABC", "m").unwrap();
+        s.create_sub_project("w", "ABC", "n").unwrap();
+        s.reorder_projects("w", Some("ABC"), &names(&["n", "m"])).unwrap();
+        assert_eq!(s.move_project("w", "ABC", "w", Some("甲二"), None).unwrap(), "甲二/ABC");
+        assert_eq!(order_file(&s, "w/甲二/ABC")["order"], serde_json::json!(["n", "m"]));
+        let (_, r) = ranks(&s, "w");
+        assert!(r.contains(&("甲二/ABC/n".into(), Some(0))) && r.contains(&("甲二/ABC".into(), None)), "{r:?}");
+    }
+
+    // 「项目的顺序」：子项目层数不限，每一级的父项目文件夹里各一份，哪一级都能调整、改名、移动、删除、恢复时跟着改
+    #[test]
+    fn project_order_at_any_depth() {
+        let (_tmp, s) = store("project-order-deep");
+        s.create_workspace("w").unwrap();
+        s.create_workspace("v").unwrap();
+        s.create_project("w", "A").unwrap();
+        s.create_sub_project("w", "A", "B").unwrap();
+        s.create_sub_project("w", "A/B", "C").unwrap();
+        for p in ["甲", "乙", "丙"] {
+            s.create_sub_project("w", "A/B/C", p).unwrap();
+        }
+        // 深处一层的顺序记在它的父项目文件夹里，工作区改成手动排序
+        s.reorder_projects("w", Some("A/B/C"), &names(&["丙", "甲", "乙"])).unwrap();
+        assert_eq!(order_file(&s, "w/A/B/C"), serde_json::json!({ "version": 1, "order": ["丙", "甲", "乙"] }));
+        assert_eq!(order_file(&s, "w"), serde_json::json!({ "version": 1, "manual": true, "order": [] }));
+        let (manual, r) = ranks(&s, "w");
+        assert!(manual);
+        assert!(r.contains(&("A/B/C/丙".into(), Some(0))) && r.contains(&("A/B/C/乙".into(), Some(2))), "{r:?}");
+        assert!(r.contains(&("A/B".into(), None)) && r.contains(&("A/B/C".into(), None)), "{r:?}");
+        let listed = s.list_projects().unwrap().into_iter().find(|w| w.name == "w").unwrap();
+        assert!(listed.manual_order && listed.order.get("A/B/C/甲") == Some(&1), "{:?}", listed.order);
+
+        // 改名后位置不变；删除后去掉；恢复的没排过
+        s.rename_project("w", "A/B/C/甲", "甲二").unwrap();
+        assert_eq!(order_file(&s, "w/A/B/C")["order"], serde_json::json!(["丙", "甲二", "乙"]));
+        let rid = s.delete_project("w", "A/B/C/丙").unwrap();
+        assert_eq!(order_file(&s, "w/A/B/C")["order"], serde_json::json!(["甲二", "乙"]));
+        assert!(s.restore(&[rid]).errors.is_empty());
+        assert!(ranks(&s, "w").1.contains(&("A/B/C/丙".into(), None)));
+
+        // 跨层级、跨工作区放在指定的位置：原来那一层去掉它，新的那一层按给的顺序
+        s.create_project("v", "X").unwrap();
+        s.create_sub_project("v", "X", "Y").unwrap();
+        s.create_sub_project("v", "X/Y", "p").unwrap();
+        s.create_sub_project("v", "X/Y", "q").unwrap();
+        let moved = s.move_project("w", "A/B/C/乙", "v", Some("X/Y"), Some(&names(&["q", "乙", "p"]))).unwrap();
+        assert_eq!(moved, "X/Y/乙");
+        assert_eq!(order_file(&s, "w/A/B/C")["order"], serde_json::json!(["甲二"]));
+        assert_eq!(order_file(&s, "v/X/Y")["order"], serde_json::json!(["q", "乙", "p"]));
+        assert!(ranks(&s, "v").0, "放下的那个工作区改成手动排序");
+        // 深处的项目放到顶层的指定位置
+        s.move_project("w", "A/B/C/甲二", "w", None, Some(&names(&["甲二", "A"]))).unwrap();
+        assert_eq!(order_file(&s, "w")["order"], serde_json::json!(["甲二", "A"]));
+        assert!(!s.root().join("w/A/B/C").join(ORDER_FILE).exists(), "那一层没有要记的了，删掉文件");
+
+        // 按名称时调整一层：别的各层（多深都算）留着的旧顺序去掉，被调整的那一层留着
+        s.reorder_projects("w", Some("A/B/C"), &names(&["丙"])).unwrap();
+        s.create_sub_project("w", "A/B", "D").unwrap();
+        s.reorder_projects("w", Some("A/B"), &names(&["D", "C"])).unwrap();
+        s.set_projects_manual("w", false).unwrap();
+        s.reorder_projects("w", Some("A"), &names(&["B"])).unwrap();
+        assert!(!s.root().join("w/A/B/C").join(ORDER_FILE).exists());
+        assert!(!s.root().join("w/A/B").join(ORDER_FILE).exists());
+        assert_eq!(order_file(&s, "w/A")["order"], serde_json::json!(["B"]));
+        assert_eq!(order_file(&s, "w"), serde_json::json!({ "version": 1, "manual": true, "order": [] }));
+    }
+
+    #[test]
+    fn project_order_by_name_and_back() {
+        let (_tmp, s) = store("project-order-mode");
+        s.create_workspace("w").unwrap();
+        for p in ["甲", "乙", "丙"] {
+            s.create_project("w", p).unwrap();
+        }
+        s.create_sub_project("w", "甲", "a").unwrap();
+        s.create_sub_project("w", "甲", "b").unwrap();
+        s.create_sub_project("w", "乙", "c").unwrap();
+        s.create_sub_project("w", "乙", "d").unwrap();
+        s.reorder_projects("w", None, &names(&["丙", "乙", "甲"])).unwrap();
+        s.reorder_projects("w", Some("甲"), &names(&["b", "a"])).unwrap();
+        s.reorder_projects("w", Some("乙"), &names(&["d", "c"])).unwrap();
+
+        // 换成按名称：顺序留着；换回手动排序时恢复
+        s.set_projects_manual("w", false).unwrap();
+        let (manual, r) = ranks(&s, "w");
+        assert!(!manual && r.contains(&("丙".into(), Some(0))) && r.contains(&("甲/b".into(), Some(0))), "{r:?}");
+        s.set_projects_manual("w", true).unwrap();
+        assert!(ranks(&s, "w").0);
+
+        // 按名称时调整一层：从按名字的顺序重新排，别的层留着的旧顺序不再用
+        s.set_projects_manual("w", false).unwrap();
+        s.reorder_projects("w", Some("乙"), &names(&["c", "d"])).unwrap();
+        let (manual, r) = ranks(&s, "w");
+        assert!(manual);
+        assert_eq!(
+            r,
+            [
+                ("丙".into(), None),
+                ("乙".into(), None),
+                ("乙/c".into(), Some(0)),
+                ("乙/d".into(), Some(1)),
+                ("甲".into(), None),
+                ("甲/a".into(), None),
+                ("甲/b".into(), None),
+            ]
+        );
+        assert!(!s.root().join("w/甲").join(ORDER_FILE).exists());
+        assert_eq!(order_file(&s, "w"), serde_json::json!({ "version": 1, "manual": true, "order": [] }));
+    }
+
+    // 「项目的顺序 → 跟着走」：项目移到别的工作区时它里面各级子项目的顺序跟着它；从按名称排的工作区移到手动排序的工作区时
+    // 去掉（看到的是按名字的）。放下时那个工作区本来按名称排：别的各层的旧顺序去掉，从手动排序的工作区移过来的这个里面的留着
+    #[test]
+    fn project_order_follows_moves_between_workspaces() {
+        let (_tmp, s) = store("project-order-cross");
+        for w in ["手动", "名称", "另一个"] {
+            s.create_workspace(w).unwrap();
+        }
+        let tree = |w: &str, p: &str| {
+            s.create_project(w, p).unwrap();
+            for c in ["a", "b", "c"] {
+                s.create_sub_project(w, p, c).unwrap();
+            }
+            s.reorder_projects(w, Some(p), &names(&["c", "a", "b"])).unwrap();
+        };
+        // 「手动」手动排序；「名称」按名称排，里面留着以前手动排序时的顺序
+        tree("手动", "甲");
+        tree("手动", "乙");
+        tree("名称", "丙");
+        tree("名称", "丁");
+        s.create_project("名称", "戊").unwrap();
+        s.create_sub_project("名称", "戊", "x").unwrap();
+        s.create_sub_project("名称", "戊", "y").unwrap();
+        s.reorder_projects("名称", Some("戊"), &names(&["y", "x"])).unwrap();
+        s.set_projects_manual("名称", false).unwrap();
+
+        // 手动 → 按名称，指定了位置：「名称」改成手动排序，别的层的旧顺序去掉，移过来的「甲」里面的留着
+        s.move_project("手动", "甲", "名称", None, Some(&names(&["甲", "丙", "丁", "戊"]))).unwrap();
+        assert!(ranks(&s, "名称").0);
+        assert_eq!(order_file(&s, "名称/甲")["order"], serde_json::json!(["c", "a", "b"]));
+        assert!(!s.root().join("名称/丙").join(ORDER_FILE).exists() && !s.root().join("名称/丁").join(ORDER_FILE).exists());
+
+        // 按名称 → 手动：留着的旧顺序（没在用的）去掉，移过去后照样按名字
+        s.reorder_projects("名称", Some("戊"), &names(&["y", "x"])).unwrap();
+        s.set_projects_manual("另一个", true).unwrap();
+        s.set_projects_manual("名称", false).unwrap();
+        assert!(s.root().join("名称/戊").join(ORDER_FILE).exists());
+        s.move_project("名称", "戊", "另一个", None, None).unwrap();
+        assert!(!s.root().join("另一个/戊").join(ORDER_FILE).exists());
+        assert!(ranks(&s, "另一个").1.contains(&("戊/x".into(), None)));
+
+        // 手动 → 手动、手动 → 按名称（没指定位置）：跟着走
+        s.move_project("手动", "乙", "另一个", None, None).unwrap();
+        assert_eq!(order_file(&s, "另一个/乙")["order"], serde_json::json!(["c", "a", "b"]));
+        s.move_project("另一个", "乙", "名称", None, None).unwrap();
+        assert_eq!(order_file(&s, "名称/乙")["order"], serde_json::json!(["c", "a", "b"]));
+        // 同一个工作区里按名称时移动（右键「移动到」）：留着的顺序照样留着，换回手动排序时恢复
+        s.move_project("名称", "乙", "名称", Some("甲"), None).unwrap();
+        assert_eq!(order_file(&s, "名称/甲/乙")["order"], serde_json::json!(["c", "a", "b"]));
+    }
+
+    // 「项目的顺序」：调整顺序不算修改，首页工作区卡片的「更新于」（工作区文件夹的修改时间）不变
+    #[test]
+    fn reordering_projects_keeps_workspace_time() {
+        let (_tmp, s) = store("project-order-time");
+        s.create_workspace("w").unwrap();
+        for p in ["甲", "乙"] {
+            s.create_project("w", p).unwrap();
+        }
+        s.create_sub_project("w", "甲", "a").unwrap();
+        s.create_sub_project("w", "甲", "b").unwrap();
+        let ws = s.root().join("w");
+        let old = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        restore_dir_time(&ws, Some(old));
+        assert_eq!(dir_time(&ws), Some(old), "改得了文件夹的修改时间");
+        let updated = || s.list_workspaces().unwrap()[0].updated_at;
+        let before = updated();
+        s.reorder_projects("w", None, &names(&["乙", "甲"])).unwrap();
+        s.reorder_projects("w", Some("甲"), &names(&["b", "a"])).unwrap();
+        s.set_projects_manual("w", false).unwrap();
+        s.set_projects_manual("w", true).unwrap();
+        assert_eq!(dir_time(&ws), Some(old));
+        assert_eq!(updated(), before);
+        // 什么都没变时不重写
+        let file = ws.join(ORDER_FILE);
+        let written = fs::metadata(&file).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        s.reorder_projects("w", None, &names(&["乙", "甲"])).unwrap();
+        assert_eq!(fs::metadata(&file).unwrap().modified().unwrap(), written);
+    }
+
+    // 「项目的顺序」：记着的名字已经没有对应项目的不算；新来的同名项目（移进来没指定位置的、快速记录新建的、恢复待办时
+    // 重新建的）是没排过的，改名后位置不变（不会占了同名旧名字的位置）
+    #[test]
+    fn stale_names_in_project_order_take_no_position() {
+        let (_tmp, s) = store("project-order-stale");
+        s.create_workspace("w").unwrap();
+        s.create_workspace("v").unwrap();
+        for p in ["甲", "乙", "丙"] {
+            s.create_project("w", p).unwrap();
+        }
+        s.create_project("v", "丁").unwrap();
+        let file = s.root().join("w").join(ORDER_FILE);
+        // 外部删掉、改名后留下的名字（这里每次直接写进去）
+        let stale = |order: &[&str]| fs::write(&file, serde_json::json!({ "manual": true, "order": order }).to_string()).unwrap();
+        stale(&["丁", "甲", "乙", "丙"]);
+        s.move_project("v", "丁", "w", None, None).unwrap();
+        assert!(ranks(&s, "w").1.contains(&("丁".into(), None)), "移进来没指定位置的：{:?}", ranks(&s, "w"));
+        stale(&["收件箱", "甲", "乙", "丙"]);
+        s.quick_capture("w", "收件箱", "快速记的").unwrap();
+        assert!(ranks(&s, "w").1.contains(&("收件箱".into(), None)), "快速记录新建的：{:?}", ranks(&s, "w"));
+        // 改名成留着的旧名字：位置不变
+        stale(&["甲", "戊", "乙", "丙"]);
+        s.rename_project("w", "丙", "戊").unwrap();
+        assert_eq!(order_file(&s, "w")["order"], serde_json::json!(["甲", "乙", "戊"]));
+        // 恢复待办时（项目不在了）重新建的项目
+        let t = s.create_todo("w", "甲", "带走", "").unwrap();
+        let rid = s.delete_todo("w", "甲", &t.id).unwrap();
+        s.delete_project("w", "甲").unwrap();
+        stale(&["甲", "乙", "戊"]);
+        assert!(s.restore(&[rid]).errors.is_empty());
+        assert!(ranks(&s, "w").1.contains(&("甲".into(), None)), "恢复待办时重新建的：{:?}", ranks(&s, "w"));
+    }
+
+    #[test]
+    fn hand_edited_project_order_is_read_leniently() {
+        let (_tmp, s) = store("project-order-lenient");
+        s.create_workspace("w").unwrap();
+        for p in ["甲", "乙"] {
+            s.create_project("w", p).unwrap();
+        }
+        let file = s.root().join("w").join(ORDER_FILE);
+        // 不是 JSON、不是对象：当成没有，照常按名称
+        for bad in ["坏了", "[1, 2]", "", r#"{"order": "甲"}"#] {
+            fs::write(&file, bad).unwrap();
+            assert_eq!(ranks(&s, "w"), (false, vec![("乙".into(), None), ("甲".into(), None)]), "{bad}");
+        }
+        // 读不懂的项去掉，别的照用；没有对应项目的名字不算，名字不分大小写
+        fs::write(&file, r#"{"manual": "是", "order": ["不在的", 3, "乙", "甲"]}"#).unwrap();
+        assert_eq!(ranks(&s, "w"), (false, vec![("乙".into(), Some(1)), ("甲".into(), Some(2))]));
+        fs::write(&file, "\u{feff}{\"manual\": true, \"order\": [\"甲\"]}").unwrap();
+        assert_eq!(ranks(&s, "w"), (true, vec![("乙".into(), None), ("甲".into(), Some(0))]));
+        // 写的时候去掉没有对应项目的名字和重复的
+        fs::write(&file, r#"{"manual": true, "order": ["不在的", "乙", "乙"]}"#).unwrap();
+        s.create_project("w", "丙").unwrap();
+        s.rename_project("w", "乙", "乙二").unwrap();
+        assert_eq!(order_file(&s, "w"), serde_json::json!({ "version": 1, "manual": true, "order": ["乙二"] }));
+        // 新建的项目和记着的旧名字（外部删掉的）同名时，新建的没排过
+        fs::write(&file, r#"{"manual": true, "order": ["丁", "乙二"]}"#).unwrap();
+        s.create_project("w", "丁").unwrap();
+        assert!(ranks(&s, "w").1.contains(&("丁".into(), None)));
+        // .projects.json 不是项目、不是待办
+        assert_eq!(project_names(&s, "w").len(), 4);
     }
 
     #[test]
@@ -4309,7 +4947,7 @@ mod tests {
         // 有附件目录的项目照样能放进别的项目（附件目录不算子项目），放进深处的子项目也行
         let in_q = s.create_todo("w", "q", "", "").unwrap();
         s.save_image("w", "q", &in_q.id, "png", PNG).unwrap();
-        assert_eq!(s.move_project("w", "q", "w", Some("p/子/孙")).unwrap(), "p/子/孙/q");
+        assert_eq!(s.move_project("w", "q", "w", Some("p/子/孙"), None).unwrap(), "p/子/孙/q");
         assert!(s.project_path("w", "p/子/孙/q").unwrap().join(ASSETS_DIR).join(&in_q.id).is_dir());
         // 已经有附件目录（外部留下的）的 id 不再用
         let meta = MetaFile::default();
@@ -4410,7 +5048,7 @@ mod tests {
         let picture = _tmp.0.join("abcdefghi.png");
         fs::write(&picture, PNG).unwrap();
         s.import_image("w", "r", "d", &picture).unwrap();
-        let moved = s.move_project("w", "r", "v", Some(&target)).unwrap();
+        let moved = s.move_project("w", "r", "v", Some(&target), None).unwrap();
         let img = s.project_path("v", &moved).unwrap().join(ASSETS_DIR).join("d").join("abcdefghi.png");
         assert_eq!(path_len(&img), 226);
         // 图片超过 227 的地方不能去：r 改长 2 个字，图片 228（r 自己 204，还放得下待办）；改长 1 个字可以

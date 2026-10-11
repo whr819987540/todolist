@@ -102,9 +102,9 @@ function groupOf(el: EventTarget | null): number | null {
   return g === undefined ? null : Number(g);
 }
 
-/** 项目按名字排，每个项目后面跟着它的各级子项目 */
+/** 项目按名字或手动排序的顺序排，每个项目后面跟着它的各级子项目 */
 function sortTree(t: WorkspaceTree): WorkspaceTree {
-  return { ...t, projects: sortProjects(t.projects) };
+  return { ...t, projects: sortProjects(t.projects, t.manualOrder) };
 }
 
 /** 新的列表和原来的逐项相同（reuse 过的会是同一个对象）时沿用原来的列表 */
@@ -136,9 +136,9 @@ function reuseTrees(before: WorkspaceTree[] | null, after: WorkspaceTree[]): Wor
   return reuse(before, after, (t) => t.name, (oldTree, tree) => {
     const projects = reuse(oldTree.projects, tree.projects, (p) => p.name, (oldProject, project) => {
       const todos = reuse(oldProject.todos, project.todos, (x) => x.id, (o, x) => (sameFields(o, x) ? o : x));
-      return todos === oldProject.todos ? oldProject : { ...project, todos };
+      return todos === oldProject.todos && oldProject.order === project.order ? oldProject : { ...project, todos };
     });
-    return projects === oldTree.projects ? oldTree : { ...tree, projects };
+    return projects === oldTree.projects && oldTree.manualOrder === tree.manualOrder ? oldTree : { ...tree, projects };
   });
 }
 

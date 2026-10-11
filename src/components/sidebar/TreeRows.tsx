@@ -127,7 +127,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
     // 只按标签找（#标签名）时项目名不算命中
     const k = textKeyword(kw).toLowerCase();
     const counts = deepCounts(tree.projects);
-    // 各项目的下一级子项目（顶层项目的键是 undefined）；tree.projects 排好了序，同一级的按名字排
+    // 各项目的下一级子项目（顶层项目的键是 undefined）；tree.projects 排好了序，同一级的按项目的顺序（按名称或手动排序）
     const children = new Map<string | undefined, ProjectNode[]>();
     for (const p of tree.projects) {
       const parent = parentOf(p.name);

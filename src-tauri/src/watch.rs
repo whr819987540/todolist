@@ -3,14 +3,14 @@
 //!
 //! - 一阵变化合起来算一次：最后一处变化之后静下来 QUIET 才报；一直在变（网盘在同步一大批文件）时最多攒 MAX_WAIT 报一次。
 //!   一批里变了很多处（BURST 以上）时当成什么都可能变了：系统的变化通知缓冲区满了会把那一段整个丢掉，notify 不报错
-//! - 哪些路径的变化算、算成什么见 classify：只看工作区、项目、各级子项目的文件夹，待办的正文和元数据；
+//! - 哪些路径的变化算、算成什么见 classify：只看工作区、项目、各级子项目的文件夹，待办的正文和元数据，项目的顺序；
 //!   `.recycle` 里的只用来刷新开着的回收站
 //! - 软件自己写的不算：store.rs 每次写完记下写过的文件、文件夹现在的样子（OwnWrites），监听到的变化和记下的一样就去掉
 //!
 //! 监听建不起来（数据目录不在等）时 start 返回错误；建起来之后出了错（数据目录被删、网络盘不支持变化通知），
 //! notify 在 Windows 上悄悄停掉、不再报。都只是不再自动刷新，窗口获得焦点、F5 时照常刷新
 
-use crate::store::{own_writes, PathState, META_FILE, RECYCLE_DIR};
+use crate::store::{own_writes, PathState, META_FILE, ORDER_FILE, RECYCLE_DIR};
 use notify::event::{EventKind, ModifyKind};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -35,7 +35,7 @@ pub struct DataChanged {
     /// 什么都可能变了（一次变了很多处、监听出错）：全部刷新，这时 paths 是空的
     pub all: bool,
     /// 变了的路径，相对数据目录、用 / 分隔：工作区、项目、各级子项目的文件夹，待办的正文（写成「待办 id.md」），
-    /// 元数据 .todos.json
+    /// 元数据 .todos.json，项目的顺序 .projects.json（工作区、各级父项目文件夹里的）
     pub paths: BTreeSet<String>,
     /// 软件的回收站有变化（开着的回收站刷新列表）
     pub recycle: bool,
@@ -82,7 +82,7 @@ pub enum Changed {
     All,
     /// 软件的回收站里的
     Recycle,
-    /// 工作区、项目、各级子项目的文件夹，待办的正文、元数据（相对数据目录，/ 分隔）
+    /// 工作区、项目、各级子项目的文件夹，待办的正文、元数据，项目的顺序（相对数据目录，/ 分隔）
     Path(String),
 }
 
@@ -103,9 +103,12 @@ pub fn classify(rel: &[&str], structural: bool, now: PathState) -> Option<Change
     let (name, dirs) = rel.split_last().expect("rel 不是空的");
     // 项目、各级子项目里的元数据（工作区文件夹里的不是）
     let meta = depth >= 3 && name.eq_ignore_ascii_case(META_FILE);
+    // 项目的顺序：工作区文件夹里的（顶层项目的）、各级父项目文件夹里的（下一级子项目的）；数据目录里的不是
+    let order = depth >= 2 && name.eq_ignore_ascii_case(ORDER_FILE);
     // 数据目录里 . 开头的（界面状态、设置文件、.trash 等），项目文件夹里 . 开头的（保存时的临时文件、损坏的元数据留档、
-    // 图片的附件目录 .assets）和 . 开头的文件夹（.git、.obsidian、.assets 等，扫描时也不算子项目）里的都不算；元数据算
-    if dirs.iter().any(|c| c.starts_with('.')) || (name.starts_with('.') && !meta) {
+    // 图片的附件目录 .assets）和 . 开头的文件夹（.git、.obsidian、.assets 等，扫描时也不算子项目）里的都不算；
+    // 元数据、项目的顺序算
+    if dirs.iter().any(|c| c.starts_with('.')) || (name.starts_with('.') && !meta && !order) {
         return None;
     }
     let dir = now == PathState::Dir;
@@ -116,12 +119,13 @@ pub fn classify(rel: &[&str], structural: bool, now: PathState) -> Option<Change
     let file = matches!(now, PathState::File { .. });
     let md = !dir && is_markdown(name);
     let counted = match depth {
-        // 工作区、项目的文件夹；直接放在数据目录、工作区文件夹里的文件（如设置备份的 zip）不算。
+        // 工作区、项目的文件夹；直接放在数据目录、工作区文件夹里的文件（如设置备份的 zip）不算，工作区里的项目顺序算。
         // 不在了的可能是文件夹（删掉、改名了的工作区、项目），算
-        1 | 2 => !file,
-        // 项目、各级子项目里的待办正文、元数据和下一级子项目的文件夹（子项目层数不限，项目文件夹里的文件夹都是子项目）；
+        1 => !file,
+        2 => order || !file,
+        // 项目、各级子项目里的待办正文、元数据、下一级子项目的顺序和文件夹（子项目层数不限，项目文件夹里的文件夹都是子项目）；
         // 别的文件不算。不在了的可能是文件夹（删掉、改名了的子项目），算
-        _ => meta || md || !file,
+        _ => meta || md || order || !file,
     };
     if !counted {
         return None;
@@ -300,6 +304,13 @@ mod tests {
         assert_eq!(edited("工作/需求/前端/组件/.todos.json", FILE), path("工作/需求/前端/组件/.todos.json"));
         // 不在了的不知道原来是文件还是文件夹（名字里可以有点）：多深都可能是删掉、改名了的子项目，算
         assert_eq!(moved("工作/需求/前端/v1.2", GONE), path("工作/需求/前端/v1.2"));
+        // 项目的顺序：工作区里的（顶层项目）、各级父项目里的（下一级子项目），多深都算
+        assert_eq!(edited("工作/.projects.json", FILE), path("工作/.projects.json"));
+        assert_eq!(moved("工作/.projects.json", GONE), path("工作/.projects.json"));
+        assert_eq!(edited("工作/需求/.projects.json", FILE), path("工作/需求/.projects.json"));
+        assert_eq!(moved("工作/需求/.projects.json", FILE), path("工作/需求/.projects.json"));
+        assert_eq!(edited("工作/需求/前端/.projects.json", FILE), path("工作/需求/前端/.projects.json"));
+        assert_eq!(moved("工作/需求/前端/组件/按钮/.projects.json", GONE), path("工作/需求/前端/组件/按钮/.projects.json"));
         // 数据目录本身
         assert_eq!(classify(&[], true, GONE), Some(Changed::All));
     }
@@ -321,16 +332,23 @@ mod tests {
             "工作/需求/.git",
             "工作/需求/.obsidian/A.md",
             "工作/.todos.json",
-            // . 开头的文件夹不是子项目，里面的元数据、各级的也不算
+            // . 开头的文件夹不是子项目，里面的元数据、项目的顺序、各级的也不算
             "工作/需求/.obsidian/.todos.json",
+            "工作/需求/.obsidian/.projects.json",
             "工作/需求/前端/组件/.git/x/A.md",
             "工作/需求/前端/组件/.C.md.tmp",
-            // 图片的附件目录和里面的图片（含各级子项目的、放错了地方的 .md 和元数据）
+            // 项目的顺序写盘时的临时文件（多深都一样）；数据目录里的不是哪个工作区的
+            "工作/..projects.json.tmp",
+            "工作/需求/..projects.json.tmp",
+            "工作/需求/前端/组件/..projects.json.tmp",
+            ".projects.json",
+            // 图片的附件目录和里面的图片（含各级子项目的、放错了地方的 .md、元数据和项目的顺序）
             "工作/需求/.assets",
             "工作/需求/.assets/20261010-101010",
             "工作/需求/.assets/20261010-101010/图片-20261010-101010.png",
             "工作/需求/.assets/20261010-101010/笔记.md",
             "工作/需求/.assets/20261010-101010/.todos.json",
+            "工作/需求/.assets/20261010-101010/.projects.json",
             "工作/需求/前端/.assets/A/截图.png",
             "工作/需求/前端/组件/页面/.assets/B/截图.png",
         ] {
@@ -538,6 +556,18 @@ mod tests {
         s.set_todo_pinned("工作", "需求", &mine.id, true).unwrap();
         s.reorder_todos("工作", "需求", &[mine.id.clone(), t.id.clone()]).unwrap();
         s.create_project("工作", "日常").unwrap();
+        // 项目的顺序：调整、换成按名称再换回来，跟着改名、移动、删除
+        s.reorder_projects("工作", None, &["日常".into(), "需求".into(), "图片".into()]).unwrap();
+        s.set_projects_manual("工作", false).unwrap();
+        s.set_projects_manual("工作", true).unwrap();
+        s.create_sub_project("工作", "需求", "前台").unwrap();
+        s.reorder_projects("工作", Some("需求"), &["前台".into(), "前端".into()]).unwrap();
+        s.create_project("工作", "零散").unwrap();
+        s.move_project("工作", "零散", "工作", Some("需求"), Some(&["零散".into(), "前台".into()])).unwrap();
+        s.move_project("工作", "需求/零散", "工作", None, None).unwrap();
+        let rid = s.delete_project("工作", "零散").unwrap();
+        assert!(s.restore(&[rid]).errors.is_empty());
+        s.rename_project("工作", "需求/前台", "前台页面").unwrap();
         let moved = s.move_todo("工作", "需求", &t.id, "工作", "日常").unwrap();
         s.rename_project("工作", "日常", "日常事务").unwrap();
         s.create_sub_project("工作", "需求", "后端").unwrap();
@@ -545,8 +575,16 @@ mod tests {
         s.create_sub_project("工作", "需求/后端", "接口").unwrap();
         s.create_todo("工作", "需求/后端/接口", "深处的", "x").unwrap();
         s.create_project("工作", "杂项").unwrap();
-        let into = s.move_project("工作", "杂项", "工作", Some("需求/后端/接口")).unwrap();
-        s.move_project("工作", &into, "工作", None).unwrap();
+        let into = s.move_project("工作", "杂项", "工作", Some("需求/后端/接口"), None).unwrap();
+        s.move_project("工作", &into, "工作", None, None).unwrap();
+        // 深处一层的顺序：调整，放进去时指定位置，跟着改名、删除
+        s.create_sub_project("工作", "需求/后端/接口", "列表").unwrap();
+        s.create_sub_project("工作", "需求/后端/接口", "详情").unwrap();
+        s.reorder_projects("工作", Some("需求/后端/接口"), &["详情".into(), "列表".into()]).unwrap();
+        s.move_project("工作", "杂项", "工作", Some("需求/后端/接口"), Some(&["详情".into(), "杂项".into(), "列表".into()]))
+            .unwrap();
+        s.rename_project("工作", "需求/后端/接口/列表", "清单").unwrap();
+        s.delete_project("工作", "需求/后端/接口/杂项").unwrap();
         let rid = s.delete_todo("工作", "日常事务", &moved.id).unwrap();
         assert!(s.restore(&[rid]).errors.is_empty());
         // 刚恢复进来的待办随即连同项目删掉、又恢复回来
@@ -573,6 +611,50 @@ mod tests {
         assert_eq!(
             got.paths.iter().map(String::as_str).collect::<Vec<_>>(),
             ["工作/日常事务", "工作/需求/后端/接口", "工作/需求/后端/接口二", "收件", "收件箱"]
+        );
+    }
+
+    // requirements.md「项目的顺序」「监听数据目录」：软件自己写、删的 .projects.json（哪一级的都是）不引起刷新，
+    // 外部改了的照常报。用到的文件夹都在开始监听之前建好：Linux 的 inotify 给刚建的文件夹加监听来不及，
+    // 那里的变化可能收不到（上面那个测试在 Linux 上因此不过），这里在 Linux 上也能跑
+    #[test]
+    fn project_order_writes_are_own_and_external_edits_count() {
+        let (_tmp, s) = temp_store("order");
+        s.create_workspace("工作").unwrap();
+        s.create_project("工作", "A").unwrap();
+        s.create_project("工作", "Z").unwrap();
+        s.create_sub_project("工作", "A", "B").unwrap();
+        for p in ["甲", "乙", "丙"] {
+            s.create_sub_project("工作", "A/B", p).unwrap();
+        }
+        let deep = s.project_path("工作", "A/B").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let _w = start(s.root(), move |c| {
+            let _ = tx.send(c);
+        })
+        .unwrap();
+
+        // 调整、换成按名称再换回来，深处一层跟着改名、移走、删除、恢复，放到别的层的指定位置
+        s.reorder_projects("工作", None, &["Z".into(), "A".into()]).unwrap();
+        s.reorder_projects("工作", Some("A/B"), &["丙".into(), "甲".into(), "乙".into()]).unwrap();
+        s.set_projects_manual("工作", false).unwrap();
+        s.set_projects_manual("工作", true).unwrap();
+        s.rename_project("工作", "A/B/甲", "甲二").unwrap();
+        s.move_project("工作", "A/B/乙", "工作", None, Some(&["Z".into(), "乙".into(), "A".into()])).unwrap();
+        let rid = s.delete_project("工作", "A/B/丙").unwrap();
+        assert!(s.restore(&[rid]).errors.is_empty());
+        s.set_projects_manual("工作", false).unwrap();
+        s.reorder_projects("工作", Some("A/B"), &["甲二".into(), "丙".into()]).unwrap();
+        let (own, _) = collect(&rx, Duration::from_millis(1500), |_| false);
+        assert!(!own.all && own.paths.is_empty(), "软件自己写的项目顺序不报：{own:?}");
+
+        // 外部改了深处那一层的、工作区的：照常报
+        fs::write(deep.join(ORDER_FILE), r#"{"order":["丙"]}"#).unwrap();
+        fs::write(s.root().join("工作").join(ORDER_FILE), r#"{"manual":true,"order":["A"]}"#).unwrap();
+        let (got, _) = collect(&rx, Duration::from_secs(5), |c| c.paths.len() >= 2);
+        assert_eq!(
+            got.paths.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["工作/.projects.json", "工作/A/B/.projects.json"]
         );
     }
 

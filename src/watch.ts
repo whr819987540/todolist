@@ -9,7 +9,8 @@ export interface DataChanged {
   all: boolean;
   /**
    * 变了的路径，相对数据目录、用 / 分隔：工作区、项目、各级子项目的文件夹，待办的正文（「工作区/项目/id.md」，
-   * 子项目里的是「工作区/父项目/子项目/…/id.md」），元数据（「工作区/项目/.todos.json」）
+   * 子项目里的是「工作区/父项目/子项目/…/id.md」），元数据（「工作区/项目/.todos.json」），项目的顺序（「工作区/.projects.json」
+   * 「工作区/父项目/…/.projects.json」）
    */
   paths: string[];
   /** 软件的回收站有变化 */

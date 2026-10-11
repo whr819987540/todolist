@@ -21,7 +21,8 @@ const todo = (tags: string[]): TodoSummary => ({
 });
 const tree = (name: string, ...tagsOfTodos: string[][]): WorkspaceTree => ({
   name,
-  projects: [{ name: "p", todos: tagsOfTodos.map(todo) }],
+  projects: [{ name: "p", todos: tagsOfTodos.map(todo), order: null }],
+  manualOrder: false,
 });
 
 describe("标签名的规则", () => {

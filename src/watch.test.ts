@@ -77,4 +77,14 @@ describe("数据目录在外部变了时刷新什么", () => {
     expect(todoTouched(changed(["工作/需求/前端/组件/A.md"]), ...deep)).toBe(false);
     expect(workspacesTouched(changed(["工作/需求/前端/组件/按钮/A.md"]), ["工作"])).toBe(true);
   });
+
+  // 「项目的顺序」：在外部改了（哪一级的 .projects.json）时跟着刷新
+  it("项目的顺序（工作区、哪一级父项目里的 .projects.json）变了：那个工作区重新加载，打开着的待办不用核对", () => {
+    for (const p of ["工作/.projects.json", "工作/需求/.projects.json", "工作/需求/前端/组件/.projects.json"]) {
+      expect(workspacesTouched(changed([p]), ["工作"]), p).toBe(true);
+      expect(workspacesTouched(changed([p]), ["生活"]), p).toBe(false);
+      expect(dataTouched(changed([p])), p).toBe(true);
+      expect(todoTouched(changed([p]), "工作", "需求/前端/组件", "A"), p).toBe(false);
+    }
+  });
 });
