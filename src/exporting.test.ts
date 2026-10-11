@@ -1,6 +1,16 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { countsText, dirOf, exportCounts, exportedText, exportGroups, exportTitle, readExportDir, rememberExportDir } from "./exporting";
+import {
+  countsText,
+  dirOf,
+  exportCounts,
+  exportedText,
+  exportGroups,
+  exportTitle,
+  printDialogText,
+  readExportDir,
+  rememberExportDir,
+} from "./exporting";
 import type { ExportGroup, ProjectNode, TodoSummary } from "./types";
 
 // docs/requirements.md「导出」：导出项目时项目自己的待办在前，各级子项目依次作为下一级的章（每一层按侧栏的顺序：按名称，
@@ -129,9 +139,16 @@ describe("导出的文字", () => {
   });
 
   it("导出完的提示写明完整路径和几条", () => {
-    expect(exportedText({ path: "C:\\Users\\a\\Documents\\需求.html", count: 3 })).toBe(
+    expect(exportedText({ path: "C:\\Users\\a\\Documents\\需求.html", count: 3, printDialog: null })).toBe(
       "已导出 3 条待办到 C:\\Users\\a\\Documents\\需求.html",
     );
+  });
+
+  it("导出 PDF 退回打印对话框时写明原因和怎么存成 PDF", () => {
+    const text = printDialogText("WebView2 没能打印成 PDF");
+    expect(text).toContain("（WebView2 没能打印成 PDF）");
+    expect(text).toContain("打印对话框");
+    expect(text).toContain("「另存为 PDF」");
   });
 });
 
