@@ -19,7 +19,7 @@
 | 检查 | 怎么跑 | 查得出 | 查不出 |
 | --- | --- | --- | --- |
 | 前端 | `npm run lint; npm test; npm run build` | 和 CI 相同：ESLint（含 `e2e/` 的脚本）、vitest、tsc、Vite 构建 | — |
-| Rust 单元测试 | 测试壳里 `cargo test` | 存储、回收站、设置、备份、WebDAV 的逻辑 | `lib.rs` 里的 Tauri 命令、托盘、窗口、全局快捷键；`#[cfg(windows)]` 的测试（如开机自启的注册表读写） |
+| Rust 单元测试 | 测试壳里 `cargo test` | 存储、回收站、设置、设置备份、待办数据的备份与恢复、WebDAV（单元测试自己起的假服务器）的逻辑 | `lib.rs` 里的 Tauri 命令、托盘、窗口、全局快捷键；`#[cfg(windows)]` 的测试（如开机自启的注册表读写） |
 | Windows 目标的类型检查 | 测试壳里 `./check-windows.sh` | 整个程序（含 `lib.rs`、`cfg(windows)` 的代码和测试代码）在 Windows 上能不能编译 | 运行起来的行为 |
 | 界面 | 模拟后端 + Vite + 无头 Chromium 截图 | 交互、样式、浅色 / 深色、窄窗口 | WebView2 和 Chromium 的差别、几个窗口之间的事件和状态、真实的 Rust 端 |
 | 审查 | 另起一个审查代理（或请人）过一遍全部改动 | 只在 Windows 上出现、要读 tao 和插件源码才看得出的问题 | — |
@@ -54,12 +54,30 @@ keyring = { version = "3" }
 roxmltree = "0.21"
 percent-encoding = "2"
 notify = "8"
+
+# 单元测试里的 tauri::async_runtime::block_on（webdav.rs、data_backup.rs）用假的 tauri（tauri-shim/）
+[dev-dependencies]
+tauri = { path = "tauri-shim" }
 ```
 
-`src/lib.rs`：用 `#[path]` 直接引用主程序的源文件，不复制：
+主程序的单元测试里只有 `tauri::async_runtime::block_on`（跑 WebDAV 客户端的异步请求，连单元测试自己起的假 WebDAV 服务器）用到 Tauri，测试壳里换成一个假的 `tauri`：`tauri-shim/Cargo.toml` 的包名叫 `tauri`，只依赖 `tokio = { version = "1", features = ["rt", "net", "time"] }`（reqwest 本来就依赖它，不用另外下载）；`tauri-shim/src/lib.rs`：
+
+```rust
+pub mod async_runtime {
+    use std::future::Future;
+
+    /// 同 tauri::async_runtime::block_on：在 tokio 运行时里跑完 f
+    pub fn block_on<F: Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio 运行时").block_on(f)
+    }
+}
+```
+
+`src/lib.rs`：用 `#[path]` 直接引用主程序的源文件，不复制（`private_interfaces`：主程序里 `pub(crate)` 的类型出现在 `pub` 的函数签名里，测试壳把模块都声明成 `pub`，不加会警告）：
 
 ```rust
 #![allow(dead_code)]
+#![allow(private_interfaces)]
 #[path = "../../../src/store.rs"]
 pub mod store;
 #[path = "../../../src/settings.rs"]
@@ -72,6 +90,8 @@ pub mod autostart;
 pub mod webdav;
 #[path = "../../../src/watch.rs"]
 pub mod watch;
+#[path = "../../../src/data_backup.rs"]
+pub mod data_backup;
 ```
 
 ```sh

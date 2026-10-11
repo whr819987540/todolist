@@ -1,4 +1,4 @@
-//! WebDAV 连接配置与客户端（用于备份设置）。
+//! WebDAV 连接配置与客户端（用于备份设置和待办数据）。
 //!
 //! 服务地址、用户名、远程目录保存在数据根目录的 `.webdav.json`；
 //! 密码保存在 Windows 凭据管理器，不写进任何文件，也就不会进入备份包。
@@ -8,6 +8,7 @@ use percent_encoding::percent_decode_str;
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -17,6 +18,8 @@ const CONFIG_FILE: &str = ".webdav.json";
 const DAV: &str = "DAV:";
 /// 下载大小上限：设置备份只有几 KB，超过说明不是备份文件
 const MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024;
+/// 上传、下载备份文件的超时：待办数据的备份可能有几十 MB，比别的请求（60 秒）宽得多
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>"#;
 
@@ -253,6 +256,7 @@ impl WebDav {
         let rb = self
             .request(Method::PUT, child(&self.backup_dir(), name, false))
             .header("Content-Type", "application/zip")
+            .timeout(TRANSFER_TIMEOUT)
             .body(data);
         expect_ok(send(rb).await?.status(), "上传")
     }
@@ -268,12 +272,9 @@ impl WebDav {
         parse_propfind(&String::from_utf8_lossy(&bytes))
     }
 
+    /// 下载（设置备份，放在内存里）
     pub async fn download(&self, name: &str) -> Result<Vec<u8>> {
-        let resp = send(self.request(Method::GET, child(&self.backup_dir(), name, false))).await?;
-        if resp.status() == StatusCode::NOT_FOUND {
-            return Err(format!("远程文件 {name} 不存在，可能已被删除，请刷新列表"));
-        }
-        expect_ok(resp.status(), "下载")?;
+        let resp = self.get(name).await?;
         let too_big = || format!("文件超过 {} KB，不是本软件的设置备份", MAX_DOWNLOAD_BYTES / 1024);
         if resp.content_length().is_some_and(|n| n > MAX_DOWNLOAD_BYTES) {
             return Err(too_big());
@@ -283,6 +284,35 @@ impl WebDav {
             return Err(too_big());
         }
         Ok(bytes.to_vec())
+    }
+
+    /// 下载到本地文件（待办数据的备份，可能很大，边收边写，不全放在内存里）
+    pub async fn download_to(&self, name: &str, path: &Path) -> Result<()> {
+        let mut resp = self.get(name).await?;
+        let mut file = fs::File::create(path).map_err(|e| format!("保存下载的文件失败：{e}"))?;
+        while let Some(chunk) = resp.chunk().await.map_err(net_error)? {
+            file.write_all(&chunk).map_err(|e| format!("保存下载的文件失败：{e}"))?;
+        }
+        file.sync_all().map_err(|e| format!("保存下载的文件失败：{e}"))
+    }
+
+    async fn get(&self, name: &str) -> Result<Response> {
+        let rb = self.request(Method::GET, child(&self.backup_dir(), name, false)).timeout(TRANSFER_TIMEOUT);
+        let resp = send(rb).await?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Err(format!("远程文件 {name} 不存在，可能已被删除，请刷新列表"));
+        }
+        expect_ok(resp.status(), "下载")?;
+        Ok(resp)
+    }
+
+    /// 删除备份目录里的文件（自动备份只留最近几份）；已经不在了不算失败
+    pub async fn delete(&self, name: &str) -> Result<()> {
+        let status = send(self.request(Method::DELETE, child(&self.backup_dir(), name, false))).await?.status();
+        if status == StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        expect_ok(status, "删除远程的旧备份")
     }
 }
 
@@ -524,9 +554,164 @@ fn parse_propfind(xml: &str) -> Result<Vec<RemoteFile>> {
     Ok(files)
 }
 
+/// 单元测试用的 WebDAV 服务器：在本机随便一个端口上，文件放在内存里，只认客户端用到的 PROPFIND、MKCOL、PUT、GET、DELETE
+#[cfg(test)]
+pub(crate) mod fake {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    pub struct Files {
+        pub dirs: BTreeSet<String>,
+        /// 路径（百分号编码的，同请求里的）→ 内容
+        pub files: BTreeMap<String, Vec<u8>>,
+    }
+
+    pub struct Server {
+        pub url: String,
+        pub state: Arc<Mutex<Files>>,
+    }
+
+    impl Server {
+        /// 服务地址是 http://127.0.0.1:端口/dav/
+        pub fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/dav/", listener.local_addr().unwrap());
+            let state = Arc::new(Mutex::new(Files::default()));
+            state.lock().unwrap().dirs.insert("/dav/".into());
+            let shared = state.clone();
+            std::thread::spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    handle(stream, &shared);
+                }
+            });
+            Self { url, state }
+        }
+
+        /// 备份目录里的文件名
+        pub fn names(&self, dir: &str) -> Vec<String> {
+            let prefix = format!("/dav/{dir}/");
+            let files = &self.state.lock().unwrap().files;
+            files.keys().filter_map(|k| k.strip_prefix(&prefix).map(str::to_string)).collect()
+        }
+    }
+
+    fn handle(mut stream: TcpStream, state: &Mutex<Files>) {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let head_end = loop {
+            let Ok(n) = stream.read(&mut chunk) else { return };
+            if n == 0 {
+                return;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+        };
+        let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+        let mut lines = head.lines();
+        let mut first = lines.next().unwrap_or_default().split(' ');
+        let (method, path) = (first.next().unwrap_or_default().to_string(), first.next().unwrap_or_default().to_string());
+        let len: usize = lines
+            .filter_map(|l| l.split_once(':'))
+            .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, v)| v.trim().parse().ok())
+            .unwrap_or(0);
+        let mut body = buf[head_end..].to_vec();
+        while body.len() < len {
+            let Ok(n) = stream.read(&mut chunk) else { return };
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..n]);
+        }
+        let mut files = state.lock().unwrap();
+        let (status, content): (&str, Vec<u8>) = match method.as_str() {
+            "PROPFIND" => {
+                let dir = files.dirs.contains(&path);
+                if !dir && !files.files.contains_key(&path) {
+                    ("404 Not Found", Vec::new())
+                } else {
+                    let mut xml = String::from(r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">"#);
+                    let entry = |href: &str, collection: bool, size: usize| {
+                        let kind = if collection { "<d:collection/>" } else { "" };
+                        format!("<d:response><d:href>{href}</d:href><d:propstat><d:prop><d:resourcetype>{kind}</d:resourcetype><d:getcontentlength>{size}</d:getcontentlength></d:prop></d:propstat></d:response>")
+                    };
+                    xml += &entry(&path, dir, 0);
+                    if dir {
+                        for (p, data) in files.files.iter().filter(|(p, _)| p.strip_prefix(&path).is_some_and(|rest| !rest.contains('/'))) {
+                            xml += &entry(p, false, data.len());
+                        }
+                    }
+                    xml += "</d:multistatus>";
+                    ("207 Multi-Status", xml.into_bytes())
+                }
+            }
+            "MKCOL" if files.dirs.contains(&path) => ("405 Method Not Allowed", Vec::new()),
+            "MKCOL" => {
+                files.dirs.insert(path);
+                ("201 Created", Vec::new())
+            }
+            "PUT" => {
+                files.files.insert(path, body);
+                ("201 Created", Vec::new())
+            }
+            "GET" => match files.files.get(&path) {
+                Some(data) => ("200 OK", data.clone()),
+                None => ("404 Not Found", Vec::new()),
+            },
+            "DELETE" => match files.files.remove(&path) {
+                Some(_) => ("204 No Content", Vec::new()),
+                None => ("404 Not Found", Vec::new()),
+            },
+            _ => ("405 Method Not Allowed", Vec::new()),
+        };
+        drop(files);
+        let head = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", content.len());
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(&content);
+    }
+
+    /// 连这个服务器的客户端（备份目录是 dir）
+    pub fn client(server: &Server, dir: &str) -> super::WebDav {
+        let config = super::WebDavConfig { url: server.url.clone(), username: "u".into(), dir: dir.into() };
+        super::WebDav::new(&config, "p").unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uploads_lists_downloads_and_deletes() {
+        let server = fake::Server::start();
+        let dav = fake::client(&server, "备份/TodoList");
+        use tauri::async_runtime::block_on as run;
+        // 远程目录还没有：列表是空的，上传时逐级建好
+        assert!(run(dav.list()).unwrap().is_empty());
+        run(dav.upload("TodoList-data-20261009-153012.zip", b"zip-data".to_vec())).unwrap();
+        run(dav.upload("TodoList-settings-20261009-153012.zip", b"settings".to_vec())).unwrap();
+        let mut names: Vec<String> = run(dav.list()).unwrap().into_iter().map(|f| f.name).collect();
+        names.sort();
+        assert_eq!(names, ["TodoList-data-20261009-153012.zip", "TodoList-settings-20261009-153012.zip"]);
+        // 数据备份下载到文件里
+        let dir = std::env::temp_dir().join(format!("todolist-webdav-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("download.zip");
+        run(dav.download_to("TodoList-data-20261009-153012.zip", &file)).unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"zip-data");
+        assert!(run(dav.download_to("没有的.zip", &file)).unwrap_err().contains("不存在"));
+        assert_eq!(run(dav.download("TodoList-settings-20261009-153012.zip")).unwrap(), b"settings");
+        // 删除；已经不在了不算失败
+        run(dav.delete("TodoList-data-20261009-153012.zip")).unwrap();
+        run(dav.delete("TodoList-data-20261009-153012.zip")).unwrap();
+        assert_eq!(server.names("%E5%A4%87%E4%BB%BD/TodoList"), ["TodoList-settings-20261009-153012.zip"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     fn dav(url: &str, dir: &str) -> WebDav {
         let config = WebDavConfig {
