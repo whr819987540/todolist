@@ -108,6 +108,13 @@ describe("标签的颜色", () => {
     const colors = new Set(["工作", "生活", "学习", "等回复", "急", "周报", "会议", "采购"].map(tagColor));
     expect(colors.size).toBeGreaterThan(2);
   });
+
+  // 「同名的标签在哪里都是同一个颜色」：导出的 HTML / PDF 里标签的颜色由 Rust 端 export.rs 的 tag_color 算，
+  // 那边的单元测试（tag_colors_match_the_frontend）用的是同一组例子，两边要得出一样的结果
+  it("和导出时 Rust 端算的一样", () => {
+    const same: [string, number][] = [["工作", 4], ["等回复", 0], ["Urgent", 4], ["URGENT", 4], ["阅读📚", 6], ["客户A", 5]];
+    for (const [tag, color] of same) expect(tagColor(tag), tag).toBe(color);
+  });
 });
 
 describe("放不下时", () => {

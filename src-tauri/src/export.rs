@@ -126,6 +126,10 @@ pub struct Item {
     pub preview: String,
     pub done: bool,
     pub pinned: bool,
+    /// 优先级：3 高、2 中、1 低、0 无
+    pub priority: u8,
+    /// 标签，按加上的先后
+    pub tags: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub done_at: Option<i64>,
@@ -146,6 +150,8 @@ impl Item {
             preview: s.preview,
             done: s.done,
             pinned: s.pinned,
+            priority: s.priority,
+            tags: s.tags,
             created_at: s.created_at,
             updated_at: s.updated_at,
             done_at: s.done_at,
@@ -619,13 +625,42 @@ fn toc(doc: &Document, blocks: &[Block]) -> String {
     out
 }
 
-/// 一条待办：标题（h{tag}）、状态、置顶、所在的位置、时间，然后是渲染后的正文
+/// 标签的颜色有几种（同前端 tags.ts 的 TAG_COLORS，样式里的 .label.tag-c0 ～ .tag-c8）
+const TAG_COLORS: u32 = 9;
+
+/// 标签的颜色（0 ～ TAG_COLORS-1）：同前端 tags.ts 的 tagColor（按名字的小写算），同名的标签在软件里、导出的文件里
+/// 都是同一个颜色
+fn tag_color(tag: &str) -> u32 {
+    tag.to_lowercase().chars().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c as u32)) % TAG_COLORS
+}
+
+/// 优先级的小旗子（颜色跟着外面的 .prio-N）
+const FLAG_SVG: &str = "<svg class=\"flag\" viewBox=\"0 0 16 16\" aria-hidden=\"true\">\
+    <path d=\"M3.5 1v14\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>\
+    <path d=\"M4.2 2h9.3l-2.4 3.6 2.4 3.6H4.2z\" fill=\"currentColor\"/></svg>";
+
+/// 元信息里的优先级：「高优先级」等，前面是同色的小旗子；无优先级时什么都不写
+fn priority_html(priority: u8) -> String {
+    let label = match priority {
+        3 => "高",
+        2 => "中",
+        1 => "低",
+        _ => return String::new(),
+    };
+    format!("<span class=\"prio prio-{priority}\">{FLAG_SVG}{label}优先级</span>")
+}
+
+/// 一条待办：标题（h{tag}）、状态、置顶、优先级、标签、所在的位置、时间，然后是渲染后的正文
 fn item_html(item: &Item, anchor: &str, tag: usize) -> String {
     let (text, untitled) = item.heading();
     let mut meta = String::new();
     meta.push_str(if item.done { "<span class=\"tag done\">已完成</span>" } else { "<span class=\"tag doing\">进行中</span>" });
     if item.pinned {
         meta.push_str("<span class=\"tag pinned\">已置顶</span>");
+    }
+    meta.push_str(&priority_html(item.priority));
+    for t in &item.tags {
+        let _ = write!(meta, "<span class=\"label tag-c{}\">{}</span>", tag_color(t), esc(t));
     }
     let place = format!("{} / {}", item.workspace, project_label(&item.project));
     let _ = write!(meta, "<span class=\"todo-where\">{}</span>", esc(&place));
@@ -1155,6 +1190,23 @@ h4.todo-title, h5.todo-title, h6.todo-title { font-size: 18px; }
 .tag.done { color: #389e0d; background: #f6ffed; border-color: #b7eb8f; }
 .tag.doing { color: #0958d9; background: #e6f4ff; border-color: #91caff; }
 .tag.pinned { color: #d46b08; background: #fff7e6; border-color: #ffd591; }
+/* 优先级：小旗子和文字，颜色同软件里的（高红、中橙、低蓝） */
+.prio { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; line-height: 20px; }
+.prio .flag { width: 12px; height: 12px; }
+.prio-3 { color: #f5222d; }
+.prio-2 { color: #fa8c16; }
+.prio-1 { color: #1677ff; }
+/* 标签：颜色同软件里浅色模式的（styles.css 的 .tag-c0 ～ .tag-c8） */
+.label { display: inline-block; max-width: 100%; padding: 0 8px; font-size: 12px; line-height: 20px; color: var(--tag-fg); background: var(--tag-bg); border: 1px solid var(--tag-bd); border-radius: 4px; overflow-wrap: anywhere; }
+.tag-c0 { --tag-bg: #e6f4ff; --tag-bd: #91caff; --tag-fg: #0958d9; }
+.tag-c1 { --tag-bg: #f6ffed; --tag-bd: #b7eb8f; --tag-fg: #237804; }
+.tag-c2 { --tag-bg: #fff7e6; --tag-bd: #ffd591; --tag-fg: #ad4e00; }
+.tag-c3 { --tag-bg: #f9f0ff; --tag-bd: #d3adf7; --tag-fg: #531dab; }
+.tag-c4 { --tag-bg: #e6fffb; --tag-bd: #87e8de; --tag-fg: #006d75; }
+.tag-c5 { --tag-bg: #fff0f6; --tag-bd: #ffadd2; --tag-fg: #c41d7f; }
+.tag-c6 { --tag-bg: #fffbe6; --tag-bd: #ffe58f; --tag-fg: #ad6800; }
+.tag-c7 { --tag-bg: #f0f5ff; --tag-bd: #adc6ff; --tag-fg: #1d39c4; }
+.tag-c8 { --tag-bg: #fcffe6; --tag-bd: #d3f261; --tag-fg: #5b8c00; }
 .todo-times { margin-top: 2px; font-size: 13px; color: #8f959e; }
 .todo-times span + span::before { content: "·"; margin: 0 8px; }
 .todo-body { margin-top: 14px; }
@@ -1557,6 +1609,8 @@ mod tests {
             preview: store::make_preview(content),
             done,
             pinned: false,
+            priority: 0,
+            tags: Vec::new(),
             created_at: ms(2026, 10, 1, 9, 5),
             updated_at: ms(2026, 10, 2, 18, 30),
             done_at: done.then(|| ms(2026, 10, 3, 8, 0)),
@@ -1619,6 +1673,62 @@ mod tests {
             "color-scheme: light",
         ] {
             assert!(html.contains(want), "缺 {want}：{html}");
+        }
+        let body = html.split("<body>").nth(1).unwrap_or_default();
+        assert!(!body.contains("优先级") && !body.contains("class=\"label"), "没有优先级、标签的不写：{body}");
+    }
+
+    // docs/requirements.md「导出 → 导出的内容」：元信息里写上优先级（同色的小旗子）和标签（颜色同软件里的）
+    #[test]
+    fn meta_has_priority_and_tags() {
+        let mut t = item("需求", "回复客户", "", false);
+        t.priority = 3;
+        t.tags = vec!["工作".into(), "等回复".into(), "<b>粗</b>".into()];
+        let html = render(&doc(Scope::Todo, section("需求", vec![t], vec![])), now());
+        let meta = html.split("<div class=\"todo-meta\">").nth(1).and_then(|m| m.split("</div>").next()).unwrap_or_default();
+        let at = |s: &str| meta.find(s).unwrap_or_else(|| panic!("元信息里缺 {s}：{meta}"));
+        // 状态、优先级、标签（按加上的先后）、位置
+        let order = [
+            at("<span class=\"tag doing\">进行中</span>"),
+            at("<span class=\"prio prio-3\"><svg class=\"flag\""),
+            at("高优先级</span>"),
+            at(&format!("<span class=\"label tag-c{}\">工作</span>", tag_color("工作"))),
+            at(&format!("<span class=\"label tag-c{}\">等回复</span>", tag_color("等回复"))),
+            at("&lt;b&gt;粗&lt;/b&gt;</span>"),
+            at("<span class=\"todo-where\">"),
+        ];
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{meta}");
+        assert!(!meta.contains("<b>"), "标签名要转义：{meta}");
+        for (p, label) in [(2, "中优先级"), (1, "低优先级")] {
+            assert!(priority_html(p).contains(&format!("prio-{p}\"")) && priority_html(p).ends_with(&format!("{label}</span>")));
+        }
+        assert_eq!(priority_html(0), "");
+        // 导出项目时深层子项目里的待办也写上（各章里的每一条都一样）
+        let mut deep = item("需求/前端/组件", "按钮", "", true);
+        deep.priority = 1;
+        deep.tags = vec!["界面".into()];
+        let root = section(
+            "需求",
+            vec![item("需求", "甲", "", false)],
+            vec![section("需求/前端", vec![], vec![section("需求/前端/组件", vec![deep], vec![])])],
+        );
+        let html = render(&doc(Scope::Project, root), now());
+        let metas: Vec<&str> = html.split("<div class=\"todo-meta\">").skip(1).filter_map(|m| m.split("</div>").next()).collect();
+        assert_eq!(metas.len(), 2, "{html}");
+        assert!(!metas[0].contains("优先级") && !metas[0].contains("class=\"label"), "{}", metas[0]);
+        assert!(
+            metas[1].contains("<span class=\"tag done\">已完成</span><span class=\"prio prio-1\">")
+                && metas[1].contains(&format!("低优先级</span><span class=\"label tag-c{}\">界面</span><span class=\"todo-where\">工作 / 需求 / 前端 / 组件</span>", tag_color("界面"))),
+            "{}",
+            metas[1]
+        );
+    }
+
+    /// 标签的颜色和前端 tags.ts 的 tagColor 一样：src/tags.test.ts 里有同一组例子
+    #[test]
+    fn tag_colors_match_the_frontend() {
+        for (tag, color) in [("工作", 4), ("等回复", 0), ("Urgent", 4), ("URGENT", 4), ("阅读📚", 6), ("客户A", 5)] {
+            assert_eq!(tag_color(tag), color, "{tag}");
         }
     }
 
@@ -1854,6 +1964,18 @@ mod tests {
         assert_eq!(comp.items[0].dir, s.project_path("工作", "需求/前端/组件").unwrap());
         assert_eq!(doc.count(), 4);
         assert_eq!(doc.title(), "需求");
+        // 标签、优先级从 .todos.json 读出来，哪一级的项目里的都是
+        s.set_todo_tags("工作", "需求", &a.id, &["工作".into(), "等回复".into()]).unwrap();
+        s.set_todo_priority("工作", "需求", &a.id, 2).unwrap();
+        s.set_todo_tags("工作", "需求/前端/组件", &d.id, &["界面".into()]).unwrap();
+        s.set_todo_priority("工作", "需求/前端/组件", &d.id, 3).unwrap();
+        let tagged = collect(&s, &req(Scope::Project, true, vec![tree(vec![a.id.clone()])])).unwrap();
+        let first = &tagged.root.items[0];
+        assert_eq!((first.tags.clone(), first.priority), (vec!["工作".to_string(), "等回复".to_string()], 2));
+        let deep = &tagged.root.children[0].children[0].items[0];
+        assert_eq!((deep.tags.clone(), deep.priority), (vec!["界面".to_string()], 3));
+        let plain = &tagged.root.children[0].items[0];
+        assert_eq!((plain.tags.len(), plain.priority), (0, 0));
         // 不含已完成的：每一级都去掉，封面上写明一共去掉了几条
         let doc = collect(&s, &req(Scope::Project, false, vec![tree(vec![b.id.clone(), a.id.clone()])])).unwrap();
         assert_eq!(doc.count(), 2);
