@@ -193,6 +193,38 @@ describe("查找（matchHistory）", () => {
     expect(matchHistory(sub, "")).toBe(true);
     expect(matchHistory(untitled, "   ")).toBe(true);
   });
+
+  // docs/requirements.md「完成记录 → 查找」：标签名里有关键字的也算；#标签名 同侧栏的搜索，只按标签找
+  const tagged = done("2026-10-09T08:00:00", { title: "回复客户", tags: ["工作", "等回复"] });
+
+  it("按标签名查找：标签名里有关键字就算，不区分大小写", () => {
+    expect(matchHistory(tagged, "等回")).toBe(true);
+    const en = done("2026-10-09T08:00:00", { title: "x", tags: ["Urgent"] });
+    expect(matchHistory(en, "urg")).toBe(true);
+    expect(matchHistory(sub, "等回")).toBe(false);
+  });
+
+  it("# 开头时只按标签找：要有名字一样的标签（不区分大小写），不看标题、项目", () => {
+    expect(matchHistory(tagged, "#等回复")).toBe(true);
+    expect(matchHistory(tagged, "＃ 等回复 ")).toBe(true);
+    expect(matchHistory(tagged, "#等回")).toBe(false);
+    const en = done("2026-10-09T08:00:00", { title: "x", tags: ["Urgent"] });
+    expect(matchHistory(en, "#URGENT")).toBe(true);
+    // 标题、项目里有也不算
+    const named = done("2026-10-09T08:00:00", { title: "等回复的邮件" }, { project: "等回复" });
+    expect(matchHistory(named, "#等回复")).toBe(false);
+    // 深层项目路径里哪一级叫这个名字也不算；带这个标签的在多深都算
+    const deep = done("2026-10-09T08:00:00", { title: "x" }, { project: "前端/等回复/组件/按钮" });
+    expect(matchHistory(deep, "#等回复")).toBe(false);
+    expect(matchHistory(deep, "等回复")).toBe(true);
+    const deepTagged = done("2026-10-09T08:00:00", { title: "x", tags: ["等回复"] }, { project: "前端/组件/按钮/图标/大号" });
+    expect(matchHistory(deepTagged, "#等回复")).toBe(true);
+  });
+
+  it("只输入 # 时列出有标签的", () => {
+    expect(matchHistory(tagged, "#")).toBe(true);
+    expect(matchHistory(sub, "#")).toBe(false);
+  });
 });
 
 describe("统计（countToday、dailyCounts）", () => {
