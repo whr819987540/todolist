@@ -1,23 +1,31 @@
-import { CloudUploadOutlined, DownloadOutlined, FolderOpenOutlined, ReloadOutlined } from "@ant-design/icons";
-import { App as AntApp, Button, Form, Input, Spin } from "antd";
+import { CloudUploadOutlined, DownloadOutlined, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
+import { App as AntApp, Button, Form, Input, Spin, Tag } from "antd";
 import { useCallback, useEffect, useState } from "react";
 import { api, errMsg } from "../../api";
+import { backupDoneText } from "../../dataBackup";
 import { useSettings } from "../../settings";
 import type { RemoteBackup, SettingsInfo, WebDavConfig, WebDavInfo } from "../../types";
 import { fullTime } from "../../utils";
+import DataBackupSettings from "./DataBackupSettings";
+import { useDataRestore } from "./dataRestore";
 
 type FormValues = WebDavConfig & { password: string };
 
-const formatSize = (n: number | null) => (n == null ? "" : n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
+const formatSize = (n: number | null) =>
+  n == null ? "" : n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
-/** 设置里的「备份与恢复」：备份到本地 zip 或 WebDAV，从本地 zip 或 WebDAV 恢复 */
+/**
+ * 设置里的「备份与恢复」：待办数据（手动备份到本地、从本地恢复、自动备份，见 DataBackupSettings），
+ * 设置（备份到本地 zip、从本地 zip 恢复），WebDAV 服务器，以及 WebDAV 上的两种备份（备份上去、从那里恢复）
+ */
 export default function BackupSettings() {
   const { message, modal } = AntApp.useApp();
   const { setInfo } = useSettings();
+  const confirmDataRestore = useDataRestore();
   const [form] = Form.useForm<FormValues>();
   const [saved, setSaved] = useState<WebDavInfo | null>(null);
   const [values, setValues] = useState<FormValues | null>(null);
-  const [busy, setBusy] = useState<"test" | "save" | "backup" | "file" | "pick" | null>(null);
+  const [busy, setBusy] = useState<"test" | "save" | "backup" | "data" | "file" | "pick" | null>(null);
   const [backups, setBackups] = useState<RemoteBackup[] | null>(null);
   const [listing, setListing] = useState(false);
   const [listError, setListError] = useState("");
@@ -100,14 +108,21 @@ export default function BackupSettings() {
     run("backup", async () => {
       await save();
       const name = await api.backupToWebdav();
-      message.success(`已备份到 WebDAV：${name}`);
+      message.success(`已备份设置到 WebDAV：${name}`);
+      refreshList();
+    });
+
+  const onBackupData = () =>
+    run("data", async () => {
+      await save();
+      message.success(backupDoneText(await api.backupDataToWebdav(), "webdav"));
       refreshList();
     });
 
   const onBackupFile = () =>
     run("file", async () => {
       const path = await api.backupToFile();
-      if (path) message.success(`已备份到 ${path}`);
+      if (path) message.success(`已备份设置到 ${path}`);
     });
 
   const restored = (info: SettingsInfo) => {
@@ -121,7 +136,7 @@ export default function BackupSettings() {
   const confirmRestore = (what: string, doRestore: () => Promise<SettingsInfo>) =>
     modal.confirm({
       title: "恢复设置？",
-      content: `将用${what}覆盖当前的设置（快捷键、字号等），待办数据不受影响。`,
+      content: `将用${what}覆盖当前的设置（快捷键、字号、自动备份等），待办数据不受影响。`,
       okText: "恢复",
       cancelText: "取消",
       onOk: async () => {
@@ -140,6 +155,11 @@ export default function BackupSettings() {
       const name = path.slice(path.lastIndexOf("\\") + 1);
       confirmRestore(`本地文件「${name}」`, () => api.restoreFromFile(path));
     });
+
+  const restoreRemote = (b: RemoteBackup) =>
+    b.kind === "data"
+      ? confirmDataRestore({ time: b.time }, () => api.restoreDataFromWebdav(b.name)).catch((e) => message.error(errMsg(e)))
+      : confirmRestore(` ${fullTime(b.time)} 的设置备份`, () => api.restoreFromWebdav(b.name));
 
   const configured = !!saved?.config.url;
 
@@ -161,6 +181,9 @@ export default function BackupSettings() {
       <div className="backup-list">
         {backups.map((b) => (
           <div className="backup-item" key={b.name}>
+            <Tag className="backup-kind" color={b.kind === "data" ? "blue" : undefined}>
+              {b.kind === "data" ? "数据" : "设置"}
+            </Tag>
             <div className="backup-info">
               <div className="backup-time">{fullTime(b.time)}</div>
               <div className="backup-name muted" title={b.name}>
@@ -169,7 +192,7 @@ export default function BackupSettings() {
                 {formatSize(b.size)}
               </div>
             </div>
-            <Button size="small" onClick={() => confirmRestore(` ${fullTime(b.time)} 的备份`, () => api.restoreFromWebdav(b.name))}>
+            <Button size="small" onClick={() => restoreRemote(b)}>
               恢复
             </Button>
           </div>
@@ -179,16 +202,18 @@ export default function BackupSettings() {
 
   return (
     <>
-      <div className="setting-group">本地备份</div>
+      <DataBackupSettings webdavConfigured={configured} />
+
+      <div className="setting-group">设置</div>
       <div className="setting-desc">
-        只含快捷键、字号等设置（.settings.json），不含待办数据和密码；默认存在数据目录里，本地和 WebDAV 上的备份文件通用。
+        只含快捷键、字号、自动备份等设置（.settings.json），不含待办数据和密码；默认存在数据目录里，本地和 WebDAV 上的备份文件通用。
       </div>
       <div className="backup-bar">
         <Button icon={<DownloadOutlined />} loading={busy === "file"} onClick={onBackupFile}>
-          备份到本地文件…
+          备份设置到本地…
         </Button>
-        <Button icon={<FolderOpenOutlined />} loading={busy === "pick"} onClick={onRestoreFile}>
-          从本地文件恢复…
+        <Button icon={<UploadOutlined />} loading={busy === "pick"} onClick={onRestoreFile}>
+          从本地文件恢复设置…
         </Button>
       </div>
 
@@ -245,11 +270,19 @@ export default function BackupSettings() {
         <Button
           type="primary"
           icon={<CloudUploadOutlined />}
+          loading={busy === "data"}
+          disabled={!values?.url?.trim()}
+          onClick={onBackupData}
+        >
+          {busy === "data" ? "正在备份数据…" : "备份数据到 WebDAV"}
+        </Button>
+        <Button
+          icon={<CloudUploadOutlined />}
           loading={busy === "backup"}
           disabled={!values?.url?.trim()}
           onClick={onBackup}
         >
-          立即备份到 WebDAV
+          备份设置到 WebDAV
         </Button>
       </div>
       {list}

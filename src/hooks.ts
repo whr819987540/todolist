@@ -135,6 +135,25 @@ export async function flushAll(todos = true, timeoutMs = 3000): Promise<void> {
 }
 
 /**
+ * 打开着的待办都立即存盘（分屏时两边的：每条打开着的待办一个会话，两边开着同一条时共用一个），返回是否都存好了：
+ * 有存不上的（弹出了冲突对话框、保存失败已提示）或 timeoutMs 内没存完时为 false。没有打开着的待办时为 true。
+ * 恢复待办数据前用：存不上时不恢复（同改名、移动、删除前的 saveFirst）
+ */
+export async function flushTodos(timeoutMs: number): Promise<boolean> {
+  const list = [...flushers].filter((f) => f.todo);
+  const all = Promise.allSettled(list.map((f) => f.flush(false))).then((rs) =>
+    rs.every((r) => r.status === "fulfilled" && r.value !== false),
+  );
+  let timer = 0;
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = window.setTimeout(() => resolve(false), timeoutMs);
+  });
+  const ok = await Promise.race([all, timeout]);
+  window.clearTimeout(timer);
+  return ok;
+}
+
+/**
  * 从托盘退出前最多等这么久（ms）：正在编辑的待办存不上时还要另存为新待办，平时几十毫秒就做完了。
  * 超时了不退出（问用户），免得把正在另存的内容截断
  */

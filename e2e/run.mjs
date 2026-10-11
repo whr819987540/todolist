@@ -38,6 +38,7 @@ const SUITES = [
   "watch",
   "images",
   "tables",
+  "backup",
   "regress",
 ];
 
@@ -69,6 +70,8 @@ function makeContext() {
   const t = {
     TEST_KEYS,
     data: app.DATA,
+    /** 自动备份默认的目录（数据目录旁边的 data-backups） */
+    backups: app.BACKUPS,
     product: app.PRODUCT,
     pid: 0,
     main: null,
