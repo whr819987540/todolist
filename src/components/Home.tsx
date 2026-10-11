@@ -22,7 +22,7 @@ import {
 } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
-import { useAppEvent, useWindowFocus } from "../hooks";
+import { dataRefreshHeld, useAppEvent, useWindowFocus } from "../hooks";
 import { tagQuery, textKeyword, useContentSearch } from "../search";
 import { eventShortcut, isRefreshShortcut } from "../shortcuts";
 import { ThemeButton } from "../theme";
@@ -117,7 +117,7 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
       const combo = eventShortcut(e);
       if (isRefreshShortcut(e)) {
         e.preventDefault();
-        reload();
+        if (!dataRefreshHeld()) reload();
       } else if (ctrl && key === "n") {
         e.preventDefault();
         createRef.current();

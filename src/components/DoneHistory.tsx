@@ -20,7 +20,7 @@ import {
   placeOf,
   rangeStart,
 } from "../doneHistory";
-import { useAppEvent, useWindowFocus } from "../hooks";
+import { dataRefreshHeld, useAppEvent, useWindowFocus } from "../hooks";
 import { shortPlaceLabel } from "../projects";
 import { tagQuery } from "../search";
 import { isRefreshShortcut } from "../shortcuts";
@@ -230,7 +230,7 @@ function HistoryContent({ workspaces, version, onOpen, onUndone, onClose }: Prop
   useEffect(() => {
     if (!inWorkspace) return;
     const onKey = (e: KeyboardEvent) => {
-      if (isRefreshShortcut(e)) load();
+      if (isRefreshShortcut(e) && !dataRefreshHeld()) load();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
