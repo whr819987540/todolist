@@ -53,6 +53,7 @@ zip = { version = "8", default-features = false, features = ["deflate-flate2-zli
 keyring = { version = "3" }
 roxmltree = "0.21"
 percent-encoding = "2"
+notify = "8"
 ```
 
 `src/lib.rs`：用 `#[path]` 直接引用主程序的源文件，不复制：
@@ -69,11 +70,15 @@ pub mod backup;
 pub mod autostart;
 #[path = "../../../src/webdav.rs"]
 pub mod webdav;
+#[path = "../../../src/watch.rs"]
+pub mod watch;
 ```
 
 ```sh
 cd src-tauri/target/linux-harness && PATH=$HOME/.cargo/bin:$PATH cargo test
 ```
+
+改了主程序的源文件后，测试壳偶尔还在用旧的编译结果（`cargo test -- --list` 里没有刚加的测试）：`touch src/lib.rs` 再跑。`watch::tests::external_changes_are_merged_and_own_writes_skipped` 在 Linux 上不过（inotify 来不及给刚建的深层文件夹加监听，那里的变化收不到），Windows 上照常通过；新写的监听测试把要用的文件夹在开始监听之前建好，Linux 上也能跑
 
 新加的 Rust 模块不依赖 Tauri 时，也加进这里的 `lib.rs`；依赖 Tauri 的代码放在主程序的 `lib.rs` 里，在 Linux 上只能靠下面的类型检查。
 
@@ -114,7 +119,7 @@ exit 0
 
 放在测试壳的 `ui/` 下：
 
-- `mock.ts`：用 `@tauri-apps/api/mocks` 的 `mockIPC`、`mockWindows` 模拟全部 Tauri 命令，数据放在内存里（几个工作区、项目、带多级标题的长待办），刷新页面就恢复原样。URL 参数 `theme`（light / dark）定主题，`window`（main / quick）定当前是哪个窗口；`window.__mock` 露出 `db`、`handlers`、`calls`（调用过的命令）和 `emit`，场景脚本可以直接改数据、模拟 Rust 端发来的事件（如快速记录存好后的 `data-changed`、`open-todo`）。没模拟的命令在控制台打出「没有模拟的命令」，`plugin:` 开头的一律返回 `null`
+- `mock.ts`：用 `@tauri-apps/api/mocks` 的 `mockIPC`、`mockWindows` 模拟全部 Tauri 命令，数据放在内存里（几个工作区、项目、带多级标题的长待办），刷新页面就恢复原样。URL 参数 `theme`（light / dark）定主题，`window`（main / quick）定当前是哪个窗口；`window.__mock` 露出 `db`、`orders`（各层项目的顺序，同每一层的 `.projects.json`，键是那一层的文件夹：「工作区」或「工作区/父项目/…」）、`handlers`、`calls`（调用过的命令）和 `emit`，场景脚本可以直接改数据、模拟 Rust 端发来的事件（如快速记录存好后的 `data-changed`、`open-todo`）。没模拟的命令在控制台打出「没有模拟的命令」，`plugin:` 开头的一律返回 `null`
 - `harness.html`、`quick-harness.html`：先 `import "./mock.ts"`，再 `await import("/src/main.tsx")`（快速记录小窗是 `/src/quick.tsx`）
 - 在仓库根目录起 Vite：`node node_modules/vite/bin/vite.js --port 1420 --strictPort`，打开 `http://localhost:1420/src-tauri/target/linux-harness/ui/harness.html?theme=dark`。`vite.config.ts` 不监视 `src-tauri/**`，改了 `mock.ts` 要重启 Vite（`restart-vite.sh`：按 `vite.pid` 结束上一个、起新的、等它能访问）
 - `shot.mjs`：用 playwright-core（装在 `ui/` 里）和 Playwright 的 chrome-headless-shell（`~/.cache/ms-playwright/` 下）打开页面，跑一个场景脚本，截图存进 `shots/`，页面的报错、警告打在最后。场景脚本 `export default async (page, shot) => { … }`：
@@ -125,7 +130,7 @@ exit 0
   PAGE=quick-harness VIEWPORT=600x248 node shot.mjs s-quick.mjs
   ```
 
-- `e2e-harness.mjs`：在模拟后端里近似地跑一个端到端套件（`node e2e-harness.mjs split`），推送之前先核对套件里写的期望值、找出套件本身的错。照 `e2e/lib/cdp.mjs` 的样子给套件一个 `t.main`（`ev` 前面加上 `e2e/lib/page.mjs` 的工具函数，`press` / `type` / `click` / `drag` / `mouse` 换成 Playwright 的键盘鼠标，`enter`、`selectAllWorkspaces`、`expandAll`、`openSettings` 照抄），测试数据照 `e2e/lib/fixtures.mjs` 放进 `window.__mock.db`（长文档简化了、GBK 编码的那篇换成了 UTF-8 的同样内容，`search` 套件里查它们的几项在这里不通过）；`t.read` 读的正文、`.state.json` 在模拟后端存盘时经 `exposeBinding` 同步回 Node，`t.meta` 读的元数据（同 `.todos.json`：待办去掉正文；不像 Rust 端那样省掉没用到的项，查「没有这一项」的检查在这里不通过）在模拟后端每个命令之后同步回来；`t.exists`、`t.remove` 只看 Node 这边留着的正文，软件里移动、删除了待办它也不变，用到它的检查（如 `batch` 的移动、删除）在这里不通过；`t.write` 同时改模拟后端里的正文和修改时间，存盘时按修改时间判断外部修改冲突（同 Rust 端）；`t.restart`、`m.reload` 是刷新页面、按同步回来的元数据重建测试数据（同真的程序重新打开：完成状态、标签、新建的项目和待办都还在，正文用 Node 这边留着的；`mock.ts` 把 `.state.json` 的内容和设置记在 sessionStorage 里，刷新后还在）。窗口、全局快捷键、注册表、回收站、CDP 特有的（输入法组合 `m.send`）都跑不了，用到它们的套件会报错，只看用得上的那些检查
+- `e2e-harness.mjs`：在模拟后端里近似地跑一个端到端套件（`node e2e-harness.mjs split`），推送之前先核对套件里写的期望值、找出套件本身的错。照 `e2e/lib/cdp.mjs` 的样子给套件一个 `t.main`（`ev` 前面加上 `e2e/lib/page.mjs` 的工具函数，`press` / `type` / `click` / `drag` / `mouse` 换成 Playwright 的键盘鼠标，`enter`、`selectAllWorkspaces`、`expandAll`、`openSettings` 照抄），测试数据照 `e2e/lib/fixtures.mjs` 放进 `window.__mock.db`（长文档简化了、GBK 编码的那篇换成了 UTF-8 的同样内容，`search` 套件里查它们的几项在这里不通过）；`t.read` 读的正文、`.state.json` 在模拟后端存盘时经 `exposeBinding` 同步回 Node，`t.meta` 读的元数据（同 `.todos.json`：待办去掉正文；不像 Rust 端那样省掉没用到的项，查「没有这一项」的检查在这里不通过）在模拟后端每个命令之后同步回来；`t.exists`、`t.remove` 对正文文件只看 Node 这边留着的，软件里移动、删除了待办它也不变，用到它的检查（如 `batch` 的移动、删除）在这里不通过；`t.exists` 对项目的文件夹看同步回来的元数据（模拟后端里有没有这个项目），移动、删除项目后跟着变；`t.file` 指向模拟后端每个命令之后写出来的各层 `.projects.json`（临时目录里，同数据目录的布局），套件可以照常 `readFileSync`；`t.write` 写 `.projects.json` 时改模拟后端里那一层的顺序（手改坏了的当成没有），发一个带这个路径的 `data-changed`（同 Rust 端监听到外部改动）；`t.write` 同时改模拟后端里的正文和修改时间，存盘时按修改时间判断外部修改冲突（同 Rust 端）；`t.restart`、`m.reload` 是刷新页面、按同步回来的元数据重建测试数据（同真的程序重新打开：完成状态、标签、新建的项目和待办都还在，正文用 Node 这边留着的；`mock.ts` 把 `.state.json` 的内容和设置记在 sessionStorage 里，刷新后还在）。窗口、全局快捷键、注册表、回收站、CDP 特有的（输入法组合 `m.send`）都跑不了，用到它们的套件会报错，只看用得上的那些检查
 
 加了 Tauri 命令要在 `mock.ts` 里加上模拟。看截图时浅色、深色都看，最小窗口宽度（860）下看会不会挤。
 
