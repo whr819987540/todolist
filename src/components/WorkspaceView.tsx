@@ -8,7 +8,7 @@ import { useContentSearch } from "../search";
 import { type How, visit } from "../navHistory";
 import { parentOf, sortProjects } from "../projects";
 import { useSettings } from "../settings";
-import { eventShortcut, isRefreshShortcut, sameShortcut } from "../shortcuts";
+import { eventShortcut, inDialog, isRefreshShortcut, sameShortcut } from "../shortcuts";
 import { activeAfterClose, neighborTab, sameTodo, stepTab, tabIndex, type TodoRef } from "../tabs";
 import { allTodos, countTags } from "../tags";
 import type { TodoSummary, WorkspaceTree } from "../types";
@@ -644,10 +644,12 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       const { actionsFor, sel, selTree, selTodo, keys } = kbRef.current;
       const a = actionsFor(sel.workspace);
       const combo = eventShortcut(e);
+      // 有对话框开着（回收站、完成记录、设置、确认框等）时，下面除了 F5、Ctrl+S 都不响应（shortcuts.ts 的 inDialog）
+      const dialog = inDialog(e);
       // 多选了待办时：Esc 取消选择，Delete 删除，「标记完成 / 未完成」的快捷键作用于选中的这些（输入框、对话框里不管）
       const { pickedItems, batch } = latest.current;
       const target = e.target as Element | null;
-      if (pickedItems.length > 1 && !target?.closest?.(".ant-modal, input, textarea, [contenteditable='true']")) {
+      if (pickedItems.length > 1 && !dialog && !target?.closest?.("input, textarea, [contenteditable='true']")) {
         // 右键菜单、下拉菜单开着时 Esc 是关菜单
         if (e.key === "Escape" && !document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden)")) {
           e.preventDefault();
@@ -665,8 +667,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
           return;
         }
       }
-      // 设置里可修改的快捷键，作用于当前选中的待办（优先于下面的内置快捷键）
-      if (sel.project && selTodo && combo && keys) {
+      // 设置里可修改的快捷键，作用于当前选中的待办（优先于下面的内置快捷键）；对话框里不响应
+      if (sel.project && selTodo && combo && keys && !dialog) {
         if (sameShortcut(combo, keys.toggleDoneShortcut)) {
           e.preventDefault();
           if (!e.repeat) a.toggleDone(sel.project, selTodo, true);
@@ -684,7 +686,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
       if (e.altKey && !ctrl && !e.shiftKey && e.key.startsWith("Arrow")) {
         const heldAfterClose = e.repeat && altUpClosed.current;
         if (!e.repeat) altUpClosed.current = false;
-        if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
+        if (dialog) return;
         e.preventDefault();
         if (heldAfterClose) return;
         const { shownTabs, activeTodo, activateTab, closeTabs } = tabsRef.current;
@@ -717,25 +719,28 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         // 有冲突（弹出了冲突对话框）、保存失败（已提示）时不提示「已保存」
         flushEditor().then((saved) => saved && message.success("已保存"));
       } else if (combo === "Ctrl+Shift+F") {
+        // 聚焦侧栏搜索框。对话框里不响应（焦点会跑到对话框后面）
         e.preventDefault();
-        searchRef.current?.focus({ cursor: "all" });
+        if (!dialog) searchRef.current?.focus({ cursor: "all" });
       } else if (combo === "Ctrl+F" || combo === "Ctrl+H") {
         // 在正文里查找 / 替换；没有打开待办时 Ctrl+F 聚焦侧栏搜索框。对话框里不响应
         e.preventDefault();
-        if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
+        if (dialog) return;
         if (editorRef.current?.find(combo === "Ctrl+H")) return;
         if (combo === "Ctrl+F") searchRef.current?.focus({ cursor: "all" });
       } else if (combo === "Ctrl+W" || combo === "Ctrl+Tab" || combo === "Ctrl+Shift+Tab") {
         // 关掉正显示着的标签 / 切到下一个、上一个标签。对话框里不响应
         e.preventDefault();
-        if ((e.target as Element | null)?.closest?.(".ant-modal")) return;
+        if (dialog) return;
         const { shownTabs, activeTodo, activateTab, closeTabs } = tabsRef.current;
         if (combo !== "Ctrl+W") {
           const next = stepTab(shownTabs, activeTodo, combo === "Ctrl+Tab" ? 1 : -1);
           if (next) activateTab(next);
         } else if (activeTodo && !e.repeat) closeTabs([activeTodo]);
       } else if (ctrl && key === "n") {
+        // 在当前项目新建待办。对话框里不响应（不能在对话框后面新建、打开）
         e.preventDefault();
+        if (dialog) return;
         const projects = selTree?.projects ?? [];
         const project = sel.project ?? (projects.length === 1 ? projects[0].name : undefined);
         if (project) a.newTodo(project, "", true);

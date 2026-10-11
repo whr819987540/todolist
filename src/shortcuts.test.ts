@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it } from "vitest";
 import {
   checkShortcut,
   eventShortcut,
+  inDialog,
   isRefreshShortcut,
   keyName,
   normalizeShortcut,
@@ -122,5 +124,49 @@ describe("录制快捷键时的检查", () => {
     const taken = [{ key: "Ctrl+Alt+D", label: "「标记完成 / 未完成」" }];
     expect(checkShortcut("Ctrl+Alt+D", taken)).toBe("Ctrl + Alt + D 已用于「标记完成 / 未完成」，请换一个");
     expect(checkShortcut("Ctrl+Alt+E", taken)).toBeNull();
+  });
+});
+
+// docs/requirements.md「快捷键」：对话框（回收站、完成记录、设置、确认框等）开着时，不论焦点在对话框里还是落在了外面，
+// Ctrl+N 等应用内快捷键不响应
+describe("有对话框开着（inDialog）", () => {
+  afterEach(() => document.body.replaceChildren());
+  /** antd 的对话框：.ant-modal-root > .ant-modal-wrap > .ant-modal，关上（没销毁）时 wrap 是 display: none */
+  const dialog = (display?: string) => {
+    const root = document.createElement("div");
+    root.className = "ant-modal-root";
+    const wrap = document.createElement("div");
+    wrap.className = "ant-modal-wrap";
+    if (display) wrap.style.display = display;
+    const box = document.createElement("div");
+    box.className = "ant-modal";
+    const input = document.createElement("input");
+    box.append(input);
+    wrap.append(box);
+    root.append(wrap);
+    document.body.append(root);
+    return input;
+  };
+
+  it("焦点在对话框里", () => {
+    expect(inDialog({ target: dialog() })).toBe(true);
+  });
+
+  it("对话框开着，焦点落在了外面（页面上、编辑区里）", () => {
+    dialog();
+    const editor = document.createElement("div");
+    document.body.append(editor);
+    expect(inDialog({ target: document.body })).toBe(true);
+    expect(inDialog({ target: editor })).toBe(true);
+  });
+
+  it("对话框关上了（没销毁）、没有对话框时不算", () => {
+    dialog("none");
+    const editor = document.createElement("div");
+    document.body.append(editor);
+    expect(inDialog({ target: editor })).toBe(false);
+    document.body.replaceChildren(editor);
+    expect(inDialog({ target: editor })).toBe(false);
+    expect(inDialog({ target: null })).toBe(false);
   });
 });

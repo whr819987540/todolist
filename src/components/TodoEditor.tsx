@@ -46,7 +46,7 @@ import { emitAppEvent, registerFlusher, useAppEvent, useFileDrag, useWindowFocus
 import { leafName, parentOf } from "../projects";
 import { type Leftover, leaveProblem, type LeaveProblem, type ProjectAt, rescueAsNew, rescueNotice } from "../rescue";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
-import { eventShortcut, shortcutLabel } from "../shortcuts";
+import { eventShortcut, inDialog, shortcutLabel } from "../shortcuts";
 import type { TagCount } from "../tags";
 import type { Priority, SavedImage, TextEncoding, TodoDetail, TodoSummary } from "../types";
 import {
@@ -758,13 +758,14 @@ export default function TodoEditor(props: Props) {
     toggleOutlineRef.current = toggleOutline;
   });
 
-  // Ctrl+/ 切换实时渲染 / 源码模式（同 Typora），Ctrl+Shift+1 显示 / 隐藏大纲（同 Typora），焦点在标题上时也能用
+  // Ctrl+/ 切换实时渲染 / 源码模式（同 Typora），Ctrl+Shift+1 显示 / 隐藏大纲（同 Typora），焦点在标题上时也能用；
+  // 对话框（回收站、完成记录等）开着时不响应，免得改了对话框后面看不见的编辑区
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const combo = eventShortcut(e);
       if (combo !== "Ctrl+Slash" && combo !== "Ctrl+Shift+1") return;
       e.preventDefault();
-      if (e.repeat) return;
+      if (e.repeat || inDialog(e)) return;
       if (combo === "Ctrl+Slash") toggleModeRef.current();
       else toggleOutlineRef.current();
     };

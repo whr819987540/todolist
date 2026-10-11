@@ -173,6 +173,17 @@ export default async function (t) {
   // 侧栏底部的「完成记录」：默认看侧栏里选中显示的工作区，可以切到全部工作区
   await openHistory("sidebar");
   check("侧栏底部有「完成记录」，默认看选中的工作区", (await picked("history-scope")) === "生活" && (await titles()).join() === "E,GBK笔记", await titles());
+  // 对话框开着时应用内快捷键不响应：Ctrl+N 不在后面的项目里新建待办，Ctrl+W 不关标签，「标记完成 / 未完成」不改后面打开着的 E
+  const before = t.meta("生活", "杂事").length;
+  for (const key of ["Ctrl+N", "Ctrl+W", "Ctrl+Alt+D"]) await m.press(key);
+  await t.sleep(800);
+  const behind = await m.ev(`const e = document.querySelector(".editor-tab.active");
+    return { tab: e && JSON.parse(e.dataset.tab)[2], title: document.querySelector(".editor-title")?.value, open: !!document.querySelector(".history-stats") }`);
+  check(
+    "完成记录开着时 Ctrl+N、Ctrl+W、「标记完成 / 未完成」的快捷键不响应",
+    t.meta("生活", "杂事").length === before && t.meta("生活", "杂事").find((x) => x.id === "E")?.done && behind.tab === "E" && behind.title === "E" && behind.open,
+    { behind, todos: t.meta("生活", "杂事").map((x) => [x.id, x.done]) },
+  );
   await pick("history-scope", "全部工作区");
   check("切到「全部工作区」", (await titles()).includes("A") && (await titles()).includes("B"), await titles());
 
