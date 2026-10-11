@@ -15,7 +15,15 @@ import { deepCounts, inProject, leafName, parentOf, projectLabel } from "../../p
 import { hitKey, matchTodo, searchSnippet, textKeyword } from "../../search";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../../types";
 import { avatarColor, compactTime, displayTitle, firstChar, relativeTime, sortTodos } from "../../utils";
-import { type DragItem, type DragState, dragConcerns, dropClass, isDraggingProject, reorderMark } from "../DragMove";
+import {
+  type DragItem,
+  type DragState,
+  dragConcerns,
+  dropClass,
+  isDraggingProject,
+  projectMark,
+  reorderMark,
+} from "../DragMove";
 import Highlight from "../Highlight";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "../menus";
 import { PriorityFlag, TagChips } from "../TodoMarks";
@@ -331,6 +339,8 @@ const ProjectBranch = memo(function ProjectBranch(p: {
       ? drag.item.todo.id
       : undefined;
   const mark = reorderMark(drag, p.workspace, name);
+  // 拖项目放在它旁边：插入线画在整块（连同子项目、待办）的上面 / 下面
+  const line = projectMark(drag, p.workspace, name);
   const toggle = () => p.onToggle(name);
   const indent = indentOf(Math.min(p.depth, p.indentLevels));
   // 比最多缩进到的那一级还深的：和它缩进得一样多，文件夹图标上标出是第几级，看得出比上一行深
@@ -349,11 +359,17 @@ const ProjectBranch = memo(function ProjectBranch(p: {
       role="treeitem"
       aria-expanded={open}
       data-drop-project={name}
-      className={
-        [dropClass(drag, p.workspace, name), isDraggingProject(drag, p.workspace, name) && "drag-source"]
-          .filter(Boolean)
-          .join(" ") || undefined
-      }
+      className={[
+        "project-branch",
+        dropClass(drag, p.workspace, name),
+        isDraggingProject(drag, p.workspace, name) && "drag-source",
+        line && `drop-${line.place}`,
+        line?.refused && "drop-line-refused",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      // 插入线从这一级的缩进处画起，看得出放进的是哪一层
+      style={line ? ({ "--drop-indent": `${indent}px` } as React.CSSProperties) : undefined}
     >
       <LazyDropdown menu={projectMenuOf} trigger={["contextMenu"]}>
         <div
