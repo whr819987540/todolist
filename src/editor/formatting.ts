@@ -491,6 +491,40 @@ export const toggleCodeBlock = (view: EditorView): boolean => {
   return true;
 };
 
+/** Ctrl+T 插入的空表格：3 列，表头一行加一行内容 */
+const EMPTY_TABLE = ["|  |  |  |", "| --- | --- | --- |", "|  |  |  |"].join("\n");
+
+/**
+ * 插入表格（同 Typora 的 Ctrl+T，不弹对话框）：EMPTY_TABLE，光标放在表头的第一格。光标所在的行是空行时表格放在这一行，
+ * 否则放在这一行（光标在表格里时是这个表格、选中了几行时是最后一行）的下面；和上下的文字之间空一行，
+ * 免得紧挨着的文字被当成表格的一行
+ */
+export const insertTable = (view: EditorView): boolean => {
+  const { state } = view;
+  if (blocked(state)) return true;
+  const { doc } = state;
+  const at = state.selection.main.to;
+  let line = doc.lineAt(at);
+  for (const n of around(state, at)) {
+    if (n.name === "Table") {
+      line = doc.lineAt(n.to);
+      break;
+    }
+  }
+  const filled = (n: number) => n >= 1 && n <= doc.lines && !!doc.line(n).text.trim();
+  const blank = !line.text.trim();
+  const before = blank ? (filled(line.number - 1) ? "\n" : "") : "\n\n";
+  const after = filled(line.number + 1) ? "\n" : "";
+  const from = blank ? line.from : line.to;
+  view.dispatch({
+    changes: { from, to: line.to, insert: before + EMPTY_TABLE + after },
+    selection: EditorSelection.cursor(from + before.length + 2),
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  return true;
+};
+
 // ---- 选择与删除 ----
 
 let segmenter: Intl.Segmenter | null = null;

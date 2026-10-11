@@ -1,9 +1,12 @@
+import { history, undo } from "@codemirror/commands";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import {
   clearFormat,
   deleteWord,
   headingDown,
   headingUp,
+  insertTable,
   selectLine,
   selectWord,
   setHeading,
@@ -14,7 +17,9 @@ import {
   toggleList,
   toggleQuote,
 } from "./formatting";
-import { apply, exec, readOnly } from "./testState";
+import { markdownSupport } from "./setup";
+import { tableBlocks } from "./tables";
+import { apply, exec, readOnly, TestView } from "./testState";
 
 // 按 docs/requirements.md「编辑快捷键」和 README 的快捷键表写的用例。
 // 记号：| 光标，«» 选区（« 是不动的一端，» 是光标所在的一端）
@@ -289,5 +294,58 @@ describe("选择与删除", () => {
     const once = apply("甲\n乙|乙\n丙", selectLine);
     expect(once).toBe("甲\n«乙乙»\n丙");
     expect(apply(once, selectLine)).toBe("甲\n«乙乙\n丙»");
+  });
+});
+
+describe("插入表格（Ctrl+T）", () => {
+  const TABLE = "|  |  |  |\n| --- | --- | --- |\n|  |  |  |";
+  // 表格里有 |，不能用 testState 的记号（| 是光标），直接给出光标的位置
+  const view = (doc: string, cursor: number, extra = [history()]) =>
+    new TestView(EditorState.create({ doc, selection: EditorSelection.cursor(cursor), extensions: [markdownSupport(), extra] }));
+  const insert = (doc: string, cursor: number) => {
+    const v = view(doc, cursor);
+    insertTable(v.asView);
+    return { doc: v.state.doc.toString(), cursor: v.state.selection.main.head, v };
+  };
+
+  it("3 列、表头一行加一行内容的空表格，光标在表头的第一格", () => {
+    const r = insert("", 0);
+    expect(r.doc).toBe(TABLE);
+    expect(r.cursor).toBe(2);
+    const state = EditorState.create({ doc: r.doc, extensions: markdownSupport() });
+    const [t] = tableBlocks(state);
+    expect([t.model.header.length, t.model.rows.length]).toEqual([3, 1]);
+  });
+
+  it("空行上：放在这一行，和上面的文字空一行", () => {
+    const r = insert("前面\n", 3);
+    expect(r.doc).toBe(`前面\n\n${TABLE}`);
+    expect(r.doc.slice(r.cursor - 2, r.cursor + 2)).toBe("|  |");
+    expect(r.doc.lastIndexOf("\n", r.cursor)).toBe(3);
+    // 空行上下都有字
+    expect(insert("前面\n\n后面", 3).doc).toBe(`前面\n\n${TABLE}\n\n后面`);
+  });
+
+  it("有字的行：放在这一行下面，和上下的文字都空一行", () => {
+    const r = insert("第一段\n第二段", 1);
+    expect(r.doc).toBe(`第一段\n\n${TABLE}\n\n第二段`);
+    expect(r.cursor).toBe("第一段\n\n".length + 2);
+    expect(insert("最后一行", 2).doc).toBe(`最后一行\n\n${TABLE}`);
+  });
+
+  it("光标在表格里：放在这个表格下面", () => {
+    const doc = "| a | b |\n|---|---|\n| 1 | 2 |\n\n后面";
+    expect(insert(doc, 2).doc).toBe(`| a | b |\n|---|---|\n| 1 | 2 |\n\n${TABLE}\n\n后面`);
+  });
+
+  it("代码块里、只读的不插入；插入的可以撤销", () => {
+    const code = "```\n代码\n```";
+    expect(insert(code, 5).doc).toBe(code);
+    const ro = view("正文", 1, [readOnly]);
+    expect(insertTable(ro.asView)).toBe(true);
+    expect(ro.state.doc.toString()).toBe("正文");
+    const r = insert("正文", 2);
+    undo(r.v.asView);
+    expect(r.v.state.doc.toString()).toBe("正文");
   });
 });
