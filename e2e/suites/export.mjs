@@ -1,10 +1,13 @@
 // 导出：右键待办 / 编辑区上方的「…」（分屏两边各自的）/ 右键项目（多深的子项目都行）、工作区「导出」→「导出为 HTML」
-// （「另存为」对话框在页面里换成直接返回路径）；导出的 HTML 里有标题、状态、所在的位置、渲染后的表格和任务框、嵌进去的相对路径
+// 「导出为 PDF」（「另存为」对话框在页面里换成直接返回路径）；导出的 HTML 里有标题、状态、所在的位置、渲染后的表格和任务框、嵌进去的相对路径
 // 图片（深层项目里的也是）、找不到的图片的占位，正文里的 script 去掉了；导出前有没保存的修改时先存盘（分屏两边开着的都存）、
 // 导出的是最新的；项目连同各级子项目：确认框里的数目、目录和各节都在、顺序同侧栏（项目自己的待办在前，各级子项目一层层作为
-// 下一级的章，标题跟着加深）、不含已完成的；深层的子项目单独导出；工作区按项目一层层分章；上次导出到的目录记住；取消、失败时的提示
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// 下一级的章，标题跟着加深）、不含已完成的；深层的子项目单独导出；工作区按项目一层层分章；上次导出到的目录记住；PDF 的文件头、
+// 页数、图片（深层项目里的也是），打印用的窗口和临时文件用完就没了；取消、失败时的提示
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CDP_PORT } from "../lib/app.mjs";
 
 export const title = "导出";
 
@@ -14,8 +17,8 @@ const PNG = Buffer.from(
     "1f15c4890000000d49444154789c63f8cfc0f01f0005000101ff89993d1d0000000049454e44ae426082",
   "hex",
 );
-/** 1×1 的 GIF：深层项目里的图片，和上面的 PNG 分得开 */
-const GIF = Buffer.from("47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b", "hex");
+/** 1×1 的红色 GIF（不透明）：深层项目里的图片，和上面的 PNG 分得开 */
+const GIF = Buffer.from("474946383961010001008000" + "00ff0000000000" + "2c00000000010001000002024401003b", "hex");
 
 export default async function (t) {
   const { main: m, check } = t;
@@ -319,6 +322,57 @@ export default async function (t) {
     { chapters, text: wsAsked.text },
   );
 
+  // ----- 导出成 PDF -----
+  const pdfOf = (p) => (existsSync(p) ? readFileSync(p) : Buffer.alloc(0));
+  const pages = (pdf) => (pdf.toString("latin1").match(/\/Type\s*\/Page(?![a-zA-Z])/g) ?? []).length;
+  const onePdf = join(out, "图文.pdf");
+  await stub("pickExportTarget", onePdf);
+  await m.clearToasts();
+  await rightClickExport(["工作", "需求", "图文"], "PDF");
+  toast = await doneToast(120000);
+  let pdf = pdfOf(onePdf);
+  const [pdfArgs] = await calls();
+  check("右键待办「导出为 PDF」：选位置时是 PDF，导出完提示存到了哪里", pdfArgs?.[0] === "pdf" && toast.includes(onePdf), { pdfArgs, toast });
+  check(
+    "导出成 PDF：文件以 %PDF 开头、大小合理、一页，嵌进去的图片印出来了",
+    pdf.subarray(0, 5).toString() === "%PDF-" && pdf.length > 3000 && pages(pdf) === 1 && pdf.toString("latin1").includes("/Subtype /Image"),
+    { size: pdf.length, pages: pages(pdf) },
+  );
+  const projectPdf = join(out, "需求.pdf");
+  await stub("pickExportTarget", projectPdf);
+  await m.clearToasts();
+  await rightClickExport(["工作", "需求"], "PDF");
+  await confirmExport();
+  toast = await doneToast(120000);
+  pdf = pdfOf(projectPdf);
+  check(
+    "导出项目成 PDF：封面和目录一页，长的待办跨页，一级的子项目从新的一页开始，页数大致对",
+    pdf.subarray(0, 5).toString() === "%PDF-" && pages(pdf) >= 4 && pages(pdf) <= 20,
+    { toast, size: pdf.length, pages: pages(pdf) },
+  );
+  // 深层的子项目：封面目录一页、自己的「页面」、下一级的「组件」从新的一页开始；「按钮」的图片印出来了
+  const subPdf = join(out, "前端.pdf");
+  await stub("pickExportTarget", subPdf);
+  await m.clearToasts();
+  await rightClickExport(["工作", "需求/前端"], "PDF");
+  await confirmExport();
+  toast = await doneToast(120000);
+  pdf = pdfOf(subPdf);
+  check(
+    "导出深层的子项目成 PDF：封面目录、它自己的待办、下一级的章各从新的一页开始，深层项目里的图片印出来了",
+    pdf.subarray(0, 5).toString() === "%PDF-" && pages(pdf) >= 3 && pages(pdf) <= 6 && pdf.toString("latin1").includes("/Subtype /Image"),
+    { toast, size: pdf.length, pages: pages(pdf) },
+  );
+  const leftovers = async () => {
+    const targets = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
+    return targets.filter((x) => x.url.startsWith("file:")).length;
+  };
+  check(
+    "打印用的看不见的窗口关掉了，临时文件删掉了",
+    (await t.until(async () => (await leftovers()) === 0)) && !readdirSync(tmpdir()).some((n) => /^todolist-export-\d+-\d+\.html$/.test(n)),
+    await leftovers(),
+  );
+
   // ----- 导出的范围里开着的待办存不上：不导出；和它无关的照常导出 -----
   const CONFLICT = `[...document.querySelectorAll(".ant-modal-title")].find((e) => e.textContent === "文件已在外部被修改" && e.getClientRects().length > 0)`;
   const conflictShown = () => m.ev(`return !!${CONFLICT}`);
@@ -367,4 +421,9 @@ export default async function (t) {
   await rightClickExport(["工作", "需求", "长文档"], "HTML");
   toast = await doneToast();
   check("导出失败时写明原因", /导出失败：.+/.test(toast), toast);
+  await stub("pickExportTarget", join(out, "没有这个目录", "x.pdf"));
+  await m.clearToasts();
+  await rightClickExport(["工作", "需求", "长文档"], "PDF");
+  toast = await doneToast(120000);
+  check("导出 PDF 失败时也写明原因", /导出失败：.+/.test(toast), toast);
 }

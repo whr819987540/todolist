@@ -272,11 +272,12 @@ describe("批量菜单的「设置优先级」", () => {
   });
 });
 
-// docs/requirements.md「导出」：待办、项目（哪一级的子项目都有）、工作区的菜单里「导出」→「导出为 HTML」；多选的批量操作里没有
+// docs/requirements.md「导出」：待办、项目（哪一级的子项目都有）、工作区的菜单里「导出」→「导出为 HTML」「导出为 PDF」；
+// 多选的批量操作里没有
 describe("菜单里的「导出」", () => {
   const exportItem = (menu: MenuProps) => (menu.items as Item[]).find((i) => i?.key === "export");
 
-  it("待办、项目、各级子项目、工作区的菜单里都有，子菜单是「导出为 HTML」", () => {
+  it("待办、项目、各级子项目、工作区的菜单里都有，子菜单是「导出为 HTML」「导出为 PDF」", () => {
     for (const menu of [
       todoMenu(actions(), "需求", todo, []),
       todoMenu(actions(), "需求/前端/组件", todo, []),
@@ -287,7 +288,7 @@ describe("菜单里的「导出」", () => {
     ]) {
       const item = exportItem(menu)!;
       expect(item.label).toBe("导出");
-      expect(labels(item.children)).toEqual(["导出为 HTML"]);
+      expect(labels(item.children)).toEqual(["导出为 HTML", "导出为 PDF"]);
     }
   });
 
@@ -300,6 +301,9 @@ describe("菜单里的「导出」", () => {
     expect(a.exportTodo).toHaveBeenCalledWith("需求/前端/组件", todo, "html");
     expect(a.exportProject).toHaveBeenCalledWith("需求/前端/组件", "html");
     expect(a.exportWorkspace).toHaveBeenCalledWith("html");
+    const menu = todoMenu(a, "需求", todo, []);
+    click(menu, exportItem(menu)!.children![1].key!);
+    expect(a.exportTodo).toHaveBeenLastCalledWith("需求", todo, "pdf");
   });
 
   it("多选的批量操作里没有", () => {
