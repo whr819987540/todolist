@@ -38,6 +38,7 @@ describe("插进正文的写法", () => {
     );
   });
 
+  // Rust 端 export.rs 的 pasted_and_dropped_images_are_embedded 照同样的写法（同这两个例子）造正文，看导出时图片嵌不嵌得进去
   it("地址里有空格、括号时写成 <…>，说明里的 [ ] 转义", () => {
     expect(imageMarkdown(".assets/会议 纪要/截图 (1).png", "截图 (1).png")).toBe(
       "![截图 (1)](<.assets/会议 纪要/截图 (1).png>)",
