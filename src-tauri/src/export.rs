@@ -1472,6 +1472,108 @@ mod tests {
         assert!(html.contains("width=\"20\""), "{html}");
     }
 
+    /// 同前端 editor/images.ts 的 imageMarkdown：插进正文的一张图片。说明是去掉扩展名的文件名（[ ] \ 前面加 \），
+    /// 地址里有空白、括号、尖括号时写成 <…>（里面的尖括号转义）
+    fn image_markdown(link: &str, name: &str) -> String {
+        let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+        let mut alt = String::new();
+        for c in stem.chars() {
+            if "[]\\".contains(c) {
+                alt.push('\\');
+            }
+            alt.push(c);
+        }
+        let dest = if link.chars().any(|c| c.is_whitespace() || "()<>".contains(c)) {
+            format!("<{}>", link.replace('<', "\\<").replace('>', "\\>"))
+        } else {
+            link.to_string()
+        };
+        format!("![{alt}]({dest})")
+    }
+
+    /// 编辑器里粘贴、拖进来的图片导出时嵌得进去（docs/requirements.md「待办内容 → 图片」「导出 → 图片」）：store.rs 的
+    /// save_image / import_image 存进待办的附件目录 `{项目}/.assets/{待办 id}/`，前端把返回的 link 按 imageMarkdown 的写法
+    /// 写进正文，导出时相对于 .md 所在的项目文件夹找到它。文件名、待办 id 有空格、括号、[ ]、%、& 这些的也行
+    /// （和 src/editor/images.test.ts 里「写进去的地址按 Markdown 解析回来」同一组）；三级深的子项目里的，移到别的项目
+    /// （跨层级：深的移到顶层、顶层移到另一个工作区里深的）时换了 id（附件目录改名、正文里的链接跟着改）的也一样
+    #[test]
+    fn pasted_and_dropped_images_are_embedded() {
+        // 写法和前端的一样（images.test.ts 里有同样的两个例子）
+        assert_eq!(
+            image_markdown(".assets/会议 纪要/截图 (1).png", "截图 (1).png"),
+            "![截图 (1)](<.assets/会议 纪要/截图 (1).png>)"
+        );
+        assert_eq!(image_markdown(".assets/a/[草稿]b.png", "[草稿]b.png"), r"![\[草稿\]b](.assets/a/[草稿]b.png)");
+
+        let tmp = TempDir::new("assets");
+        let root = tmp.0.join("data");
+        fs::create_dir_all(&root).unwrap();
+        let s = Store::new(root).unwrap();
+        s.create_workspace("工作").unwrap();
+        s.create_project("工作", "需求").unwrap();
+        s.create_sub_project("工作", "需求", "前端").unwrap();
+        s.create_sub_project("工作", "需求/前端", "组件").unwrap();
+        const DEEP: &str = "需求/前端/组件";
+        // 软件里新建的（id 是时间），用户放进来的 .md（id 是文件名，可能有空格、括号）
+        let made = s.create_todo("工作", DEEP, "截图", "").unwrap();
+        let pdir = s.project_path("工作", DEEP).unwrap();
+        for id in ["会议 纪要", "周报(第2版)"] {
+            fs::write(pdir.join(format!("{id}.md")), "").unwrap();
+        }
+        s.load_workspace("工作").unwrap();
+        let picked = tmp.0.join("拖进来的");
+        fs::create_dir_all(&picked).unwrap();
+        let names = ["会议 截图.png", "截图 (1).PNG", "a&b'c.jpg", "[草稿] 第一版.webp", "100%.gif"];
+        let data = format!("src=\"data:image/png;base64,{}\"", b64(PNG));
+        let req = |ws: &str, project: &str, id: &str| Request {
+            format: Format::Html,
+            path: String::new(),
+            scope: Scope::Todo,
+            workspace: ws.into(),
+            include_done: true,
+            groups: vec![Group { project: project.into(), ids: vec![id.into()], children: vec![] }],
+        };
+        let embedded = |ws: &str, project: &str, id: &str| {
+            let html = render(&collect(&s, &req(ws, project, id)).unwrap(), now());
+            (html.matches(&data).count(), html.contains("class=\"img-missing\""))
+        };
+        for id in [made.id.as_str(), "会议 纪要", "周报(第2版)"] {
+            let mut content = String::from("# 截图\n\n");
+            let pasted = s.save_image("工作", DEEP, id, "png", PNG).unwrap();
+            content.push_str(&image_markdown(&pasted.link, &pasted.name));
+            for name in names {
+                let src = picked.join(name);
+                // 内容都是同一张 PNG（扩展名不对的也按文件头认）
+                fs::write(&src, PNG).unwrap();
+                let dropped = s.import_image("工作", DEEP, id, &src).unwrap();
+                assert_eq!(dropped.link, format!(".assets/{id}/{name}"));
+                content.push('\n');
+                content.push_str(&image_markdown(&dropped.link, &dropped.name));
+            }
+            s.save_todo_content("工作", DEEP, id, &content, None, true).unwrap();
+            assert_eq!(embedded("工作", DEEP, id), (names.len() + 1, false), "{id}：{content}");
+        }
+
+        // 从三级深的「组件」移到顶层的「需求」时那里有同名的文件：换了新 id，附件目录跟着改名、正文里的链接跟着改，
+        // 照样嵌得进去
+        fs::write(s.project_path("工作", "需求").unwrap().join(format!("{}.md", made.id)), "挡着的").unwrap();
+        let moved = s.move_todo("工作", DEEP, &made.id, "工作", "需求").unwrap();
+        assert_ne!(moved.id, made.id);
+        assert_eq!(embedded("工作", "需求", &moved.id), (names.len() + 1, false));
+        // 再移到另一个工作区里两级深的「归档 / 旧的」，那里也有同名的：又换了 id，也嵌得进去
+        s.create_workspace("生活").unwrap();
+        s.create_project("生活", "归档").unwrap();
+        s.create_sub_project("生活", "归档", "旧的").unwrap();
+        fs::write(s.project_path("生活", "归档/旧的").unwrap().join(format!("{}.md", moved.id)), "也挡着").unwrap();
+        let again = s.move_todo("工作", "需求", &moved.id, "生活", "归档/旧的").unwrap();
+        assert_ne!(again.id, moved.id);
+        assert_eq!(embedded("生活", "归档/旧的", &again.id), (names.len() + 1, false));
+        // 名字里有空格、括号的待办移到深层（没有同名的，id 不变）：附件目录跟过去，也嵌得进去
+        let kept = s.move_todo("工作", DEEP, "周报(第2版)", "生活", "归档/旧的").unwrap();
+        assert_eq!(kept.id, "周报(第2版)");
+        assert_eq!(embedded("生活", "归档/旧的", &kept.id), (names.len() + 1, false));
+    }
+
     #[test]
     fn html_img_only_embeds_relative_paths() {
         // 正文里用 HTML 写的 <img>：相对路径的嵌进去，绝对路径的（含网络路径）不读
