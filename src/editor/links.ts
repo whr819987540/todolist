@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState } from "@codemirror/state";
+import { type EditorState, type Extension, Facet } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 
@@ -52,17 +52,25 @@ export function webUrl(raw: string): string | null {
   return null;
 }
 
+/** 打开链接的函数（ctrlClickLinks 放进去）：渲染后的表格里的链接按住 Ctrl 单击时也用它（tables.ts） */
+export const linkOpener = Facet.define<(url: string) => void, ((url: string) => void) | null>({
+  combine: (v) => v[0] ?? null,
+});
+
 /** 按住 Ctrl 单击链接时打开它（两种模式都生效） */
-export function ctrlClickLinks(open: (url: string) => void) {
-  return EditorView.domEventHandlers({
-    mousedown(e, view) {
-      if (!e.ctrlKey || e.button !== 0) return false;
-      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
-      const url = pos == null ? null : urlAt(view.state, pos);
-      if (!url) return false;
-      e.preventDefault();
-      open(url);
-      return true;
-    },
-  });
+export function ctrlClickLinks(open: (url: string) => void): Extension {
+  return [
+    linkOpener.of(open),
+    EditorView.domEventHandlers({
+      mousedown(e, view) {
+        if (!e.ctrlKey || e.button !== 0) return false;
+        const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+        const url = pos == null ? null : urlAt(view.state, pos);
+        if (!url) return false;
+        e.preventDefault();
+        open(url);
+        return true;
+      },
+    }),
+  ];
 }

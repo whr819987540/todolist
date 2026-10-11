@@ -193,6 +193,26 @@ const theme = EditorView.theme({
   },
   // 从资源管理器拖进图片时，放下的位置
   ".cm-drop-caret": { borderLeft: "2px solid var(--c-primary)", marginLeft: "-1px" },
+  // 表格（tables.ts）：很宽时在编辑区里横着滚动，不撑破编辑区
+  // contain: inline-size：宽度只跟着编辑区，不随表格变宽——编辑区的内容是 flex 子元素，最小宽度取内容里最宽的，
+  // 不这样的话很宽的表格会把整个编辑区撑宽，外层的横向滚动不起作用
+  ".cm-md-table-wrap": { overflowX: "auto", maxWidth: "100%", padding: "6px 0 8px", contain: "inline-size" },
+  ".cm-md-table": { borderCollapse: "collapse", lineHeight: "1.6" },
+  ".cm-md-table th, .cm-md-table td": {
+    border: "1px solid var(--c-border-strong)",
+    padding: "4px 12px",
+    minWidth: "3em",
+    verticalAlign: "top",
+    cursor: "text",
+    // 编辑器折行（lineWrapping）的 overflow-wrap: anywhere 会继承进格子，把长串在哪都折断、表格被挤进编辑区，
+    // 列窄得没法看；格子里按正常的规则断行，放不下时表格变宽、在外层横着滚动
+    whiteSpace: "normal",
+    wordBreak: "normal",
+    overflowWrap: "normal",
+  },
+  ".cm-md-table th": { fontWeight: "600", backgroundColor: "var(--c-hover)" },
+  ".cm-md-table tbody tr:nth-child(even)": { backgroundColor: "var(--c-fill)" },
+  ".cm-md-table a": { color: "var(--c-primary)" },
 });
 
 const lineDecos = new Map<string, Decoration>();
