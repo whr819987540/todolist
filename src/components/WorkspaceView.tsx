@@ -501,7 +501,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     onHome();
   };
 
-  const { actionsFor, stableActions, batch } = useWorkspaceActions({
+  const { actionsFor, stableActions, batch, tags: tagActions } = useWorkspaceActions({
     sel,
     setSel,
     treeOf,
@@ -1096,6 +1096,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         onTodoClick={onTodoClick}
         onTodoDoubleClick={onTodoDoubleClick}
         pickedMenu={pickedMenu}
+        tagActions={tagActions}
       />
       <div className="resizer" onMouseDown={startResize} onDoubleClick={() => setWidth(300)} title="拖动调整宽度，双击恢复默认" />
       <main className="main" ref={mainRef} tabIndex={-1}>

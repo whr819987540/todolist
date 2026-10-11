@@ -9,6 +9,7 @@ import { useNow } from "../utils";
 import type { ListOptions } from "../workspaceState";
 import type { DragMove } from "./DragMove";
 import { type Actions, moveTargets } from "./menus";
+import type { TagActions } from "./workspaceActions";
 import RecycleBinButton from "./RecycleBin";
 import { useRowPopups } from "./sidebar/RowPopups";
 import SidebarToolbar from "./sidebar/SidebarToolbar";
@@ -77,6 +78,8 @@ interface Props {
   onTodoDoubleClick: (s: Selection) => void;
   /** 在多选了的待办上右键时的菜单；不变的函数 */
   pickedMenu: () => MenuProps | null;
+  /** 重命名、删除标签（「筛选」的弹出框里） */
+  tagActions: TagActions;
 }
 
 /** 没有多选的、没有刚切走的项目的工作区都用这一个，行不必重新渲染 */
@@ -239,6 +242,7 @@ export default function Sidebar(props: Props) {
         collapsedOf={collapsedOf}
         setCollapsed={setCollapsed}
         hiddenOf={hiddenOf}
+        tagActions={props.tagActions}
       />
 
       <div

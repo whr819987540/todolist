@@ -8,11 +8,13 @@ interface Options {
   placeholder?: string;
   initial?: string;
   okText?: string;
+  /** 最多几个字，默认 64（工作区、项目名）；标签是 20 */
+  maxLength?: number;
   /** 抛出的错误信息会显示在输入框下方，对话框保持打开 */
   onSubmit: (value: string) => Promise<void>;
 }
 
-/** 输入名称的对话框（新建 / 重命名工作区、项目等）。返回 [要渲染的节点, 打开函数] */
+/** 输入名称的对话框（新建 / 重命名工作区、项目，重命名标签等）。返回 [要渲染的节点, 打开函数] */
 export function useNameDialog(): [React.ReactNode, (opts: Options) => void] {
   const [opts, setOpts] = useState<Options | null>(null);
   const [value, setValue] = useState("");
@@ -67,7 +69,7 @@ export function useNameDialog(): [React.ReactNode, (opts: Options) => void] {
         ref={inputRef}
         value={value}
         placeholder={opts?.placeholder}
-        maxLength={64}
+        maxLength={opts?.maxLength ?? 64}
         showCount
         status={error ? "error" : undefined}
         onChange={(e) => {
