@@ -23,8 +23,18 @@ const dayName = (ms) => {
 /** 五级深的项目（连同工作区六级）：行上的位置中间折叠成「工作 / 深 / … / 四 / 五」 */
 const DEEP = "深/二/三/四/五";
 
+/** 离半夜 12 点不到这么久时先等过了半夜再跑：「今天」「昨天」、最近 7 天的范围在跑的中途换了的话，分组和条数都对不上 */
+const MIDNIGHT_MARGIN = 5 * 60_000;
+
 export default async function (t) {
   const { main: m, check } = t;
+  const midnight = new Date();
+  midnight.setHours(24, 0, 0, 0);
+  const toMidnight = midnight.getTime() - Date.now();
+  if (toMidnight < MIDNIGHT_MARGIN) {
+    console.log(`  … 离半夜 12 点不到 ${Math.ceil(toMidnight / 1000)} 秒，等过了半夜再跑`);
+    await t.sleep(toMidnight + 15_000);
+  }
   await m.viewport(1200, 900);
 
   // 测试数据：A 刚完成，接口里没有标题的一条刚完成，B 昨天 21:30，五级深的项目里的「深处的」2 天前 10:00，D 3 天前 9:15，
