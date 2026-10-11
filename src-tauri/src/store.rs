@@ -2681,7 +2681,11 @@ mod tests {
         // 最深的那一级到 NEW_FOLDER_LIMIT - (1 + room) 为止
         let target = NEW_FOLDER_LIMIT - if room > 0 { 1 + room } else { 0 };
         while len < target {
-            let n = (target - len - 1).min(60);
+            let mut n = (target - len - 1).min(60);
+            // 这一级建完只剩 1 个字符时，下一级的名字就是空的：这一级少一个字，留 2 个给下一级
+            if target - len - 1 - n == 1 {
+                n -= 1;
+            }
             assert!(n > 0, "数据目录太长：{len}");
             let name = c.to_string().repeat(n);
             let path = match levels.last() {
