@@ -40,6 +40,7 @@ import { webUrl } from "../editor/links";
 import { activeIndex, type OutlineItem } from "../editor/outline";
 import type { EditPosition } from "../editor/position";
 import type { EditorMode } from "../editor/setup";
+import { filterByTag } from "../filter";
 import { useAppEvent, useFileDrag, useWindowFocus } from "../hooks";
 import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../settings";
 import { eventShortcut, shortcutLabel } from "../shortcuts";
@@ -614,7 +615,7 @@ export default function TodoEditor(props: Props) {
               </Tag>
             )}
             <PrioritySelect value={summary.priority} onChange={props.onPriority} />
-            <TagEditor tags={summary.tags} allTags={props.allTags} onChange={props.onTags} />
+            <TagEditor tags={summary.tags} allTags={props.allTags} onChange={props.onTags} onTagClick={filterByTag} />
             <span className="sep">|</span>
             <span title={fullTime(summary.createdAt)}>创建于 {fullTime(summary.createdAt).slice(0, 16)}</span>
             <span className="sep">|</span>

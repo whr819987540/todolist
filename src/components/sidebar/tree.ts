@@ -1,5 +1,6 @@
 // 侧栏树共用的定义：右侧显示的内容（选中项）和它在行上的键、折叠状态、待办计数、隐藏全部完成的项目时藏起哪些，
-// 「全部折叠 / 全部展开」看哪些项目
+// 筛选时筛掉哪些项目，「全部折叠 / 全部展开」看哪些项目
+import { isFiltering, matchFilter, type TodoFilter } from "../../filter";
 import { ancestorsOf, deepCounts, deepTodos, depthOf, inProject } from "../../projects";
 import type { ProjectNode, WorkspaceTree } from "../../types";
 
@@ -89,14 +90,52 @@ export function hiddenDoneProjects(
   return hidden.size ? hidden : NONE_HIDDEN;
 }
 
-/** 藏起来的项目（hiddenDoneProjects）里有它或它的哪一级父项目：侧栏里看不见 */
+/**
+ * 开着筛选时侧栏里筛掉的项目（路径）：项目自己和各级子项目里都没有符合筛选的待办的（隐藏已完成的待办时已完成的不算）。
+ * 自己或哪一级子项目里有符合的，它就照常显示，它的各级父项目也有符合的（就是这一条），一样照常显示。
+ * 除了右侧正在显示的、刚切走还要再显示一会儿的（同 hiddenDoneProjects，显示的是子项目时它的各级父项目也不筛）。
+ * 筛掉的项目连同各级子项目一起不显示，这时它下面的不再单独列进来；父项目没筛掉时，没有符合的子项目单独筛掉
+ * （每一级都这样看）。没开筛选时什么都不筛
+ */
+export function hiddenByFilter(
+  projects: readonly ProjectNode[],
+  o: {
+    filter: TodoFilter;
+    /** 隐藏已完成的待办 */
+    hideDone: boolean;
+    selProject?: string;
+    lingering?: ReadonlySet<string>;
+  },
+): ReadonlySet<string> {
+  if (!isFiltering(o.filter)) return NONE_HIDDEN;
+  const showing = [o.selProject, ...(o.lingering ?? [])].filter((x) => x !== undefined);
+  const hidden = new Set<string>();
+  // 从上往下一级一级看：父项目筛掉了，下面的跟着筛掉，不再单独算
+  const byDepth = [...projects].sort((a, b) => depthOf(a.name) - depthOf(b.name));
+  for (const { name } of byDepth) {
+    if (ancestorsOf(name).some((a) => hidden.has(a))) continue;
+    if (showing.some((x) => inProject(x, name))) continue;
+    const todos = deepTodos(projects, name);
+    if (!todos.some((t) => (!o.hideDone || !t.done) && matchFilter(t, o.filter))) hidden.add(name);
+  }
+  return hidden.size ? hidden : NONE_HIDDEN;
+}
+
+/** 两种藏起来的项目合起来（有一边是空的时直接用另一边，侧栏的行不必重新渲染） */
+export function unionHidden(a: ReadonlySet<string>, b: ReadonlySet<string>): ReadonlySet<string> {
+  if (!a.size) return b;
+  if (!b.size) return a;
+  return new Set([...a, ...b]);
+}
+
+/** 藏起来的项目（hiddenDoneProjects、hiddenByFilter）里有它或它的哪一级父项目：侧栏里看不见 */
 export const isHidden = (hidden: ReadonlySet<string>, project: string) =>
   hidden.size > 0 && (hidden.has(project) || ancestorsOf(project).some((a) => hidden.has(a)));
 
 /**
  * 侧栏顶部「全部折叠 / 全部展开」显示哪个：看得见的项目有展开着的时是「全部折叠」，都折叠着时是「全部展开」。
  * 看不见的不算：折叠着的工作区里的项目、折叠着的（哪一级）父项目里的子项目；hiddenOf(tree) 是这个工作区里藏起来的项目
- * （hiddenDoneProjects，和侧栏的树用同样的参数算），它们默认展开着，看不见也折叠不了。算进去的话折叠完看得见的项目后
+ * （hiddenDoneProjects 和筛选时筛掉的 hiddenByFilter 合起来，和侧栏的树用同样的参数算），它们默认展开着，看不见也折叠不了。算进去的话折叠完看得见的项目后
  * 按钮还是「全部折叠」，点了界面没有变化。只对展开着、有展开着的项目的工作区才调用 hiddenOf
  */
 export function anyVisibleProjectOpen(

@@ -39,19 +39,31 @@ export function PrioritySelect({ value, onChange }: { value: Priority; onChange:
   );
 }
 
+/** 点标签按它筛选：不让点击再冒泡到所在的行（打开待办） */
+const tagClick = (tag: string, onTagClick: ((tag: string) => void) | undefined) =>
+  onTagClick &&
+  ((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onTagClick(tag);
+  });
+
 /**
  * 待办标题后面的标签：放不下时只显示前 max 个，后面是「+N」（悬停看全部）；搜索时名字里有关键字的加一圈描边
- * （藏在「+N」里的命中时描「+N」）。侧栏的行很多，这里只用普通元素，不用 antd 的 Tag、Tooltip
+ * （藏在「+N」里的命中时描「+N」）；给了 onTagClick 时点标签按它筛选。侧栏的行很多，这里只用普通元素，
+ * 不用 antd 的 Tag、Tooltip
  */
 export function TagChips({
   tags,
   max,
   keyword = "",
+  onTagClick,
 }: {
   tags: readonly string[];
   max: number;
   /** 搜索的关键字（search.ts 的 tagHit 判断哪些命中） */
   keyword?: string;
+  /** 点了标签（按它筛选）；要是不变的函数，侧栏的行据此判断要不要重新渲染 */
+  onTagClick?: (tag: string) => void;
 }) {
   if (!tags.length) return null;
   const { shown, rest } = visibleTags(tags, max);
@@ -59,7 +71,12 @@ export function TagChips({
   return (
     <span className="tag-list">
       {shown.map((tag) => (
-        <span key={tag} className={`${tagClass(tag)}${tagHit(tag, keyword) ? " hit" : ""}`} title={tag}>
+        <span
+          key={tag}
+          className={`${tagClass(tag)}${tagHit(tag, keyword) ? " hit" : ""}${onTagClick ? " clickable" : ""}`}
+          title={onTagClick ? `${tag}（点一下按这个标签筛选）` : tag}
+          onClick={tagClick(tag, onTagClick)}
+        >
           {tag}
         </span>
       ))}
@@ -81,10 +98,13 @@ export function TagEditor({
   tags,
   allTags,
   onChange,
+  onTagClick,
 }: {
   tags: readonly string[];
   allTags: readonly TagCount[];
   onChange: (tags: string[]) => Promise<boolean>;
+  /** 点了标签（不是 ×）：按它筛选 */
+  onTagClick?: (tag: string) => void;
 }) {
   const { message } = AntApp.useApp();
   const [adding, setAdding] = useState(false);
@@ -114,12 +134,20 @@ export function TagEditor({
   return (
     <span className="tag-editor">
       {tags.map((tag) => (
-        <span key={tag} className={`${tagClass(tag)} closable`} title={tag}>
+        <span
+          key={tag}
+          className={`${tagClass(tag)} closable${onTagClick ? " clickable" : ""}`}
+          title={onTagClick ? `${tag}（点一下按这个标签筛选）` : tag}
+          onClick={tagClick(tag, onTagClick)}
+        >
           {tag}
           <CloseOutlined
             className="tag-close"
             aria-label={`去掉标签「${tag}」`}
-            onClick={() => onChange(tags.filter((t) => t !== tag))}
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange(tags.filter((t) => t !== tag));
+            }}
           />
         </span>
       ))}

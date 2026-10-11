@@ -10,6 +10,7 @@ import {
 import { Dropdown, Tooltip, type MenuProps } from "antd";
 import type { OpenMenu } from "./RowPopups";
 import { memo, useCallback, useMemo, useState } from "react";
+import { filterByTag, isFiltering, matchFilter, type TodoFilter } from "../../filter";
 import { deepCounts, inProject, leafName, parentOf, projectLabel } from "../../projects";
 import { hitKey, matchTodo, searchSnippet, textKeyword } from "../../search";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../../types";
@@ -22,10 +23,13 @@ import {
   type Collapsed,
   countAll,
   countDone,
+  hiddenByFilter,
   hiddenDoneProjects,
   indentOf,
+  isHidden,
   type Selection,
   selKey,
+  unionHidden,
   WS_KEY,
 } from "./tree";
 
@@ -75,8 +79,10 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   hideDone: boolean;
   /** 隐藏全部完成的项目（右侧正在显示的那个除外，搜索时不隐藏） */
   hideDoneProjects: boolean;
-  /** 这个工作区里刚切走、还要再显示一会儿的全部完成的项目（见 lingering.ts） */
+  /** 这个工作区里刚切走、还要再显示一会儿的项目（会被藏起来、筛掉的，见 lingering.ts） */
   lingering: ReadonlySet<string>;
+  /** 按标签、优先级筛选（侧栏显示的各工作区共用一个，见 filter.ts） */
+  filter: TodoFilter;
   /** 点「显示」：这个工作区不再隐藏全部完成的项目；是不变的函数 */
   onShowDoneProjects: (workspace: string) => void;
   sortKey: SortKey;
@@ -94,18 +100,27 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   /** 子项目最多缩进到第几级（跟着侧栏宽度，见 indentLevelsFor） */
   indentLevels: number;
 }) {
-  const { tree, sel, actions: a, collapsed, keyword: kw, hits, hideDone, hideDoneProjects, lingering, sortKey, setCollapsed } =
+  const { tree, sel, actions: a, collapsed, keyword: kw, hits, hideDone, hideDoneProjects, lingering, filter, sortKey, setCollapsed } =
     p;
+  const filtering = isFiltering(filter);
 
-  // 隐藏全部完成的项目时藏起来的项目（藏起来的父项目连同子项目，和单独藏起来的子项目）
+  // 隐藏全部完成的项目时藏起来的项目（藏起来的父项目连同子项目，和单独藏起来的子项目），筛选时筛掉的项目（同样），
+  // 合起来是看不见的
   const selProject = sel?.project;
-  const hidden = useMemo(
+  const hiddenDone = useMemo(
     () => hiddenDoneProjects(tree.projects, { hide: hideDoneProjects, keyword: kw, selProject, lingering }),
     [tree.projects, hideDoneProjects, kw, selProject, lingering],
   );
+  const hiddenFiltered = useMemo(
+    () => hiddenByFilter(tree.projects, { filter, hideDone, selProject, lingering }),
+    [tree.projects, filter, hideDone, selProject, lingering],
+  );
+  const hidden = useMemo(() => unionHidden(hiddenDone, hiddenFiltered), [hiddenDone, hiddenFiltered]);
+  // 「已隐藏 N 个全部完成的项目」不算被筛掉的：点「显示」也显示不出来
+  const doneHiddenCount = [...hiddenDone].filter((name) => !isHidden(hiddenFiltered, name)).length;
 
   // 各项目里列出的待办，排好序；搜索时：标题、正文开头（前端匹配）或正文全文（hits）里有关键字的待办，和名字里有关键字的项目，
-  // 子项目列出来时它的各级父项目也列出来。
+  // 子项目列出来时它的各级父项目也列出来；筛选时只有符合的待办（筛掉哪些项目在 hiddenFiltered 里算）。
   // 这里不管哪些项目藏起来：藏起哪些跟着右侧显示的、刚切走的项目变，变了时不必把全部待办重新排序，各项目拿到的
   // 还是原来的对象，项目不必重新渲染
   const listed = useMemo(() => {
@@ -125,6 +140,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
       let todos = sortTodos(project.todos, sortKey);
       if (hideDone) todos = todos.filter((t) => !t.done);
       if (kw) todos = todos.filter((t) => matchTodo(t, kw) || !!hits?.has(hitKey(project.name, t.id)));
+      if (filtering) todos = todos.filter((t) => matchFilter(t, filter));
       const nameMatch = !!k && leafName(project.name).toLowerCase().includes(k);
       if (kw && !todos.length && !nameMatch && !subs.length) return null;
       const c = counts.get(project.name) ?? { total: 0, undone: 0 };
@@ -139,7 +155,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
       };
     };
     return (children.get(undefined) ?? []).map(build).filter((x) => x !== null);
-  }, [tree, kw, hits, hideDone, sortKey]);
+  }, [tree, kw, hits, hideDone, sortKey, filtering, filter]);
   // 藏起来的项目（连同下面各级）筛掉；没有变的项目还是原来的对象，不必重新渲染
   const visible = useMemo(() => {
     if (!hidden.size) return listed;
@@ -229,6 +245,7 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
               now={p.now}
               today={p.today}
               hideDone={hideDone}
+              filtering={filtering}
               drag={dragConcerns(drag, tree.name, item.project.name) ? drag : null}
               dragStart={p.dragStart}
               onContextMenu={p.onContextMenu}
@@ -244,10 +261,15 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
               <a onClick={a.newProject}>新建一个</a>
             </div>
           )}
-          {hidden.size > 0 && (
+          {doneHiddenCount > 0 && (
             <div className="tree-empty hidden-projects" style={{ paddingLeft: 30 }}>
-              已隐藏 {hidden.size} 个全部完成的项目，
+              已隐藏 {doneHiddenCount} 个全部完成的项目，
               <a onClick={() => p.onShowDoneProjects(tree.name)}>显示</a>
+            </div>
+          )}
+          {filtering && !kw && visible.length === 0 && tree.projects.length > 0 && (
+            <div className="tree-empty filtered-out" style={{ paddingLeft: 30 }}>
+              没有符合筛选的待办
             </div>
           )}
           {kw && visible.length === 0 && tree.projects.length > 0 && (
@@ -287,6 +309,8 @@ const ProjectBranch = memo(function ProjectBranch(p: {
   now: number;
   today: string;
   hideDone: boolean;
+  /** 开着筛选：列出的待办是筛过的 */
+  filtering: boolean;
   /** 拖动和这个项目（或它的子项目）有关时才传：拖的是它（或其中的待办），或者指针在它上面 */
   drag: DragState | null;
   dragStart: DragStart;
@@ -415,7 +439,9 @@ const ProjectBranch = memo(function ProjectBranch(p: {
             ))}
             {todos.length === 0 && !p.keyword && !hasSubs && (
               <div className="tree-empty" style={{ paddingLeft: 48 + indent }}>
-                {hiddenDone > 0 ? (
+                {p.filtering ? (
+                  "没有符合筛选的待办"
+                ) : hiddenDone > 0 ? (
                   `已隐藏 ${hiddenDone} 条已完成的待办`
                 ) : (
                   <>
@@ -522,7 +548,7 @@ const TodoRow = memo(function TodoRow(p: TodoRowProps) {
           <span className="todo-title-text">
             <Highlight text={text} kw={kw} />
           </span>
-          <TagChips tags={t.tags} max={ROW_TAGS} keyword={p.keyword} />
+          <TagChips tags={t.tags} max={ROW_TAGS} keyword={p.keyword} onTagClick={filterByTag} />
         </div>
         {p.snippet ? (
           <div className="todo-meta todo-snippet">
