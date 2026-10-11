@@ -91,8 +91,23 @@ export default async function (t) {
   await m.enter("工作");
   const z = await m.invoke("create_todo", { workspace: "工作", project: "需求", title: "要彻底删除的", content: "Z" });
   const rz = await m.invoke("delete_todo", { workspace: "工作", project: "需求", id: z.id });
+  // 右侧显示着一条待办（分屏的快捷键这时才起作用）
+  await m.ev(`return await openTodo("工作", "需求", "A")`);
   await openBin("sidebar");
   check("侧栏底部的「回收站」", (await binTitles())[0] === "要彻底删除的");
+  // 对话框开着时 Ctrl+N 不响应：不在后面的工作区里新建待办，也不弹出「新建项目」；上下分屏（Alt+Shift+-）也不响应
+  const todosBefore = t.meta("工作", "需求").length;
+  const groupsBefore = await m.ev(`return document.querySelectorAll(".editor-group").length`);
+  await m.press("Ctrl+N");
+  await m.press("Alt+Shift+-");
+  await t.sleep(800);
+  const dialogs = await m.ev(`return [...document.querySelectorAll(".ant-modal-wrap")].filter((w) => w.style.display !== "none").length`);
+  const groupsAfter = await m.ev(`return document.querySelectorAll(".editor-group").length`);
+  check(
+    "回收站开着时 Ctrl+N、上下分屏不响应：不新建待办、不弹出新建项目、编辑区没有分成两边",
+    t.meta("工作", "需求").length === todosBefore && dialogs === 1 && groupsBefore === 1 && groupsAfter === 1,
+    { dialogs, groupsBefore, groupsAfter },
+  );
   await binAction("要彻底删除的", "purge");
   await confirm("删除");
   const inBin = win.recycleBin();

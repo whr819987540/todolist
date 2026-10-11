@@ -24,7 +24,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg } from "../api";
 import { dataRefreshHeld, useAppEvent, useWindowFocus } from "../hooks";
 import { tagQuery, textKeyword, useContentSearch } from "../search";
-import { eventShortcut, isRefreshShortcut } from "../shortcuts";
+import { eventShortcut, inDialog, isRefreshShortcut } from "../shortcuts";
 import { ThemeButton } from "../theme";
 import type { WorkspaceInfo, WorkspaceTree } from "../types";
 import { avatarColor, compareName, firstChar, relativeTime, useNow } from "../utils";
@@ -119,12 +119,13 @@ export default function Home({ onEnter }: { onEnter: (workspace: string, sel?: O
         e.preventDefault();
         if (!dataRefreshHeld()) reload();
       } else if (ctrl && key === "n") {
+        // 新建工作区。对话框（回收站、完成记录、设置、新建工作区本身等）里不响应
         e.preventDefault();
-        createRef.current();
+        if (!inDialog(e)) createRef.current();
       } else if (combo === "Ctrl+Shift+F" || combo === "Ctrl+F") {
-        // 搜索是 Ctrl+Shift+F（工作区里也是）；首页没有正文可查找，Ctrl+F 也聚焦搜索框
+        // 搜索是 Ctrl+Shift+F（工作区里也是）；首页没有正文可查找，Ctrl+F 也聚焦搜索框。对话框里不响应
         e.preventDefault();
-        searchRef.current?.focus({ cursor: "all" });
+        if (!inDialog(e)) searchRef.current?.focus({ cursor: "all" });
       }
     };
     window.addEventListener("keydown", onKey);

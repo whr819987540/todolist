@@ -10,6 +10,7 @@ import { restoreDoneText, takeRestoreNotice } from "./dataBackup";
 import { flushAll, flushBeforeQuit, QUIT_FLUSH_TIMEOUT, useAppEvent } from "./hooks";
 import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
+import { inDialog } from "./shortcuts";
 import { compareName } from "./utils";
 import {
   keepTodoTab,
@@ -99,7 +100,7 @@ export default function App() {
       if (e.button !== 3 && e.button !== 4) return;
       // 不让 WebView 做网页的后退、前进
       e.preventDefault();
-      if (e.type !== "mouseup" || (e.target as Element | null)?.closest?.(".ant-modal-root")) return;
+      if (e.type !== "mouseup" || inDialog(e)) return;
       const place = go(e.button === 3 ? -1 : 1);
       if (place === undefined) return;
       if (!place) setView(HOME);

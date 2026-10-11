@@ -87,6 +87,16 @@ export function isRefreshShortcut(e: KeyState): boolean {
   return s === "F5" || s === "Ctrl+R";
 }
 
+/**
+ * 有对话框开着（docs/requirements.md「快捷键」：回收站、完成记录、设置、新建 / 重命名、确认框等）：焦点在对话框里，
+ * 或者对话框开着、焦点落在了外面（点了遮罩以外的地方、对话框里的行刷新掉了）。这时应用内的新建、搜索、查找、切换 / 关闭标签、
+ * Alt+方向键和作用于选中的待办的快捷键都不响应，Ctrl+S、F5 照常。antd 的对话框关上（没销毁）时外层是 display: none
+ */
+export function inDialog(e: Pick<Event, "target">): boolean {
+  if ((e.target as Element | null)?.closest?.(".ant-modal")) return true;
+  return [...document.querySelectorAll<HTMLElement>(".ant-modal-wrap")].some((w) => w.style.display !== "none");
+}
+
 /** 已经被占用的快捷键，label 如「标记完成 / 未完成」、编辑快捷键「加粗」 */
 export interface TakenShortcut {
   key: string | null | undefined;
