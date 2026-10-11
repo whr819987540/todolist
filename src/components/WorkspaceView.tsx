@@ -18,6 +18,7 @@ import {
   tabIndex,
   type TodoRef,
 } from "../tabs";
+import { allTodos, countTags } from "../tags";
 import type { TodoSummary, WorkspaceTree } from "../types";
 import { useLocalState } from "../utils";
 import { type DataChange, workspacesTouched } from "../watch";
@@ -55,6 +56,7 @@ import { ProjectOverview, WorkspaceOverview } from "./Overview";
 import Sidebar, { type SidebarHandle } from "./Sidebar";
 import { parseSelKey, type Selection, selKey, WS_KEY } from "./sidebar/tree";
 import { dropsOnGroup, useTabDrag } from "./tabDrag";
+import { useTagDialog } from "./TagDialog";
 import TodoEditor, { type EditorHandle } from "./TodoEditor";
 import { batchMenu, moveTargets, todoMenu } from "./menus";
 import { sortNames, useWorkspaceActions } from "./workspaceActions";
@@ -231,6 +233,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   const [storedWidth, setWidth] = useLocalState("sidebarWidth", 300);
   const width = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, storedWidth));
   const [dialog, openDialog] = useNameDialog();
+  const [tagDialog, openTagDialog] = useTagDialog();
   const { info: settingsInfo } = useSettings();
   // 两组的编辑器（组的编号是 a / b），没显示待办时是 null
   const editorRefA = useRef<EditorHandle | null>(null);
@@ -325,6 +328,11 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
   // 侧栏搜索时在选中工作区的正文全文里查；数据刷新、保存后（loaded 变了）重新查
   const hits = useContentSearch(workspaces, keyword, loaded);
   const treeOf = (ws: string) => trees?.find((t) => t.name === ws);
+  // 侧栏里显示的工作区用过的标签（编辑区上方输入标签时联想）
+  const allTags = useMemo(
+    () => countTags(allTodos(loaded?.filter((t) => workspaces.includes(t.name)) ?? [])),
+    [loaded, workspaces],
+  );
 
   // 选中的工作区/项目/待办在刷新后不存在了（被外部删除、取消选中等），退回上一级。
   // 刻意放在 effect 里：退回上一级要经 setSel 记成后退、前进里的「替换」（selHow），并且只在加载完的数据变了之后做
@@ -503,6 +511,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
     flushEditors,
     detachEditors,
     openDialog,
+    openTagDialog,
     collapsed,
     listOptions,
     expand,
@@ -992,6 +1001,8 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         menu={todoMenu(ta, project, todo, moveTargets(trees, ws))}
         onSummary={(s) => patchTodo(ws, project, s)}
         onToggleDone={() => ta.toggleDone(project, todo)}
+        allTags={allTags}
+        onTags={(tags) => ta.setTags(project, todo, tags)}
         onOpenExternal={() => ta.openExternal(project, todo)}
         onSelectWorkspace={ta.selectWorkspace}
         onSelectProject={ta.selectProject}
@@ -1126,6 +1137,7 @@ export default function WorkspaceView({ initialWorkspace, initialSel, onHome, ha
         </div>
       </main>
       {dialog}
+      {tagDialog}
       {drag.ghost}
     </div>
   );

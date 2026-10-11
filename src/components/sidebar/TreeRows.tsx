@@ -11,12 +11,13 @@ import { Dropdown, Tooltip, type MenuProps } from "antd";
 import type { OpenMenu } from "./RowPopups";
 import { memo, useCallback, useMemo, useState } from "react";
 import { deepCounts, inProject, leafName, parentOf, projectLabel } from "../../projects";
-import { hitKey, searchSnippet } from "../../search";
+import { hitKey, matchTodo, searchSnippet, textKeyword } from "../../search";
 import type { ProjectNode, SortKey, TodoSummary, WorkspaceTree } from "../../types";
-import { avatarColor, compactTime, displayTitle, firstChar, matchTodo, relativeTime, sortTodos } from "../../utils";
+import { avatarColor, compactTime, displayTitle, firstChar, relativeTime, sortTodos } from "../../utils";
 import { type DragItem, type DragState, dragConcerns, dropClass, isDraggingProject, reorderMark } from "../DragMove";
 import Highlight from "../Highlight";
 import { type MoveTarget, projectMenu, todoMenu, workspaceMenu, type Actions } from "../menus";
+import { TagChips } from "../TodoMarks";
 import {
   type Collapsed,
   countAll,
@@ -27,6 +28,9 @@ import {
   selKey,
   WS_KEY,
 } from "./tree";
+
+/** 待办行的标题后面最多显示几个标签，多的显示成「+N」 */
+const ROW_TAGS = 2;
 
 /** 侧栏里列出的一个项目：排好序、筛过的待办，和列出的子项目（再往下一样） */
 interface Listed {
@@ -105,7 +109,8 @@ export const WorkspaceBranch = memo(function WorkspaceBranch(p: {
   // 这里不管哪些项目藏起来：藏起哪些跟着右侧显示的、刚切走的项目变，变了时不必把全部待办重新排序，各项目拿到的
   // 还是原来的对象，项目不必重新渲染
   const listed = useMemo(() => {
-    const k = kw.toLowerCase();
+    // 只按标签找（#标签名）时项目名不算命中
+    const k = textKeyword(kw).toLowerCase();
     const counts = deepCounts(tree.projects);
     // 各项目的下一级子项目（顶层项目的键是 undefined）；tree.projects 排好了序，同一级的按名字排
     const children = new Map<string | undefined, ProjectNode[]>();
@@ -347,7 +352,7 @@ const ProjectBranch = memo(function ProjectBranch(p: {
             {open ? <FolderOpenFilled /> : <FolderFilled />}
           </span>
           <span className="row-label" title={projectLabel(name)}>
-            <Highlight text={leafName(name)} kw={p.keyword} />
+            <Highlight text={leafName(name)} kw={textKeyword(p.keyword)} />
           </span>
           <span className="row-count" title={`未完成 ${item.undone} / 共 ${item.total}${item.hasSubs ? "（含子项目）" : ""}`}>
             {item.undone || ""}
@@ -439,6 +444,7 @@ interface TodoRowProps {
   selected: boolean;
   actions: Actions;
   moveTargets: (workspace: string) => MoveTarget[];
+  /** 搜索的关键字：标题、正文片段里的高亮，命中的标签描边 */
   keyword: string;
   /** 搜索时显示在标题下面（代替创建、修改时间）的一段正文，标题里已经有关键字时为 null */
   snippet: string | null;
@@ -482,6 +488,7 @@ function sameTodoRow(a: TodoRowProps, b: TodoRowProps): boolean {
 const TodoRow = memo(function TodoRow(p: TodoRowProps) {
   const { todo: t, actions: a } = p;
   const { text, fromContent } = displayTitle(t);
+  const kw = textKeyword(p.keyword);
 
   return (
     <div
@@ -511,11 +518,14 @@ const TodoRow = memo(function TodoRow(p: TodoRowProps) {
       <div className="todo-main">
         <div className={`todo-title${fromContent ? " from-content" : ""}`}>
           {t.pinned && <PushpinFilled className="pin-mark" />}
-          <Highlight text={text} kw={p.keyword} />
+          <span className="todo-title-text">
+            <Highlight text={text} kw={kw} />
+          </span>
+          <TagChips tags={t.tags} max={ROW_TAGS} keyword={p.keyword} />
         </div>
         {p.snippet ? (
           <div className="todo-meta todo-snippet">
-            <Highlight text={p.snippet} kw={p.keyword} />
+            <Highlight text={p.snippet} kw={kw} />
           </div>
         ) : (
           <div className="todo-meta">

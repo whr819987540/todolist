@@ -45,6 +45,7 @@ import { FONT_LIMITS, useEditShortcuts, useSaveOptions, useSettings } from "../s
 import { eventShortcut, shortcutLabel } from "../shortcuts";
 import type { SavedImage, TextEncoding, TodoSummary } from "../types";
 import type { TodoRef } from "../tabs";
+import type { TagCount } from "../tags";
 import { formatDuration, fullTime, MY_VERSION, relativeTime, textStats, useNow } from "../utils";
 import { type DataChange, todoTouched } from "../watch";
 import {
@@ -58,6 +59,7 @@ import {
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 import Outline from "./Outline";
 import PathCrumb from "./PathCrumb";
+import { TagEditor } from "./TodoMarks";
 import { type SessionMember, todoSession } from "./todoSession";
 
 export interface EditorHandle {
@@ -99,6 +101,10 @@ interface Props {
   menu: MenuProps;
   onSummary: (s: TodoSummary) => void;
   onToggleDone: () => void;
+  /** 侧栏里显示的工作区用过的标签：输入标签时联想 */
+  allTags: readonly TagCount[];
+  /** 改标签（全部标签）；存好了返回 true */
+  onTags: (tags: string[]) => Promise<boolean>;
   onOpenExternal: () => void;
   onSelectWorkspace: () => void;
   /** 点编辑区上方的项目（子项目时还有它的父项目），参数是项目路径 */
@@ -606,6 +612,8 @@ export default function TodoEditor(props: Props) {
                 已置顶
               </Tag>
             )}
+            <TagEditor tags={summary.tags} allTags={props.allTags} onChange={props.onTags} />
+            <span className="sep">|</span>
             <span title={fullTime(summary.createdAt)}>创建于 {fullTime(summary.createdAt).slice(0, 16)}</span>
             <span className="sep">|</span>
             <span title={fullTime(summary.updatedAt)}>
