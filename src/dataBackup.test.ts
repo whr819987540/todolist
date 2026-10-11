@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoBackupStatus, DataRestoreDone } from "./types";
+import { type DataChange, dataTouched, todoTouched, workspacesTouched } from "./watch";
 
 // docs/requirements.md「数据备份」：恢复前先保存打开着的待办（分屏时两边的），有存不上的就不恢复；之后界面状态不再写盘，
 // 免得内存里的标签、编辑位置等稍后写盘时把恢复出来的 .state.json 覆盖掉；恢复成功后整个界面重新加载、提示恢复了什么；
@@ -145,7 +146,7 @@ describe("恢复待办数据", () => {
     window.removeEventListener("app-event:data-changed", changed);
   });
 
-  it("恢复失败（数据没换）：照常刷新，先刷新一次", async () => {
+  it("恢复失败（数据没换）：照常刷新，先刷新一次，当成哪里都可能变了（打开着的待办也核对磁盘）", async () => {
     const changed = vi.fn();
     window.addEventListener("app-event:data-changed", changed);
     await expect(
@@ -156,6 +157,9 @@ describe("恢复待办数据", () => {
     ).rejects.toContain("恢复失败");
     expect(hooks.dataRefreshHeld()).toBe(false);
     expect(changed).toHaveBeenCalledTimes(1);
+    // 恢复期间没交给回调的监听到的变化、获得焦点不知道是哪里：首页、侧栏、回收站、打开着的（深层项目里的也是）都要刷新
+    const c = (changed.mock.calls[0][0] as CustomEvent<DataChange>).detail;
+    expect(dataTouched(c) && workspacesTouched(c, ["工作"]) && todoTouched(c, "工作", "需求/前端/组件", "A") && c?.recycle).toBe(true);
     window.removeEventListener("app-event:data-changed", changed);
   });
 

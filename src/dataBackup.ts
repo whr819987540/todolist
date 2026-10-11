@@ -5,6 +5,10 @@ import { emitAppEvent, flushTodos, holdDataRefresh } from "./hooks";
 import type { AutoBackupStatus, DataBackupDone, DataBackupInfo, DataRestoreDone } from "./types";
 import { fullTime } from "./utils";
 import { resumeUiState, suspendUiState } from "./workspaceState";
+import type { DataChanged } from "./watch";
+
+/** 恢复失败后先刷新一次时发的 data-changed：什么都可能变了（同监听到一次变了很多处） */
+const ALL_CHANGED: DataChanged = { all: true, paths: [], recycle: true };
 
 /** 恢复成功后整页重新加载，结果记在这里（sessionStorage，只在这个窗口里），重新加载后显示 */
 const NOTICE_KEY = "dataRestored";
@@ -30,7 +34,8 @@ export async function restoreData(run: () => Promise<DataRestoreDone>, reload = 
   } catch (e) {
     holdDataRefresh(false);
     resumeUiState();
-    emitAppEvent("data-changed");
+    // 恢复期间没交给回调的监听到的变化、获得焦点不知道是哪里：当成全部变了刷新一次（分屏两边打开着的待办也核对磁盘）
+    emitAppEvent("data-changed", ALL_CHANGED);
     throw e;
   }
   try {
