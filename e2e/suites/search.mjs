@@ -28,7 +28,7 @@ export default async function (t) {
   };
   /** 列出了这条待办 */
   const listed = (sel) => (rows) => rows.some((r) => r.sel === sel);
-  /** 全文也查完了、一条都没有：只看列出的行不够，搜过的关键字再搜时，查完之前还先显示上次的结果 */
+  /** 全文也查完了、一条都没有：只看列出的行不够，全文还没查完时也可能一条都没列出 */
   const none = (kw) => (rows, notes) =>
     rows.length === 0 && notes.some((n) => n.includes(`没有找到包含“${kw}”`)) && !notes.some((n) => n.includes("正在搜索"));
 
@@ -55,9 +55,16 @@ export default async function (t) {
   await m.ev(`const v = view(); const i = v.state.doc.toString().indexOf("火龙果"); v.dispatch({ changes: { from: i, to: i + 3, insert: "榴莲" } }); return 1`);
   await m.press("Ctrl+S");
   await t.sleep(500);
+  // 再搜搜过的关键字时，记下查完之前标题下面显示过「火龙果」的待办（上次查到的、保存前的内容）
+  await m.ev(`const box = document.querySelector(".sidebar"); window.__stale = new Set();
+    const note = () => { for (const r of box.querySelectorAll(".tree-row[data-sel]"))
+      if (r.querySelector(".todo-snippet")?.textContent.includes("火龙果")) window.__stale.add(JSON.parse(r.dataset.sel).join("/")); };
+    window.__staleObs = new MutationObserver(note); window.__staleObs.observe(box, { childList: true, subtree: true, characterData: true }); return 1`);
   const old = await search("火龙果", none("火龙果"));
+  const stale = await m.ev(`window.__staleObs.disconnect(); return [...window.__stale]`);
   rows = await search("榴莲", listed("工作/需求/B"));
   check("再改了保存：旧内容搜不到、新内容搜得到", old.length === 0 && rows.some((r) => r.sel === "工作/需求/B"), { old, rows });
+  check("清空后再搜搜过的关键字：查完之前不先显示上次查到的（保存前的内容）", stale.length === 0, stale);
   await m.press("Escape");
 
   // 外部改了正文：切回窗口后按新内容搜

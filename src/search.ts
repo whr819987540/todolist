@@ -47,6 +47,12 @@ export function useContentSearch(
 ): ContentHits | null {
   const kw = keyword.trim();
   const [result, setResult] = useState<{ kw: string; hits: ContentHits } | null>(null);
+  // 清空搜索后再输入原来的关键字也算变了：上次的结果要是留着，查完之前会先显示上次查到的（那之后保存、刷新过的话是旧的）
+  const [lastKw, setLastKw] = useState(kw);
+  if (lastKw !== kw) {
+    setLastKw(kw);
+    setResult(null);
+  }
   // 工作区列表按内容比较，每次渲染新建的数组不会让它重新查
   const wsKey = workspaces && JSON.stringify(workspaces);
   useEffect(() => {
