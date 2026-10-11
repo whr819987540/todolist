@@ -1,6 +1,8 @@
 import dayjs from "dayjs";
 import "dayjs/locale/zh-cn";
 import { projectLabel } from "./projects";
+import { tagQuery } from "./search";
+import { hasTag } from "./tags";
 import type { DoneTodo } from "./types";
 import { displayTitle } from "./utils";
 
@@ -95,10 +97,16 @@ export function groupByDay(items: readonly DoneTodo[], now: number): DayGroup[] 
 /** 所在的位置：工作区 / 父项目 / 子项目 */
 export const placeOf = (x: DoneTodo) => `${x.workspace} / ${projectLabel(x.project)}`;
 
-/** 查找：标题（没有标题时的正文开头）或所在的工作区、项目里有关键字，不区分大小写；没有关键字时都算 */
+/**
+ * 查找：标题（没有标题时的正文开头）、所在的工作区、项目或标签名里有关键字，不区分大小写；没有关键字时都算。
+ * 以 # 开头时只按标签找，同侧栏的搜索（search.ts 的 tagQuery）：要有这个标签（名字一样），只输入 # 时有标签就算
+ */
 export function matchHistory(x: DoneTodo, keyword: string): boolean {
   const k = keyword.trim().toLowerCase();
-  return !k || `${displayTitle(x.todo).text} ${placeOf(x)}`.toLowerCase().includes(k);
+  if (!k) return true;
+  const tag = tagQuery(k);
+  if (tag !== null) return tag ? hasTag(x.todo.tags, tag) : x.todo.tags.length > 0;
+  return `${displayTitle(x.todo).text} ${placeOf(x)}`.toLowerCase().includes(k) || x.todo.tags.some((t) => t.toLowerCase().includes(k));
 }
 
 /** 今天完成了几条 */

@@ -21,11 +21,14 @@ import {
   rangeStart,
 } from "../doneHistory";
 import { useAppEvent, useWindowFocus } from "../hooks";
+import { tagQuery } from "../search";
 import { isRefreshShortcut } from "../shortcuts";
 import type { TodoRef } from "../tabs";
 import type { DoneTodo, TodoSummary, WorkspaceTree } from "../types";
 import { displayTitle, fullTime, useLocalState, useNow } from "../utils";
+import { type DataChange, dataTouched } from "../watch";
 import { useRowPopups } from "./sidebar/RowPopups";
+import { PriorityFlag, TagChips } from "./TodoMarks";
 
 // 完成记录：按完成日期列出完成了的待办（分组、范围、查找、统计的规则在 doneHistory.ts）。
 // 首页头部和侧栏底部各有一个入口（同回收站）
@@ -46,6 +49,16 @@ type Scope = "selected" | "all";
 
 /** 右键菜单用侧栏的那一套（共用一个菜单）；完成记录里没有悬停提示，不用工作区的树 */
 const NO_TREES: WorkspaceTree[] = [];
+
+/** 一行里标题后面最多显示几个标签，多的显示成「+N」（同项目概览） */
+const ROW_TAGS = 3;
+
+/** 查找不到时的说明；#标签名 只按标签找（同首页的搜索结果） */
+function notFound(keyword: string): string {
+  const tag = tagQuery(keyword);
+  if (tag === null) return `没有找到包含“${keyword}”的`;
+  return tag ? `没有找到带标签「${tag}」的` : "没有带标签的";
+}
 
 const keyOf = (x: DoneTodo) => `${x.workspace}\u0000${x.project}\u0000${x.todo.id}`;
 
@@ -97,15 +110,17 @@ function DailyBars({ bars, today, onPick }: { bars: { day: number; count: number
   );
 }
 
-/** 完成记录里的一行；标签、优先级以后加在标题后面（跟着 TodoSummary 从 .todos.json 带过来） */
+/** 完成记录里的一行：优先级的小旗子、标题、标签（同项目概览；查找时命中的标签高亮），所在的位置、完成时间 */
 function HistoryRow({
   x,
+  keyword,
   busy,
   onOpen,
   onUndone,
   onMenu,
 }: {
   x: DoneTodo;
+  keyword: string;
   busy: boolean;
   onOpen: (x: DoneTodo) => void;
   onUndone: (x: DoneTodo) => void;
@@ -120,8 +135,12 @@ function HistoryRow({
         <CheckOutlined />
       </span>
       <div className="list-main history-main">
-        <span className={`list-title${fromContent ? " from-content" : ""}`} title={text}>
-          {text}
+        <span className={`list-title with-marks${fromContent ? " from-content" : ""}`}>
+          <PriorityFlag priority={x.todo.priority} />
+          <span className="list-title-text" title={text}>
+            {text}
+          </span>
+          <TagChips tags={x.todo.tags} max={ROW_TAGS} keyword={keyword} />
         </span>
       </div>
       <span className="list-path" title={place}>
@@ -184,7 +203,7 @@ function HistoryContent({ workspaces, version, onOpen, onUndone, onClose }: Prop
   }, [load, version]);
   // 看全部工作区时，侧栏没显示的工作区在外部改了也要跟着变；快速记录了一条；F5
   useWindowFocus((focused) => focused && load());
-  useAppEvent("data-changed", () => load());
+  useAppEvent<DataChange>("data-changed", (c) => dataTouched(c) && load());
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isRefreshShortcut(e)) load();
@@ -267,7 +286,7 @@ function HistoryContent({ workspaces, version, onOpen, onUndone, onClose }: Prop
           className="history-search"
           allowClear
           prefix={<SearchOutlined className="muted" />}
-          placeholder="按标题、项目查找"
+          placeholder="按标题、项目、标签查找"
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
         />
@@ -292,7 +311,7 @@ function HistoryContent({ workspaces, version, onOpen, onUndone, onClose }: Prop
           </div>
           {groups.length === 0 ? (
             k ? (
-              <div className="list-empty history-empty">没有找到包含“{k}”的</div>
+              <div className="list-empty history-empty">{notFound(k)}</div>
             ) : (
               <Empty
                 className="history-empty"
@@ -313,6 +332,7 @@ function HistoryContent({ workspaces, version, onOpen, onUndone, onClose }: Prop
                       <HistoryRow
                         key={keyOf(x)}
                         x={x}
+                        keyword={keyword}
                         busy={busy === keyOf(x)}
                         onOpen={open}
                         onUndone={markUndone}

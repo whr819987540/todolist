@@ -746,7 +746,7 @@ mark {
 .history-row {
   padding: 8px 10px 8px 16px;
 }
-/* 标题后面以后放标签、优先级 */
+/* 标题前面是优先级的小旗子、后面是标签（.list-title.with-marks，同项目概览） */
 .history-main {
   display: flex;
   align-items: center;

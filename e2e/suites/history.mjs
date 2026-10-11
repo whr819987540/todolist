@@ -1,6 +1,6 @@
 // 完成记录：首页头部和侧栏底部的入口，按完成日期（本地时间）分组、组里按完成时间倒序，时间范围（记在本机）、
-// 没有完成时间的放在「完成时间不详」，查找、统计和按天的柱状图，点一条进入工作区打开它，标记为未完成，
-// 在工作区里默认看选中的工作区、可以切到全部，开着时数据变了跟着更新，回收站里的不算
+// 没有完成时间的放在「完成时间不详」，优先级的小旗子和标签（同侧栏），查找（含标签、#标签名）、统计和按天的柱状图，
+// 点一条进入工作区打开它，标记为未完成，在工作区里默认看选中的工作区、可以切到全部，开着时数据变了跟着更新，回收站里的不算
 
 export const title = "完成记录";
 
@@ -45,6 +45,9 @@ export default async function (t) {
   setDoneAt("工作", "日常", "D", dAt);
   setDoneAt("生活", "杂事", "E", eAt);
   setDoneAt("生活", "购物", "GBK笔记", null);
+  // B 有标签和优先级（改它们不算修改，完成时间也不动）
+  await m.invoke("set_todo_tags", { workspace: "工作", project: "需求", id: "B", tags: ["工作", "等回复"] });
+  await m.invoke("set_todo_priority", { workspace: "工作", project: "需求", id: "B", priority: 3 });
   await m.emit("tauri://focus");
   await t.sleep(500);
 
@@ -56,8 +59,10 @@ export default async function (t) {
       day: g.querySelector(".history-day-name").textContent,
       count: g.querySelector(".history-day .muted").textContent,
       rows: [...g.querySelectorAll(".history-row")].map((r) => ({
-        title: r.querySelector(".list-title").textContent,
+        title: r.querySelector(".list-title-text").textContent,
         fromContent: r.querySelector(".list-title").classList.contains("from-content"),
+        flag: r.querySelector(".list-title > .prio-flag")?.getAttribute("class") ?? "",
+        tags: [...r.querySelectorAll(".list-title .tag-chip")].map((c) => ({ name: c.textContent, cls: c.className })),
         place: r.querySelector(".list-path").textContent,
         time: r.querySelector(".history-time").textContent,
       })),
@@ -72,7 +77,7 @@ export default async function (t) {
       [s.querySelector(".stat-label").textContent, Number(s.querySelector(".stat-value").textContent)]))`);
   const bars = () => m.ev(`return [...document.querySelectorAll(".history-slot")].map((b) => Number(b.dataset.count))`);
   const search = (kw) => m.ev(`setInput(document.querySelector(".history-search input"), ${JSON.stringify(kw)}); await sleep(300); return 1`);
-  const rowOf = (title) => `[...document.querySelectorAll(".history-row")].find((r) => r.querySelector(".list-title").textContent === ${JSON.stringify(title)})`;
+  const rowOf = (title) => `[...document.querySelectorAll(".history-row")].find((r) => r.querySelector(".list-title-text").textContent === ${JSON.stringify(title)})`;
 
   // 首页的「完成记录」：默认最近 7 天
   check("首页头部有「完成记录」，打开后默认是最近 7 天", (await openHistory("home")) && (await picked("history-range")) === "最近 7 天");
@@ -85,6 +90,16 @@ export default async function (t) {
   check("组里按完成时间倒序（后完成的在前）", g[0]?.rows.map((r) => r.title).join() === "联调支付接口的细节,A", g[0]?.rows);
   const b = g[1]?.rows[0];
   check("每条显示标题、「工作区 / 项目」和完成的几点几分", b?.title === "B" && b.place === "工作 / 需求" && b.time === "21:30", b);
+  // 标签的颜色和侧栏、项目概览用同一个规则（tags.ts 的 tagClass）
+  const tagClasses = await m.ev(`const url = performance.getEntriesByType("resource").map((e) => e.name).find((n) => n.includes("/src/tags.ts")) ?? "/src/tags.ts";
+    const { tagClass } = await import(url); return ["工作", "等回复"].map((x) => tagClass(x))`);
+  check(
+    "有优先级的标题前面是小旗子（高是红的），后面是标签，颜色同侧栏",
+    (b?.flag ?? "").split(" ").includes("prio-3") && JSON.stringify(b?.tags.map((x) => x.name)) === JSON.stringify(["工作", "等回复"]) &&
+      b.tags.every((x, i) => x.cls.split(" ").filter((c) => c.startsWith("tag-")).join(" ") === tagClasses[i]),
+    { b, tagClasses },
+  );
+  check("没有优先级、标签的没有小旗子和标签", g[0]?.rows.every((r) => !r.flag && r.tags.length === 0), g[0]?.rows);
   const s0 = g[0]?.rows[0];
   check("没有标题的显示正文开头，子项目写成「工作区 / 父项目 / 子项目」", s0?.fromContent && s0.place === "工作 / 需求 / 接口", s0);
   check("10 天前完成的、没有完成时间的不在最近 7 天里", !(await titles()).includes("E") && !(await titles()).includes("GBK笔记"), await titles());
@@ -111,6 +126,16 @@ export default async function (t) {
   check("按标题查找，不区分大小写；统计按查找后的算", (await titles()).join() === "GBK笔记" && (await stats())["一共完成"] === 1, await titles());
   await search("没有这个");
   check("找不到时说明", (await m.ev(`return document.querySelector(".history-empty")?.textContent`)) === "没有找到包含“没有这个”的");
+  // 标签：名字里有关键字的也算（命中的标签高亮）；#标签名 只按标签找，同侧栏的搜索
+  await search("等回");
+  const hit = await m.ev(`return [...document.querySelectorAll(".history-row .tag-chip.hit")].map((c) => c.textContent)`);
+  check("按标签名查找，命中的标签高亮", (await titles()).join() === "B" && hit.join() === "等回复", { titles: await titles(), hit });
+  await search("#工作");
+  check("#标签名 只按标签找：不看标题、项目名（「工作」工作区里别的没有这个标签）", (await titles()).join() === "B", await titles());
+  await search("#");
+  check("只输入 # 时列出有标签的", (await titles()).join() === "B", await titles());
+  await search("#没有");
+  check("按标签找不到时说明", (await m.ev(`return document.querySelector(".history-empty")?.textContent`)) === "没有找到带标签「没有」的");
   await search("");
 
   // 时间范围记在本机：关掉再开、重新加载页面后还是「全部」

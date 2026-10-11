@@ -184,6 +184,32 @@ describe("查找（matchHistory）", () => {
     expect(matchHistory(sub, "")).toBe(true);
     expect(matchHistory(untitled, "   ")).toBe(true);
   });
+
+  // docs/requirements.md「完成记录 → 查找」：标签名里有关键字的也算；#标签名 同侧栏的搜索，只按标签找
+  const tagged = done("2026-10-09T08:00:00", { title: "回复客户", tags: ["工作", "等回复"] });
+
+  it("按标签名查找：标签名里有关键字就算，不区分大小写", () => {
+    expect(matchHistory(tagged, "等回")).toBe(true);
+    const en = done("2026-10-09T08:00:00", { title: "x", tags: ["Urgent"] });
+    expect(matchHistory(en, "urg")).toBe(true);
+    expect(matchHistory(sub, "等回")).toBe(false);
+  });
+
+  it("# 开头时只按标签找：要有名字一样的标签（不区分大小写），不看标题、项目", () => {
+    expect(matchHistory(tagged, "#等回复")).toBe(true);
+    expect(matchHistory(tagged, "＃ 等回复 ")).toBe(true);
+    expect(matchHistory(tagged, "#等回")).toBe(false);
+    const en = done("2026-10-09T08:00:00", { title: "x", tags: ["Urgent"] });
+    expect(matchHistory(en, "#URGENT")).toBe(true);
+    // 标题、项目里有也不算
+    const named = done("2026-10-09T08:00:00", { title: "等回复的邮件" }, { project: "等回复" });
+    expect(matchHistory(named, "#等回复")).toBe(false);
+  });
+
+  it("只输入 # 时列出有标签的", () => {
+    expect(matchHistory(tagged, "#")).toBe(true);
+    expect(matchHistory(sub, "#")).toBe(false);
+  });
 });
 
 describe("统计（countToday、dailyCounts）", () => {
