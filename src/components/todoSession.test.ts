@@ -4,7 +4,8 @@ import type { TodoSummary } from "../types";
 
 // docs/requirements.md「待办内容 → 感知外部修改」「右侧分屏 → 两边开着同一条待办」：窗口获得焦点时核对磁盘，有没保存的
 // 修改、外部又改过时立即弹出冲突对话框（两边开着同一条待办时只弹一个）；外部只是重写了一遍、内容没变的不算冲突。
-// 离开这条待办（两边都关掉了；只关掉一边不算）、从托盘退出时存不上的自动另存为新待办，两份都保留
+// 离开这条待办（两边都关掉了；只关掉一边不算）、从托盘退出时存不上的自动另存为新待办，两份都保留；
+// 「待办内容 → 图片」：另存的新待办复制一份原来那条的图片（附件目录）
 
 const sum = (id: string, title = id): TodoSummary => ({
   id,
@@ -100,6 +101,9 @@ function member() {
   };
 }
 
+/** 另存为新待办时从哪条复制图片：原来那条 */
+const from = (s: TodoSession) => ({ workspace: "工作", project: s.project, id: "A" });
+
 /** 等保存、核对排着的都做完 */
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
@@ -171,6 +175,22 @@ describe("窗口获得焦点时核对磁盘", () => {
   });
 });
 
+describe("冲突时选「另存为新待办」", () => {
+  it("这里的正文存成同一项目里的「（我的版本）」，复制一份这条的图片；这一条换成外部的版本", async () => {
+    const m = member();
+    const s = await open(m);
+    s.setContent("我改的 ![](.assets/A/图.png)\n");
+    writeOutside("外部改的\n");
+    s.windowFocus(true);
+    await settle();
+    const r = await s.saveAsNew(null, "live");
+    expect(r?.title).toBe("A（我的版本）");
+    expect(api.createTodo).toHaveBeenCalledWith("工作", s.project, "A（我的版本）", "我改的 ![](.assets/A/图.png)\n", false, from(s));
+    expect(m.reset).toHaveBeenCalledWith("外部改的\n");
+    expect(s.getState().conflict).toBe(false);
+  });
+});
+
 describe("离开时存不上的另存为新待办", () => {
   it("都存好了：不另存", async () => {
     const m = member();
@@ -191,7 +211,7 @@ describe("离开时存不上的另存为新待办", () => {
     await settle();
     close(s, m);
     await settle();
-    expect(api.createTodo).toHaveBeenCalledWith("工作", s.project, "A（我的版本）", "我改的\n", false);
+    expect(api.createTodo).toHaveBeenCalledWith("工作", s.project, "A（我的版本）", "我改的\n", false, from(s));
     expect(disk.content).toBe("外部改的\n");
     expect(m.notice).toHaveBeenCalledWith("warning", expect.stringContaining("「A（我的版本）」"), expect.any(Number));
   });
@@ -212,7 +232,7 @@ describe("离开时存不上的另存为新待办", () => {
     close(s, right);
     await settle();
     expect(api.createTodo).toHaveBeenCalledTimes(1);
-    expect(api.createTodo).toHaveBeenCalledWith("工作", s.project, "A（我的版本）", "我改的\n", false);
+    expect(api.createTodo).toHaveBeenCalledWith("工作", s.project, "A（我的版本）", "我改的\n", false, from(s));
   });
 
   it("待办在外部被删了：另存，提示里说明没能保存的原因，不再单独弹「保存失败」", async () => {
@@ -238,7 +258,7 @@ describe("离开时存不上的另存为新待办", () => {
     });
     close(s, m);
     await settle();
-    expect(api.createTodo).toHaveBeenLastCalledWith("收件箱", "快速记录", "A（我的版本）", "我改的\n", true);
+    expect(api.createTodo).toHaveBeenLastCalledWith("收件箱", "快速记录", "A（我的版本）", "我改的\n", true, from(s));
     expect(m.notice).toHaveBeenCalledWith("warning", expect.stringContaining("「收件箱 / 快速记录」"), expect.any(Number));
   });
 

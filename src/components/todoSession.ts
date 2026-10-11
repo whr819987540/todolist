@@ -458,7 +458,10 @@ export class TodoSession {
     return v ? undoSnapshot(v.state) : null;
   }
 
-  /** 另存成的新待办（at 里的 newId）接着原来的地方编辑：编辑位置、撤销记录和编辑模式跟过去 */
+  /**
+   * 另存成的新待办（at 里的 newId）接着原来的地方编辑：编辑位置、撤销记录和编辑模式跟过去。新的那条的正文里图片的链接
+   * 改成了它自己的 id（复制了一份附件目录，见 createNew），撤销记录接到改过的正文上（relinked）
+   */
   private carryTo(
     at: ProjectAt,
     newId: string,
@@ -467,9 +470,20 @@ export class TodoSession {
     mode: EditorMode,
   ) {
     if (position) writeEditPosition(at.workspace, at.project, newId, position);
-    if (snap) keepUndo(at.workspace, at.project, newId, snap);
+    if (snap) keepUndo(at.workspace, at.project, newId, { ...snap, relinked: true });
     writeEditorMode(at.workspace, at.project, newId, mode);
   }
+
+  /**
+   * 另存为新待办（冲突时选的、离开时存不上自动另存的）：同 api.createTodo，新的那条复制一份这条的图片（附件目录），
+   * 正文里指向这条附件目录的链接改成新的 id，免得以后删了这条图片就没了
+   */
+  private createNew = (workspace: string, project: string, title: string, content: string, createProject: boolean) =>
+    api.createTodo(workspace, project, title, content, createProject, {
+      workspace: this.workspace,
+      project: this.project,
+      id: this.id,
+    });
 
   /**
    * 冲突时「另存为新待办」，两份都保留：这里的正文连同标题（加上「（我的版本）」）存成同一项目里的一条新待办，
@@ -488,7 +502,7 @@ export class TodoSession {
     await this.enqueue(async () => {
       let created: TodoSummary;
       try {
-        created = await api.createTodo(this.workspace, this.project, newTitle, mine);
+        created = await this.createNew(this.workspace, this.project, newTitle, mine, false);
       } catch (e) {
         this.lead?.error(`另存为新待办失败：${errMsg(e)}`);
         this.set({ conflict: true });
@@ -543,7 +557,7 @@ export class TodoSession {
     const content = this.content;
     const here: ProjectAt = { workspace: this.workspace, project: this.project };
     const original = displayTitle(m.summary()).text;
-    const r = await rescueAsNew(api.createTodo, here, m.quickTarget(), myVersionTitle(this.title, content), content);
+    const r = await rescueAsNew(this.createNew, here, m.quickTarget(), myVersionTitle(this.title, content), content);
     // 还开着：从托盘退出时（问用户时可能选了不退出），或者都关掉后马上又打开了
     const open = quitting || this.members.length > 0;
     if (!r.ok) {

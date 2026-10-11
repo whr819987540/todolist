@@ -4,6 +4,7 @@ import { EditorView } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import type { EditShortcutMap } from "../editShortcuts";
 import { keepFindOpen, openFind } from "../editor/find";
+import { type ImageResolver, insertImages, showDropCaret } from "../editor/images";
 import { jumpToHeading, type OutlineItem, outlineItems } from "../editor/outline";
 import { type DocPeers, undoSnapshot } from "../editor/peers";
 import { capturePosition, type EditPosition, restorePosition } from "../editor/position";
@@ -22,6 +23,12 @@ export interface MarkdownEditorHandle {
   jumpTo(pos: number): void;
   /** 现在的编辑位置（光标、选区和滚动） */
   position(): EditPosition;
+  /** 在 pos 处（不给时在光标处，替换选中的文字）插入几张图片（![说明](地址)），每张一行，焦点放进正文 */
+  insertImages(images: string[], pos?: number): void;
+  /** 视口里 (x, y) 处（CSS 像素）对着正文的哪个位置；不在这个编辑器的显示区域里时（分屏时在另一边）是 null */
+  posAt(x: number, y: number): number | null;
+  /** 拖着图片时在 pos 处画一条竖线标出放下的位置，null 时去掉 */
+  dropCaret(pos: number | null): void;
 }
 
 interface Props {
@@ -52,6 +59,10 @@ interface Props {
   onPosition: (p: EditPosition) => void;
   /** 正在看的位置（光标在可见区域里时是光标处，否则是可见区域顶部） */
   onReadingPos: (pos: number) => void;
+  /** 实时渲染时怎么找到正文里的图片，只在创建时读取 */
+  images: ImageResolver;
+  /** 粘贴了图片（剪贴板里没有文字）；files 里只有图片，空的是剪贴板里只有不是图片的文件 */
+  onPasteImages: (files: File[]) => void;
   /** 编辑器销毁前（切到别的待办、返回首页等），交出正文和撤销记录 */
   onDestroy: (snap: UndoSnapshot | null) => void;
 }
@@ -82,6 +93,8 @@ export default function MarkdownEditor(props: Props) {
         onPosition: (pos) => p().onPosition(pos),
         onReadingPos: (pos) => p().onReadingPos(pos),
         sharedHistory: withHistory ? undefined : peers.sharedHistory(),
+        images: p().images,
+        onPasteImages: (files) => p().onPasteImages(files),
       });
     /** 选中 anchor 到 head（相同时只放光标）；给了撤销记录时接着用 */
     const createState = (doc: string, anchor: number, head: number, withHistory: boolean, history: unknown = null) => {
@@ -135,6 +148,17 @@ export default function MarkdownEditor(props: Props) {
       outline: () => outlineItems(view.state),
       jumpTo: (pos) => jumpToHeading(view, pos),
       position: () => capturePosition(view),
+      // 插进这个编辑器（正文的改动经 peers 同步到另一边开着同一条待办的编辑器，只插一次）
+      insertImages(images, pos) {
+        insertImages(view, images, pos);
+        view.focus();
+      },
+      posAt(x, y) {
+        const r = view.scrollDOM.getBoundingClientRect();
+        if (x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
+        return view.posAtCoords({ x, y }, false);
+      },
+      dropCaret: (pos) => showDropCaret(view, pos),
     };
     return () => {
       // 撤销记录交给了别处还开着的编辑器时，这里不用再留

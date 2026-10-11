@@ -103,8 +103,8 @@ pub fn classify(rel: &[&str], structural: bool, now: PathState) -> Option<Change
     let (name, dirs) = rel.split_last().expect("rel 不是空的");
     // 项目、各级子项目里的元数据（工作区文件夹里的不是）
     let meta = depth >= 3 && name.eq_ignore_ascii_case(META_FILE);
-    // 数据目录里 . 开头的（界面状态、设置文件、.trash 等），项目文件夹里 . 开头的（保存时的临时文件、损坏的元数据留档）
-    // 和 . 开头的文件夹（.git、.obsidian 等，扫描时也不算子项目）里的都不算；元数据算
+    // 数据目录里 . 开头的（界面状态、设置文件、.trash 等），项目文件夹里 . 开头的（保存时的临时文件、损坏的元数据留档、
+    // 图片的附件目录 .assets）和 . 开头的文件夹（.git、.obsidian、.assets 等，扫描时也不算子项目）里的都不算；元数据算
     if dirs.iter().any(|c| c.starts_with('.')) || (name.starts_with('.') && !meta) {
         return None;
     }
@@ -250,7 +250,7 @@ fn run(root: &Path, rx: &Receiver<notify::Result<Event>>, mut on_change: impl Fn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{OwnWrites, Store};
+    use crate::store::{OwnWrites, Store, TodoRef};
     use notify::event::{AccessKind, CreateKind, DataChange, RemoveKind, RenameMode};
     use std::fs;
     use std::time::SystemTime;
@@ -325,6 +325,14 @@ mod tests {
             "工作/需求/.obsidian/.todos.json",
             "工作/需求/前端/组件/.git/x/A.md",
             "工作/需求/前端/组件/.C.md.tmp",
+            // 图片的附件目录和里面的图片（含各级子项目的、放错了地方的 .md 和元数据）
+            "工作/需求/.assets",
+            "工作/需求/.assets/20261010-101010",
+            "工作/需求/.assets/20261010-101010/图片-20261010-101010.png",
+            "工作/需求/.assets/20261010-101010/笔记.md",
+            "工作/需求/.assets/20261010-101010/.todos.json",
+            "工作/需求/前端/.assets/A/截图.png",
+            "工作/需求/前端/组件/页面/.assets/B/截图.png",
         ] {
             assert_eq!(moved(rel, FILE), None, "{rel}");
             assert_eq!(moved(rel, GONE), None, "{rel}");
@@ -498,12 +506,31 @@ mod tests {
         assert_eq!(got.paths, expected, "{got:?}");
         assert!(!got.all && !got.recycle);
         assert!(batches <= 3, "合成了 {batches} 批");
+        // 下面要把有图片的待办移进「图片」项目，那里已经有外部放的同名 .md：移过去要换 id、改正文里的链接
+        let pic = s.create_todo("工作", "需求", "有图的", "").unwrap();
+        fs::create_dir(s.root().join("工作").join("图片")).unwrap();
+        fs::write(s.root().join("工作").join("图片").join(format!("{}.md", pic.id)), "占着 id").unwrap();
         // 剩下的（同一批文件后来的变化）收完
         collect(&rx, Duration::from_secs(1), |_| false);
 
-        // 软件自己写的：扫描时补登记元数据，新建、保存、改标题和完成状态、置顶、排序、移动、改名、删除、恢复，都不报
+        // 软件自己写的：扫描时补登记元数据，新建、保存、改标题和完成状态、置顶、排序、移动、改名、删除、恢复，
+        // 粘贴、拖进图片，移动、删除、恢复有图片的待办（换了 id 时改正文里的链接），另存为新待办时复制图片，都不报
         // （删除、恢复动了软件的回收站，只报回收站有变化）
         s.load_workspace("工作").unwrap();
+        let img = s.save_image("工作", "需求", &pic.id, "png", b"png").unwrap();
+        s.save_todo_content("工作", "需求", &pic.id, &format!("![]({})", img.link), None, false).unwrap();
+        let relinked = s.move_todo("工作", "需求", &pic.id, "工作", "图片").unwrap();
+        assert_ne!(relinked.id, pic.id);
+        let rid = s.delete_todo("工作", "图片", &relinked.id).unwrap();
+        let back = s.restore(&[rid]);
+        assert!(back.errors.is_empty());
+        let back_id = back.restored[0].todo_id.clone().unwrap();
+        let dropped = _tmp.0.join("拖进来的.png");
+        fs::write(&dropped, b"png2").unwrap();
+        s.import_image("工作", "图片", &back_id, &dropped).unwrap();
+        let from = TodoRef { workspace: "工作".into(), project: "图片".into(), id: back_id.clone() };
+        let link = format!("![](.assets/{back_id}/拖进来的.png)");
+        s.create_todo_from("工作", "图片", "有图的（我的版本）", &link, Some(&from)).unwrap();
         let t = s.create_todo("工作", "需求", "新建的", "").unwrap();
         s.save_todo_content("工作", "需求", &t.id, "保存的正文", None, false).unwrap();
         s.set_todo_title("工作", "需求", &mine.id, "改过的标题").unwrap();
