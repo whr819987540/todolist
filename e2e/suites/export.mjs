@@ -4,7 +4,8 @@
 // 导出的是最新的；项目连同各级子项目：确认框里的数目、目录和各节都在、顺序同侧栏（项目自己的待办在前，各级子项目一层层作为
 // 下一级的章，标题跟着加深）、不含已完成的；深层的子项目单独导出；工作区按项目一层层分章；上次导出到的目录记住；PDF 的文件头、
 // 页数（每条待办、每章从新的一页开始）、图片（深层项目里的也是），打印用的窗口和临时文件用完就没了；取消、失败时的提示
-// （导出 PDF 时选的文件被占用着：不打印、原来的文件不动）
+// （导出 PDF 时选的文件被占用着：不打印、原来的文件不动）；工作区的项目手动排序（顶层、子项目、三级深的那一层都调整过）、
+// 侧栏按优先级排时，章和待办的顺序跟着（深层项目里的待办也按优先级）
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -458,5 +459,80 @@ export default async function (t) {
     "导出 PDF 时同名文件被别的程序占用：写明原因，原来的文件不动，没有打印用的窗口留下",
     /导出失败：无法保存到/.test(toast) && before.length > 0 && pdfOf(onePdf).equals(before) && (await leftovers()) === 0,
     toast,
+  );
+
+  // ----- 顺序：工作区的项目手动排序时每一层按调整过的顺序（各层的 .projects.json），待办按侧栏现在的排序（按优先级） -----
+  // 每一层调整成和按名字（拼音）不一样的顺序：顶层「需求」在「日常」前面，「需求」里「前端」在「后端」前面，
+  // 「需求 / 前端」里「组件」在「样式」前面；「组件」里后建的「图标」没有优先级，按优先级时排在低优先级的「按钮」后面
+  await m.invoke("create_project", { workspace: "工作", name: "后端", parent: "需求" });
+  await m.invoke("create_todo", { workspace: "工作", project: "需求/后端", title: "接口", content: "后端的接口" });
+  await m.invoke("create_project", { workspace: "工作", name: "样式", parent: "需求/前端" });
+  await m.invoke("create_todo", { workspace: "工作", project: "需求/前端/样式", title: "配色", content: "" });
+  await m.invoke("create_todo", { workspace: "工作", project: "需求/前端/组件", title: "图标", content: "" });
+  await m.invoke("reorder_projects", { workspace: "工作", parent: null, names: ["需求", "日常"] });
+  await m.invoke("reorder_projects", { workspace: "工作", parent: "需求", names: ["前端", "后端"] });
+  await m.invoke("reorder_projects", { workspace: "工作", parent: "需求/前端", names: ["组件", "样式"] });
+  await m.invoke("set_todo_priority", { workspace: "工作", project: "需求", id: "B", priority: 2 });
+  await m.emit("tauri://focus");
+  await m.ev(`document.querySelector(".sidebar-bar .anticon-sort-ascending").closest("button").click();
+    const item = await waitFor(() => menuItem("按优先级")); item.click(); await sleep(500); return 1`);
+  const projectsShown = () =>
+    m.ev(`return [...document.querySelectorAll(".tree-row[data-sel]")].map((r) => JSON.parse(r.dataset.sel))
+      .filter(([w, p, id]) => w === "工作" && p && !id).map(([, p]) => p)`);
+  const todosShown = (project) =>
+    m.ev(`return [...document.querySelectorAll(".tree-row[data-sel]")].map((r) => JSON.parse(r.dataset.sel))
+      .filter(([w, p, id]) => w === "工作" && p === ${JSON.stringify(project)} && id).map(([, , id]) => id)`);
+  const wantProjects = "需求,需求/前端,需求/前端/组件,需求/前端/样式,需求/后端,日常";
+  const reordered = await t.until(async () => {
+    await m.expandAll();
+    return (await projectsShown()).join() === wantProjects && (await todosShown("需求/前端/组件")).length === 2;
+  });
+  check("（准备）侧栏里每一层的项目按调整过的顺序", reordered, await projectsShown());
+  const byPriority = await todosShown("需求");
+  // 「图标」的 id 是新建时取的，按标题找：组件里的两条按优先级是「按钮」在前
+  const compShown = await m.ev(`return [...document.querySelectorAll(".tree-row[data-sel]")].filter((r) => {
+      const [w, p, id] = JSON.parse(r.dataset.sel); return w === "工作" && p === "需求/前端/组件" && id; })
+    .map((r) => r.querySelector(".todo-title-text")?.textContent ?? "")`);
+  const orderedProject = join(out, "需求-顺序.html");
+  await stub("pickExportTarget", orderedProject);
+  await m.clearToasts();
+  await rightClickExport(["工作", "需求"], "HTML");
+  await confirmExport();
+  await doneToast();
+  const projectOrder = headings(read(orderedProject));
+  check(
+    "导出项目：待办同侧栏按优先级排（置顶的在前、高的在前、已完成的沉底，深层项目里的也是），每一层的子项目按调整过的顺序",
+    JSON.stringify(projectOrder) ===
+      JSON.stringify([
+        ...byPriority.map((id) => `h2:${id}`),
+        "h1:前端",
+        "h2:页面",
+        "h2:组件",
+        "h3:按钮",
+        "h3:图标",
+        "h2:样式",
+        "h3:配色",
+        "h1:后端",
+        "h2:接口",
+      ]) &&
+      byPriority.slice(0, 3).join() === "C,图文,B" &&
+      byPriority.at(-1) === "A" &&
+      compShown.join() === "按钮,图标",
+    { projectOrder, byPriority, compShown },
+  );
+  const orderedWs = join(out, "工作-顺序.html");
+  await stub("pickExportTarget", orderedWs);
+  await m.clearToasts();
+  await rightClickExport(["工作"], "HTML");
+  await confirmExport();
+  await doneToast();
+  const wsChapters = [...read(orderedWs).matchAll(/<h([1-6]) class="chapter-title">(?:<span class="chapter-path">([^<]*)<\/span>)?([^<]*)</g)].map(
+    (x) => `${x[1]}:${x[2] ?? ""}${x[3]}`,
+  );
+  check(
+    "导出工作区：顶层项目按调整过的顺序各一章（需求在日常前面），各级子项目也按调整过的顺序",
+    JSON.stringify(wsChapters) ===
+      JSON.stringify(["1:需求", "2:需求 / 前端", "3:需求 / 前端 / 组件", "3:需求 / 前端 / 样式", "2:需求 / 后端", "1:日常"]),
+    wsChapters,
   );
 }

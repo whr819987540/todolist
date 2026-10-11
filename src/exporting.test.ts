@@ -118,6 +118,26 @@ describe("导出哪些待办、什么顺序", () => {
     ]);
   });
 
+  // docs/requirements.md「导出 → 导出的内容」：待办的顺序同侧栏的排序方式，按优先级时也一样，每一级项目里的都是
+  it("侧栏按优先级排时：高的在前，同一档里新建的在前；置顶的仍在前、已完成的仍沉底；深层子项目里的也这样排", () => {
+    const mixed = () => [
+      todo({ id: "低", priority: 1, createdAt: 9 }),
+      todo({ id: "高旧", priority: 3, createdAt: 1 }),
+      todo({ id: "高新", priority: 3, createdAt: 2 }),
+      todo({ id: "无", createdAt: 8 }),
+      todo({ id: "置顶", pinned: true }),
+      todo({ id: "完成的高", priority: 3, done: true }),
+    ];
+    const list = [project("需求", mixed()), project("需求/前端", []), project("需求/前端/组件", mixed())];
+    const want = ["置顶", "高新", "高旧", "低", "无", "完成的高"];
+    const [root] = exportGroups(list, "需求", "priority");
+    expect(root.ids).toEqual(want);
+    expect(root.children[0].children[0].ids).toEqual(want);
+    // 手动排序的工作区里也一样：项目按调整过的顺序，待办按侧栏的排序方式
+    const [ws] = exportGroups(list, undefined, "priority", true);
+    expect(ws.children[0].children[0].ids).toEqual(want);
+  });
+
   it("确认框里的数目：范围里一共几条、已完成几条，连同各级子项目", () => {
     expect(exportCounts(projects, "需求")).toEqual({ total: 8, done: 2 });
     expect(exportCounts(projects, "需求/前端")).toEqual({ total: 3, done: 1 });
