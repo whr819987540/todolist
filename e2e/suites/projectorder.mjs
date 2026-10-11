@@ -23,7 +23,11 @@ export default async function (t) {
       .filter((s) => s[0] === ${JSON.stringify(ws)}).map((s) => s[1])`);
   /** 等侧栏里的项目变成 expected 的样子；等不到时返回最后看到的 */
   const shownBecomes = async (expected, ws = "工作") =>
-    (await t.until(async () => (await shown(ws)).join() === expected.join())) || (await shown(ws));
+    // t.until 返回回调的值：对上时要返回列出的顺序本身，不是 true
+    (await t.until(async () => {
+      const now = await shown(ws);
+      return now.join() === expected.join() && now;
+    })) || (await shown(ws));
   /** 那一层的文件夹里记着的项目顺序（.projects.json），没有时是 null */
   const orderFile = (rel) => {
     try {
