@@ -15,16 +15,17 @@ export default async function (t) {
   };
   // 全文搜索在 Rust 端查，查完之前先列出标题、正文开头匹配的；刚启动时第一次查要读全部正文，GitHub 的机器上可能
   // 要一秒多，所以不等固定的时间，等到 until(列出的待办, 侧栏里的提示) 成立
+  /** 侧栏里列出的待办和提示（「没有找到…」「正在搜索正文…」） */
+  const sidebar = () => m.ev(`return {
+      rows: [...document.querySelectorAll(".sidebar .tree-row[data-sel]")].filter((r) => JSON.parse(r.dataset.sel)[2]).map((r) => ({
+        sel: JSON.parse(r.dataset.sel).join("/"), snippet: r.querySelector(".todo-snippet")?.textContent ?? null,
+        mark: [...r.querySelectorAll("mark")].map((x) => x.textContent).join(",") })),
+      notes: [...document.querySelectorAll(".sidebar .tree-empty")].map((x) => x.textContent) }`);
   const search = async (kw, until) => {
     await m.press("Ctrl+Shift+F");
     await m.press("Ctrl+A");
     await m.type(kw);
-    const got = await poll(() => m.ev(`return {
-      rows: [...document.querySelectorAll(".sidebar .tree-row[data-sel]")].filter((r) => JSON.parse(r.dataset.sel)[2]).map((r) => ({
-        sel: JSON.parse(r.dataset.sel).join("/"), snippet: r.querySelector(".todo-snippet")?.textContent ?? null,
-        mark: [...r.querySelectorAll("mark")].map((x) => x.textContent).join(",") })),
-      notes: [...document.querySelectorAll(".sidebar .tree-empty")].map((x) => x.textContent) }`), (v) => until(v.rows, v.notes));
-    return got.rows;
+    return (await poll(sidebar, (v) => until(v.rows, v.notes))).rows;
   };
   /** 列出了这条待办 */
   const listed = (sel) => (rows) => rows.some((r) => r.sel === sel);
@@ -73,6 +74,26 @@ export default async function (t) {
   await t.sleep(800);
   rows = await search("猕猴桃", listed("工作/日常/D"));
   check("外部改了正文，切回窗口后按新内容搜", rows.some((r) => r.sel === "工作/日常/D"), rows);
+  await m.press("Escape");
+
+  // 搜索时新选中的工作区：全文查完之前算还没查（「正在搜索正文…」），不先说「没有找到」。banana 只在长文档后部，
+  // 正文开头里没有。先只显示「生活」搜到「没有找到」，再选中「工作」，记下这期间最多有几处「没有找到」
+  await m.ev(`document.querySelector(".ws-switcher").click(); await sleep(400);
+    [...document.querySelectorAll(".ws-picker-item")].find((e) => e.querySelector(".ws-picker-name")?.textContent === "生活").querySelector(".ws-picker-only").click();
+    await sleep(600); return 1`);
+  await search("banana", none("banana"));
+  await m.ev(`const box = document.querySelector(".sidebar"); window.__noneMax = 0;
+    const count = () => { window.__noneMax = Math.max(window.__noneMax,
+      [...box.querySelectorAll(".tree-empty")].filter((x) => x.textContent.includes("没有找到包含“banana”")).length); };
+    count(); window.__noneObs = new MutationObserver(count); window.__noneObs.observe(box, { childList: true, subtree: true, characterData: true });
+    document.querySelector(".ws-switcher").click(); await sleep(400);
+    [...document.querySelectorAll(".ws-picker-item")].find((e) => e.querySelector(".ws-picker-name")?.textContent === "工作").click(); return 1`);
+  const added = await poll(sidebar, (v) => listed("工作/需求/长文档")(v.rows));
+  const noneMax = await m.ev(`window.__noneObs.disconnect(); document.querySelector(".ws-switcher").click(); await sleep(400); return window.__noneMax`);
+  check("搜索时新选中的工作区：全文查完之前不说「没有找到」，查完列出它里面正文命中的",
+    noneMax === 1 && listed("工作/需求/长文档")(added.rows), { noneMax, rows: added.rows });
+  await m.selectAllWorkspaces();
+  await m.press("Ctrl+Shift+F");
   await m.press("Escape");
 
   // 首页搜索

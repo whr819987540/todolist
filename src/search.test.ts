@@ -71,8 +71,11 @@ const show = (keyword: string, version = 1, workspaces: string[] | null = ["工�
   act(() => root.render(createElement(Probe, { workspaces, keyword, version })));
 /** 等 Rust 端查完 */
 const settle = () => act(() => vi.advanceTimersByTimeAsync(2000));
-/** 「工作」里正文命中的待办 */
-const found = () => (hits ? [...(hits.get("工作")?.keys() ?? [])] : null);
+/** 这个工作区里正文命中的待办；null 是还没查（全文没查完，或者没在这个工作区里查过） */
+const found = (ws = "工作") => {
+  const m = hits?.get(ws);
+  return m ? [...m.keys()] : null;
+};
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -132,6 +135,24 @@ describe("正文全文搜索", () => {
     expect(hits).toBeNull();
     await settle();
     expect(found()).toEqual([]);
+  });
+
+  it("搜索时新选中一个工作区：查完之前它算还没查（原来那个的结果留着），查完也列出它里面命中的", async () => {
+    bodies["生活/杂事/E"] = "买菜\n顺便买火龙果";
+    await show("火龙果", 1, ["工作"]);
+    await settle();
+    await show("火龙果", 1, ["工作", "生活"]);
+    expect(found("工作")).toEqual([hitKey("需求", "B")]);
+    expect(found("生活")).toBeNull();
+    await settle();
+    expect(found("生活")).toEqual([hitKey("杂事", "E")]);
+  });
+
+  it("查过、没有命中的工作区也列上，和还没查的分得开", async () => {
+    await show("火龙果", 1, ["工作", "生活"]);
+    await settle();
+    expect(found("生活")).toEqual([]);
+    expect(found("学习")).toBeNull();
   });
 
   it("查不了正文时当作正文里没有，不一直「正在搜索」", async () => {

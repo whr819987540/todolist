@@ -1,7 +1,7 @@
 import type { InputRef } from "antd";
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { ancestorsOf, parentOf } from "../projects";
-import { type ContentHits, NO_HITS } from "../search";
+import type { ContentHits } from "../search";
 import type { MenuProps } from "antd";
 import type { WorkspaceTree } from "../types";
 import { useNow } from "../utils";
@@ -256,7 +256,8 @@ export default function Sidebar(props: Props) {
             collapsed={collapsedOf(tree.name)}
             setCollapsed={setCollapsed}
             keyword={kw}
-            hits={props.hits && (props.hits.get(tree.name) ?? NO_HITS)}
+            // 搜索时刚选中的工作区还没查，同全文还没查完：先只按标题和正文开头匹配，不说「没有找到」
+            hits={props.hits?.get(tree.name) ?? null}
             {...listOptionsOf(tree.name)}
             lingering={lingering.get(tree.name) ?? NONE}
             now={now}

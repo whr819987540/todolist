@@ -6,10 +6,13 @@ import { displayTitle } from "./utils";
 // 全文搜索：侧栏和首页的搜索除了在前端匹配项目名、待办标题和正文开头，还让 Rust 端在正文全文里查关键字
 // （正文缓存在内存里，文件没变就不重新读），把正文里有关键字的待办也列出来，并显示命中处附近的一段
 
-/** 全文搜索的结果：工作区 → 待办（hitKey）→ 正文里命中处附近的一段 */
+/**
+ * 全文搜索的结果：工作区 → 待办（hitKey）→ 正文里命中处附近的一段。指定了在哪些工作区里查时，查过的工作区都在里面
+ * （没有命中的是 NO_HITS），不在里面的是还没查的（例如搜索时刚选中的）；查全部工作区时只有有命中的
+ */
 export type ContentHits = ReadonlyMap<string, ReadonlyMap<string, string>>;
 
-/** 一个工作区里没有命中的（侧栏的行据此判断要不要重新渲染，要是同一个对象） */
+/** 一个查过的工作区里没有命中的（侧栏的行据此判断要不要重新渲染，要是同一个对象） */
 export const NO_HITS: ReadonlyMap<string, string> = new Map();
 
 export const hitKey = (project: string, id: string) => `${project}\u0000${id}`;
@@ -20,8 +23,12 @@ const SEARCH_DELAY = 200;
 const sameMap = (a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>) =>
   a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
 
-/** 按工作区分组；和上一次查的结果一样的工作区沿用原来的对象 */
-function group(list: { workspace: string; project: string; id: string; snippet: string }[], before: ContentHits | null) {
+/** 按工作区分组，查过的工作区（searched）都列上；和上一次查的结果一样的工作区沿用原来的对象 */
+function group(
+  list: { workspace: string; project: string; id: string; snippet: string }[],
+  searched: readonly string[] | null,
+  before: ContentHits | null,
+) {
   const hits = new Map<string, Map<string, string>>();
   for (const h of list) {
     let m = hits.get(h.workspace);
@@ -29,6 +36,7 @@ function group(list: { workspace: string; project: string; id: string; snippet: 
     m.set(hitKey(h.project, h.id), h.snippet);
   }
   const out = new Map<string, ReadonlyMap<string, string>>();
+  for (const ws of searched ?? []) out.set(ws, NO_HITS);
   for (const [ws, m] of hits) {
     const old = before?.get(ws);
     out.set(ws, old && sameMap(old, m) ? old : m);
@@ -63,10 +71,10 @@ export function useContentSearch(
       api.searchTodos(list, kw).then(
         (found) => {
           if (stale) return;
-          setResult((before) => ({ kw, hits: group(found, before?.kw === kw ? before.hits : null) }));
+          setResult((before) => ({ kw, hits: group(found, list, before?.kw === kw ? before.hits : null) }));
         },
         // 查不了正文时只按标题和正文开头匹配，不能一直显示「正在搜索」
-        () => stale || setResult({ kw, hits: new Map() }),
+        () => stale || setResult({ kw, hits: group([], list, null) }),
       );
     }, SEARCH_DELAY);
     return () => {
