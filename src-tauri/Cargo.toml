@@ -38,6 +38,11 @@ roxmltree = "0.21"
 percent-encoding = "2"
 # 监听数据目录，文件在外部变化时通知主窗口刷新（见 watch.rs）
 notify = "8"
+# 导出成 HTML / PDF（export.rs）：Markdown 渲染（GFM 的表格、任务列表、删除线、脚注），正文里原始 HTML 的安全处理，
+# 本地图片嵌成 base64 的 data URI
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+ammonia = "4"
+base64 = "0.22"
 
 # 给窗口补设大图标（见 lib.rs set_window_icons）
 [target.'cfg(windows)'.dependencies]
