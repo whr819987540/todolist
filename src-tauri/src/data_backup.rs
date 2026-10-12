@@ -1084,6 +1084,10 @@ mod tests {
             "工作/需求/a:b.md",
             "工作/CON/a.md",
             "工作/nul.md",
+            "工作/COM¹/a.md",
+            "工作/需求/lpt³.md",
+            "工作/CONIN$/a.md",
+            "工作/需求/conout$.md",
             "工作/末尾有点./a.md",
             "工作//a.md",
         ] {

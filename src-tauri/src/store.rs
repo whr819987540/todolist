@@ -2611,11 +2611,17 @@ pub fn normalize_name(raw: &str, what: &str) -> Result<String> {
     Ok(name.to_string())
 }
 
-/// Windows 的保留名称（CON、NUL、COM1 等，带扩展名的也算），不能用作文件名
+/// Windows 的保留名称，不能用作文件名：CON、PRN、AUX、NUL，COM0～COM9、LPT0～LPT9 和带上标数字的 COM¹～COM³、LPT¹～LPT³
+/// （微软的文档「Naming Files, Paths, and Namespaces」里列的），以及控制台的 CONIN$、CONOUT$。不分大小写；带扩展名的
+/// （NUL.txt、NUL.tar.gz）、扩展名前面有空格的（「NUL .txt」）也算
 pub(crate) fn is_reserved_name(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or(name).trim_end().to_ascii_uppercase();
-    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit())
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+    let Some(n) = stem.strip_prefix("COM").or_else(|| stem.strip_prefix("LPT")) else { return false };
+    let mut chars = n.chars();
+    matches!((chars.next(), chars.next()), (Some('0'..='9' | '¹' | '²' | '³'), None))
 }
 
 // ---------------------------------------------------------------------------
@@ -4654,6 +4660,35 @@ mod tests {
         let preview = |id: &str| tree.projects[0].todos.iter().find(|t| t.id == id).unwrap().preview.clone();
         assert_eq!(preview("utf8"), "字".repeat(PREVIEW_CHARS));
         assert_eq!(preview("gbk"), format!("a{}", "字".repeat(PREVIEW_CHARS - 1)));
+    }
+
+    /// docs/requirements.md「基础 → 名字」：Windows 的保留名称（微软的文档里列的，含上标数字的 COM¹～COM³、LPT¹～LPT³ 和
+    /// 控制台的 CONIN$、CONOUT$）不分大小写、带扩展名的也算；只是开头一样、数字是两位的、别的上标数字不算
+    #[test]
+    fn reserved_names_follow_windows() {
+        for name in [
+            "CON", "con", "Prn", "aux", "NUL", "nul.txt", "NUL.tar.gz", "nul .txt", "AUX ", "COM0", "com1", "COM9", "LPT0",
+            "lpt5.log", "COM¹", "com²", "Com³.md", "LPT¹", "lpt²", "LPT³.txt", "CONIN$", "conin$", "CONOUT$", "conout$.txt",
+        ] {
+            assert!(is_reserved_name(name), "{name}");
+            assert!(normalize_name(name, "项目").unwrap_err().contains("保留名称"), "{name}");
+        }
+        for name in [
+            "COM", "LPT", "COM10", "LPT12", "COM⁴", "COM¹²", "COMA", "CON1", "CONSOLE", "NULL", "CONIN", "CONOUT", "CONIN$$",
+            "xCOM1", "工作", "COM1x", "con-1", "nul_",
+        ] {
+            assert!(!is_reserved_name(name), "{name}");
+        }
+        let (_tmp, s) = store("reserved");
+        s.create_workspace("w").unwrap();
+        for name in ["COM¹", "lpt³", "CONIN$", "conout$.md", "COM0"] {
+            assert!(s.create_workspace(name).is_err(), "{name}");
+            assert!(s.create_project("w", name).is_err(), "{name}");
+            assert!(s.rename_workspace("w", name).is_err(), "{name}");
+        }
+        // 拖进来的图片的文件名碰上了也加 _
+        assert_eq!(clean_file_stem("COM²"), "COM²_");
+        assert_eq!(clean_file_stem("CONOUT$"), "CONOUT$_");
     }
 
     #[test]
