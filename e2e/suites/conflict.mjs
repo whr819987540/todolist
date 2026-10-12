@@ -181,13 +181,15 @@ export default async function (t) {
   const submitName = () =>
     m.ev(`const input = await waitFor(() => document.querySelector(".ant-modal input"));
       button("确定", input.closest(".ant-modal").querySelector(".ant-modal-footer")).click(); await sleep(1000); return 1`);
+  /** 名称对话框里说明为什么没做的提示：等它显示出来（先要试着存盘，机器慢时点「确定」后等的那一秒不一定够），一直没有时是 "" */
+  const nameErrorText = () => t.until(() => m.ev(`return document.querySelector(".dialog-error")?.textContent ?? ""`));
   await m.ev(`return await openTodo("工作", "需求", "A")`);
   const mineR = await append("\n改名前加的");
   t.write("工作/需求/A.md", "# 待办 A\n\n改名前外部改的\n");
   await menu(["工作", "需求"], "重命名");
   await m.ev(`setInput(await waitFor(() => document.querySelector(".ant-modal input")), "需求池"); await sleep(100); return 1`);
   await submitName();
-  const nameError = await m.ev(`return document.querySelector(".dialog-error")?.textContent ?? ""`);
+  const nameError = await nameErrorText();
   check(
     "打开着的待办存不上（外部改过）时不重命名它所在的项目：弹出冲突对话框，重命名的对话框留着、说明原因",
     (await t.until(conflictShown)) && t.exists("工作/需求/A.md") && !t.exists("工作/需求池") && nameError.includes("还没保存好"),
@@ -238,7 +240,7 @@ export default async function (t) {
   await menu(["工作", "需求池"], "重命名");
   await m.ev(`setInput(await waitFor(() => document.querySelector(".ant-modal input")), "需求库"); await sleep(100); return 1`);
   await submitName();
-  const splitNameError = await m.ev(`return document.querySelector(".dialog-error")?.textContent ?? ""`);
+  const splitNameError = await nameErrorText();
   check(
     "分屏时没有焦点的一边开着项目里的待办、存不上：同样不重命名这个项目，弹出冲突对话框、说明原因",
     splitShown && (await t.until(conflictShown)) && t.exists("工作/需求池/A.md") && !t.exists("工作/需求库") && splitNameError.includes("还没保存好"),

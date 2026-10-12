@@ -366,7 +366,8 @@ export default async function (t) {
   await m.ev(`const input = await waitFor(() => document.querySelector(".ant-modal input"));
     setInput(input, ${JSON.stringify(long("深"))}); await sleep(100);
     button("创建", document.querySelector(".ant-modal-footer")).click(); await sleep(800); return 1`);
-  const tooLong = await m.ev(`return document.querySelector(".ant-modal .dialog-error")?.textContent ?? ""`);
+  // 等提示显示出来：检查路径要经 Rust 端，机器慢时点「创建」后等的那一会儿不一定够
+  const tooLong = await t.until(() => m.ev(`return document.querySelector(".ant-modal .dialog-error")?.textContent ?? ""`));
   await m.ev(`button("取消", document.querySelector(".ant-modal-footer"))?.click(); await sleep(300); return 1`);
   check(
     "层级多、名字长，再建一级路径就超过上限（227 个字符，给软件的回收站留了地方）：提示路径太长、会有多少个字符，什么都不建",
