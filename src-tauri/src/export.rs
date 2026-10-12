@@ -377,6 +377,27 @@ pub fn check_writable(path: &Path) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// 导出 PDF 用的窗口（lib.rs 的 print_pdf）：和 Tauri 无关的算法放在这里，测试壳里也测得到
+// ---------------------------------------------------------------------------
+
+/// 打印用的窗口的大小（逻辑像素，不含标题栏和边框）：看不见的时候就是这么大，退回打印对话框、显示出来时最大也是这么大
+pub const PRINT_WINDOW_SIZE: (f64, f64) = (800.0, 1000.0);
+/// 退回打印对话框、显示出来时，在屏幕的工作区里左右、上下一共留出多少（逻辑像素，含标题栏和边框）
+const PRINT_WINDOW_MARGIN: (f64, f64) = (48.0, 96.0);
+/// 屏幕再小也不比这个小（再小就看不清了）
+const PRINT_WINDOW_MIN: (f64, f64) = (320.0, 240.0);
+
+/// 退回打印对话框时窗口的大小（逻辑像素，不含标题栏和边框）：area 是要放在的那块屏幕的工作区（去掉任务栏，逻辑像素）。
+/// 留出边距后放得下时是 PRINT_WINDOW_SIZE，放不下（屏幕放大了显示、分辨率低）时缩小到放得下
+pub fn print_window_size(area: (f64, f64)) -> (f64, f64) {
+    let fit = |area: f64, max: f64, margin: f64, min: f64| (area - margin).min(max).max(min).floor();
+    (
+        fit(area.0, PRINT_WINDOW_SIZE.0, PRINT_WINDOW_MARGIN.0, PRINT_WINDOW_MIN.0),
+        fit(area.1, PRINT_WINDOW_SIZE.1, PRINT_WINDOW_MARGIN.1, PRINT_WINDOW_MIN.1),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // 整个文档
 // ---------------------------------------------------------------------------
 
@@ -1657,6 +1678,21 @@ mod tests {
         assert!(check_writable(&gone).is_err_and(|e| e.contains("无法保存到") && e.contains("x.pdf")));
         assert!(!tmp.0.join("没有这个目录").exists());
         assert!(check_writable(&tmp.0).is_err());
+    }
+
+    #[test]
+    fn print_window_fits_the_screen() {
+        // 放得下：800×1000
+        assert_eq!(print_window_size((2048.0, 1112.0)), (800.0, 1000.0));
+        assert_eq!(print_window_size((1920.0, 1040.0)), (800.0, 944.0));
+        // 1920×1080 放大到 150%：工作区约 1280×688（任务栏 32），比 1000 矮
+        assert_eq!(print_window_size((1280.0, 688.0)), (800.0, 592.0));
+        // 1366×768（任务栏 40）
+        assert_eq!(print_window_size((1366.0, 728.0)), (800.0, 632.0));
+        // 窄的屏幕（竖着放）宽度也缩小；不足一个像素的去掉
+        assert_eq!(print_window_size((700.5, 1200.0)), (652.0, 1000.0));
+        // 很小的屏幕：不比最小的还小
+        assert_eq!(print_window_size((300.0, 200.0)), (320.0, 240.0));
     }
 
     #[test]

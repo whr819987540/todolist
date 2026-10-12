@@ -1632,7 +1632,7 @@ fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str
     let loaded = Mutex::new(Some(loaded));
     let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title("导出 PDF")
-        .inner_size(800.0, 1000.0)
+        .inner_size(export::PRINT_WINDOW_SIZE.0, export::PRINT_WINDOW_SIZE.1)
         .visible(false)
         .focused(false)
         .skip_taskbar(true)
@@ -1696,10 +1696,38 @@ fn show_print_dialog(window: &WebviewWindow, html: &Path) -> Cmd<()> {
     });
     let _ = window.set_title("导出 PDF：在打印对话框里选「另存为 PDF」，存好后关掉这个窗口");
     let _ = window.set_skip_taskbar(false);
-    let _ = window.center();
+    place_print_window(window);
     window.show().map_err(|e| format!("无法打开打印对话框：{e}"))?;
     let _ = window.set_focus();
     window.eval("print()").map_err(|e| format!("无法打开打印对话框：{e}"))
+}
+
+/// 退回打印对话框时把窗口放在主窗口所在的屏幕上（主窗口藏在托盘里、最小化了时是它原来在的那块），按那块屏幕的工作区
+/// （去掉任务栏）缩小到放得下（export::print_window_size），居中。800×1000 在高分屏放大显示、分辨率低的屏幕上会比屏幕还高
+#[cfg(windows)]
+fn place_print_window(window: &WebviewWindow) {
+    let monitor = window
+        .app_handle()
+        .get_webview_window("main")
+        .and_then(|w| w.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let Some(m) = monitor else {
+        let _ = window.center();
+        return;
+    };
+    let (area, scale) = (m.work_area(), m.scale_factor());
+    let (width, height) = export::print_window_size((area.size.width as f64 / scale, area.size.height as f64 / scale));
+    // 先按那块屏幕的缩放缩小到放得下，再挪到它的中间：这时整个窗口都在那块屏幕上，两块屏幕的缩放不同时窗口在这时换成
+    // 那块的缩放（看不见的窗口建在主屏幕上；主屏幕的缩放比那块的大时，不先缩小就挪过去，窗口会伸到别的屏幕上、被算成
+    // 在别的屏幕上）。再按逻辑像素定一次大小（换了缩放时 tao 按原来的逻辑大小重新算过），最后按定好的大小（连同标题栏
+    // 和边框）在它现在所在的那块屏幕上居中
+    let size = tauri::PhysicalSize::new((width * scale) as u32, (height * scale) as u32);
+    let _ = window.set_size(size);
+    let x = area.position.x + (area.size.width as i32 - size.width as i32) / 2;
+    let y = area.position.y + (area.size.height as i32 - size.height as i32) / 2;
+    let _ = window.set_position(PhysicalPosition::new(x, y));
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    let _ = window.center();
 }
 
 /// 调试版设了环境变量 TODOLIST_PDF_PRINT_DIALOG 时不直接存成 PDF，总是退回打印对话框（手动测试退回的流程用）
