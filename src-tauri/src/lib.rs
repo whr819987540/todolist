@@ -14,7 +14,7 @@ use serde::Serialize;
 use settings::{
     EditorBackground, FontArea, QuickTarget, Settings, SettingsStore, ShortcutAction, StartupView, Theme,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -1601,20 +1601,92 @@ const PDF_MARGIN_INCHES: f64 = 15.0 / 25.4;
 
 /// 把导出的 HTML 打印成 PDF 存到 pdf：先写成临时文件，在看不见的窗口里加载，加载完用 WebView2 的 PrintToPdf 打印
 /// （A4 纵向、页边距 15 毫米、印出背景色，页眉是日期和标题，页脚是页码），做完关掉窗口、删掉临时文件。
-/// PrintToPdf 做不成（WebView2 太旧、打印失败）时退回系统的打印对话框（见 show_print_dialog），临时文件等那个窗口关掉再删。
+/// PrintToPdf 做不成（WebView2 太旧、打印失败）时退回系统的打印对话框（见 show_print_dialog），临时文件等那个窗口关掉再删；
+/// 窗口开着时退出，退出时删（TEMP_HTMLS）。
 /// 要在后台线程里调用：WebView2 在主线程的事件处理里同步建窗口可能卡死（见 quick_window），这里还要等它加载、打印完
 fn print_pdf(app: &AppHandle, html: &str, pdf: &Path, title: &str) -> Cmd<Printed> {
     // 目标位置不能写（文件夹不在了、文件被别的程序占用）时直接说原因，不退回打印对话框：换个地方就行
     export::check_writable(pdf)?;
     let _one = PDF_PRINTING.lock().unwrap_or_else(|e| e.into_inner());
     let n = PDF_WINDOWS.fetch_add(1, Ordering::Relaxed) + 1;
-    let tmp = std::env::temp_dir().join(format!("todolist-export-{}-{n}.html", std::process::id()));
-    std::fs::write(&tmp, html).map_err(|e| format!("写临时文件失败：{e}"))?;
+    let tmp = std::env::temp_dir().join(export::temp_html_name(std::process::id(), n));
+    // 先记下再写：启动时清理临时文件夹（sweep_temp_htmls）不会删掉它，哪怕以前用过同一个进程号的进程留下了同名的
+    temp_htmls().insert(tmp.clone());
+    if let Err(e) = std::fs::write(&tmp, html) {
+        remove_temp_html(&tmp);
+        return Err(format!("写临时文件失败：{e}"));
+    }
     let result = print_file(app, &format!("{PDF_WINDOW}-{n}"), &tmp, pdf, title);
     if !matches!(result, Ok(Printed::Dialog(_))) {
-        let _ = std::fs::remove_file(&tmp);
+        remove_temp_html(&tmp);
     }
     result
+}
+
+/// 这次运行中写了、还没删掉的导出 PDF 的临时文件（退回打印对话框的窗口开着时留着）：退出时（RunEvent::Exit，托盘「退出」
+/// 走的也是它）一起删掉；启动时清理临时文件夹不碰它们
+static TEMP_HTMLS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
+fn temp_htmls() -> MutexGuard<'static, BTreeSet<PathBuf>> {
+    TEMP_HTMLS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 删掉一个临时文件；删不掉（还被占着）时还记着，退出时再删一次，再删不掉的下次启动时清理
+fn remove_temp_html(path: &Path) {
+    let mut live = temp_htmls();
+    if std::fs::remove_file(path).is_ok() || !path.exists() {
+        live.remove(path);
+    }
+}
+
+/// 退出时删掉这次运行中还留着的临时文件（退回打印对话框的窗口还开着的）
+fn remove_temp_htmls() {
+    let mut live = temp_htmls();
+    for path in std::mem::take(&mut *live) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// 启动时清掉以前留在系统的临时文件夹里的导出 PDF 的临时文件（哪些算丢下的见 export::abandoned_temp_html）：
+/// 只看名字是 todolist-export-{进程号}-{序号}.html 的文件，不进子文件夹
+fn sweep_temp_htmls() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
+    let me = std::process::id();
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(export::temp_html_pid) else { continue };
+        if !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        let age = entry.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok());
+        let path = entry.path();
+        // 拿着锁看、删：这次运行正要写同名的文件时（进程号和以前的一样），要么先删了旧的再写，要么记下了不删
+        let live = temp_htmls();
+        if export::abandoned_temp_html(pid, me, live.contains(&path), age, process_running) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+/// 进程号为 pid 的进程是不是还在运行：没有这个进程、已经结束了的不算；打不开（别的用户的、权限不够）的当作还在运行
+#[cfg(windows)]
+fn process_running(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return GetLastError() != ERROR_INVALID_PARAMETER;
+        }
+        let mut code = 0u32;
+        let got = GetExitCodeProcess(process, &mut code) != 0;
+        CloseHandle(process);
+        !got || code == STILL_ACTIVE as u32
+    }
+}
+
+#[cfg(not(windows))]
+fn process_running(_pid: u32) -> bool {
+    true
 }
 
 #[cfg(not(windows))]
@@ -1754,7 +1826,7 @@ fn show_print_dialog(window: &WebviewWindow, html: &Path) -> Cmd<()> {
     let tmp = html.to_path_buf();
     window.on_window_event(move |e| {
         if let WindowEvent::Destroyed = e {
-            let _ = std::fs::remove_file(&tmp);
+            remove_temp_html(&tmp);
         }
     });
     let _ = window.set_title("导出 PDF：在打印对话框里选「另存为 PDF」，存好后关掉这个窗口");
@@ -1920,10 +1992,11 @@ pub fn run() {
             setup_tray(app)?;
             start_auto_backup(app.handle());
             // 启动后过一会儿（不和主窗口抢启动时间）先把快速记录小窗建好，第一次按快捷键时不用等它加载；
-            // 软件回收站里放了超过 30 天的移到系统回收站
+            // 清掉以前导出 PDF 时留在临时文件夹里的临时文件；软件回收站里放了超过 30 天的移到系统回收站
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(3));
+                sweep_temp_htmls();
                 let _ = handle.state::<Store>().purge_expired(RECYCLE_KEEP_DAYS);
                 quick_window(&handle);
             });
@@ -2044,6 +2117,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 keep_unshown_window_state(app);
+                remove_temp_htmls();
             }
         });
 }

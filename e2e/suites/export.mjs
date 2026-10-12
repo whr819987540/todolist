@@ -4,10 +4,10 @@
 // 导出的是最新的；项目连同各级子项目：确认框里的数目、目录和各节都在、顺序同侧栏（项目自己的待办在前，各级子项目一层层作为
 // 下一级的章，标题跟着加深）、不含已完成的；深层的子项目单独导出；工作区按项目一层层分章；上次导出到的目录记住；PDF 的文件头、
 // 页数（每条待办、每章从新的一页开始）、图片（深层项目里的也是），打印用的窗口和临时文件用完就没了，打印用的窗口还没加载完
-// 就被关掉了时马上写明（不说成超时）；取消、失败时的提示
+// 就被关掉了时马上写明（不说成超时），导出 PDF 的过程中退出时临时文件删掉了、启动时清掉以前留下的临时文件；取消、失败时的提示
 // （导出 PDF 时选的文件被占用着：不打印、原来的文件不动）；工作区的项目手动排序（顶层、子项目、三级深的那一层都调整过）、
 // 侧栏按优先级排时，章和待办的顺序跟着（深层项目里的待办也按优先级）
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -596,4 +596,43 @@ export default async function (t) {
       JSON.stringify(["1:需求", "2:需求 / 前端", "3:需求 / 前端 / 组件", "3:需求 / 前端 / 样式", "2:需求 / 后端", "1:日常"]),
     wsChapters,
   );
+
+  // ----- 退出时删掉还在用的临时文件，启动时清掉以前留下的（放在最后：要重新启动） -----
+  // 退回打印对话框的窗口开着时退出，要弹出真的打印对话框，测不了；用「打印用的窗口还在加载」代替：临时文件这时也在用着，
+  // 退出（同托盘「退出」：页面存好盘后退出）后就没了
+  const exitName = "导出 PDF 的过程中（打印用的窗口还在加载）退出：用着的临时文件删掉了";
+  const mine = () => readdirSync(appTemp).filter((n) => n.startsWith(`todolist-export-${t.pid}-`) && n.endsWith(".html"));
+  const slowExit = await exportSlowPdf(join(out, "慢图-退出.pdf"));
+  const inUse = slowExit.loading ? mine() : [];
+  // 以前留下的：写它的进程不在了的（没有这个进程号）、超过一天的删掉；还在运行的进程（跑测试的 Node，当作同时开着的
+  // 别的实例）不到一天的、名字对不上的留着
+  const tmpHtml = (pid, n) => join(appTemp, `todolist-export-${pid}-${n}.html`);
+  const left = {
+    dead: tmpHtml(4000000000, 1),
+    fresh: tmpHtml(process.pid, 1),
+    old: tmpHtml(process.pid, 2),
+    other: join(appTemp, "todolist-export-说明.html"),
+  };
+  for (const f of Object.values(left)) writeFileSync(f, "<p>以前留下的</p>");
+  // 中途出错时也删掉（名字对不上的那个启动时的清理不会删）、关掉服务器
+  try {
+    const longAgo = new Date(Date.now() - 2 * 24 * 3600 * 1000);
+    utimesSync(left.old, longAgo, longAgo);
+    await t.quit();
+    if (slowExit.loading) check(exitName, inUse.length === 1 && !existsSync(join(appTemp, inUse[0])), inUse);
+    else t.skip(exitName, NO_SLOW_IMAGE);
+    slowExit.done();
+    await t.restart();
+    const swept = await t.until(async () => !existsSync(left.dead) && !existsSync(left.old), 15000);
+    await t.sleep(1000);
+    const state = Object.fromEntries(Object.entries(left).map(([k, f]) => [k, existsSync(f)]));
+    check(
+      "启动时清掉以前留下的导出 PDF 的临时文件：写它的进程不在了的、超过一天的删掉，还在运行的进程不到一天的、名字对不上的留着",
+      swept && state.fresh && state.other,
+      state,
+    );
+  } finally {
+    slowExit.done();
+    for (const f of Object.values(left)) rmSync(f, { force: true });
+  }
 }

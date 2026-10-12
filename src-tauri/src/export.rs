@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -436,6 +437,42 @@ fn same_document(a: &str, b: &str) -> bool {
         percent_encoding::percent_decode_str(base).decode_utf8_lossy().to_lowercase()
     };
     key(a) == key(b)
+}
+
+/// 导出 PDF 时写在系统的临时文件夹里的 HTML：todolist-export-{进程号}-{序号}.html
+const TEMP_HTML_PREFIX: &str = "todolist-export-";
+/// 启动时清理临时文件夹：最后修改超过这么久的，不管是谁写的都算丢下的
+const TEMP_HTML_KEEP: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// 导出 PDF 的临时文件名：进程号为 pid 的进程写的第 n 个
+pub fn temp_html_name(pid: u32, n: u64) -> String {
+    format!("{TEMP_HTML_PREFIX}{pid}-{n}.html")
+}
+
+/// 文件名是导出 PDF 的临时文件（temp_html_name 的样子）时返回写它的进程号
+pub fn temp_html_pid(name: &str) -> Option<u32> {
+    let (pid, n) = name.strip_prefix(TEMP_HTML_PREFIX)?.strip_suffix(".html")?.split_once('-')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(pid) || !digits(n) {
+        return None;
+    }
+    pid.parse().ok()
+}
+
+/// 启动时清理系统的临时文件夹：进程号为 pid 的进程写的临时文件是不是丢下的（退出时没删成：程序崩溃了、被结束了、
+/// 关机了）。me 是这个进程，live 表示这次运行中还在用（lib.rs 记着的），age 是最后修改到现在多久（读不出来时 None），
+/// running(pid) 是那个进程还在不在运行：
+/// - 这次运行中还在用的不删
+/// - 进程号和这个进程一样、又不是这次运行在用的：以前用过同一个进程号的进程留下的，删
+/// - 写它的进程不在了的删；超过一天的也删（那个进程号可能又被别的程序用上了）
+///
+/// 软件只开得了一个（单实例插件），但换了 identifier 的测试版、端到端测试版能和安装版同时开着、用同一个临时文件夹：
+/// 别的实例开着的退回打印对话框的窗口可能还要用它的临时文件，进程还在、又不到一天的不删
+pub fn abandoned_temp_html(pid: u32, me: u32, live: bool, age: Option<Duration>, running: impl FnOnce(u32) -> bool) -> bool {
+    if live {
+        return false;
+    }
+    pid == me || age.is_some_and(|a| a >= TEMP_HTML_KEEP) || !running(pid)
 }
 
 // ---------------------------------------------------------------------------
@@ -1744,6 +1781,50 @@ mod tests {
         for bad in ["https://", "file:///C:/Windows/notepad.exe", "C:\\a.exe", "./a.md", "javascript:alert(1)", ""] {
             assert!(!is_web_link(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn temp_html_names() {
+        assert_eq!(temp_html_name(1234, 5), "todolist-export-1234-5.html");
+        assert_eq!(temp_html_pid("todolist-export-1234-5.html"), Some(1234));
+        assert_eq!(temp_html_pid(&temp_html_name(u32::MAX, u64::MAX)), Some(u32::MAX));
+        // 别的文件不认：扩展名、少了序号、不是数字、多出来的一段、单元测试的临时文件夹、别的临时文件、大小写不对、进程号太大
+        for other in [
+            "todolist-export-1234-5.htm",
+            "todolist-export-1234.html",
+            "todolist-export--5.html",
+            "todolist-export-1234-.html",
+            "todolist-export-12a-5.html",
+            "todolist-export-+12-5.html",
+            "todolist-export-1-2-3.html",
+            "todolist-export-writable-1234-5",
+            "todolist-upload-1234-备份.zip",
+            "TODOLIST-EXPORT-1-1.HTML",
+            "todolist-export-99999999999-1.html",
+            "todolist-export-说明.html",
+        ] {
+            assert_eq!(temp_html_pid(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn abandoned_temp_html_files() {
+        let me = 100;
+        let (hour, day, days) = (Some(Duration::from_secs(3600)), Some(TEMP_HTML_KEEP), Some(Duration::from_secs(3 * 24 * 3600)));
+        // 100（这个进程）和 200（别的实例）在运行
+        let running = |pid: u32| pid == me || pid == 200;
+        // 这次运行中还在用的：不删，多久了都不删
+        assert!(!abandoned_temp_html(me, me, true, days, running));
+        // 进程号和这个进程一样、不是这次在用的：以前的进程留下的
+        assert!(abandoned_temp_html(me, me, false, hour, running));
+        // 别的实例（进程还在）不到一天的留着，满一天的删
+        assert!(!abandoned_temp_html(200, me, false, hour, running));
+        assert!(!abandoned_temp_html(200, me, false, None, running));
+        assert!(abandoned_temp_html(200, me, false, day, running));
+        assert!(abandoned_temp_html(200, me, false, days, running));
+        // 写它的进程不在了：删
+        assert!(abandoned_temp_html(300, me, false, hour, running));
+        assert!(abandoned_temp_html(300, me, false, None, running));
     }
 
     #[test]

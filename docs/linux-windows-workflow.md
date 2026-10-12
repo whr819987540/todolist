@@ -19,7 +19,7 @@
 | 检查 | 怎么跑 | 查得出 | 查不出 |
 | --- | --- | --- | --- |
 | 前端 | `npm run lint; npm test; npm run build` | 和 CI 相同：ESLint（含 `e2e/` 的脚本）、vitest、tsc、Vite 构建 | — |
-| Rust 单元测试 | 测试壳里 `cargo test` | 存储、回收站、设置、设置备份、待办数据的备份与恢复、导出成 HTML（Markdown 渲染、安全处理、图片嵌入、文档的结构）、导出 PDF 用的窗口里和 Tauri 无关的算法（退回打印对话框时窗口的大小、窗口里点了链接怎么办等）、WebDAV（单元测试自己起的假服务器）的逻辑 | `lib.rs` 里的 Tauri 命令、托盘、窗口、全局快捷键；`#[cfg(windows)]` 的测试（如开机自启的注册表读写） |
+| Rust 单元测试 | 测试壳里 `cargo test` | 存储、回收站、设置、设置备份、待办数据的备份与恢复、导出成 HTML（Markdown 渲染、安全处理、图片嵌入、文档的结构）、导出 PDF 用的窗口里和 Tauri 无关的算法（退回打印对话框时窗口的大小、窗口里点了链接怎么办、启动时哪些临时文件算丢下的）、WebDAV（单元测试自己起的假服务器）的逻辑 | `lib.rs` 里的 Tauri 命令、托盘、窗口、全局快捷键；`#[cfg(windows)]` 的测试（如开机自启的注册表读写） |
 | Windows 目标的类型检查 | 测试壳里 `./check-windows.sh` | 整个程序（含 `lib.rs`、`cfg(windows)` 的代码和测试代码）在 Windows 上能不能编译 | 运行起来的行为 |
 | 界面 | 模拟后端 + Vite + 无头 Chromium 截图 | 交互、样式、浅色 / 深色、窄窗口 | WebView2 和 Chromium 的差别、几个窗口之间的事件和状态、真实的 Rust 端 |
 | 审查 | 另起一个审查代理（或请人）过一遍全部改动 | 只在 Windows 上出现、要读 tao 和插件源码才看得出的问题 | — |
