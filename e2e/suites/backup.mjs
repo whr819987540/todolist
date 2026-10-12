@@ -1,8 +1,8 @@
 // 待办数据的备份与恢复：启动后自动备份到数据目录旁边的 data-backups、设置里的状态，手动备份到本地（「另存为」「打开」对话框
 // 换成直接返回路径）、备份里有什么（多级子项目、各级的项目顺序 .projects.json、深处的附件目录），拿错了的备份和不安全的路径，
 // 恢复（分屏时两边打开着的待办先存盘、有存不上的就不恢复，换掉数据、各级的项目顺序（换成了按名称的又是手动排序）和图片换回来、
-// 回收站不动、修改时间不变、整页重新加载、恢复出来的 .state.json 不被覆盖、快速记录小窗列出新的项目），自动备份的保留份数、
-// 数据没变时跳过（只调整了项目的顺序也算变了）、失败时在设置里写明原因
+// 回收站不动、修改时间不变、整页重新加载、恢复出来的 .state.json 不被覆盖、快速记录小窗列出新的项目），恢复到这里后路径太长的
+// 整个不恢复，自动备份的保留份数、数据没变时跳过（只调整了项目的顺序也算变了）、失败时在设置里写明原因
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeZip, zipEntries, zipText } from "../lib/win.mjs";
@@ -174,6 +174,33 @@ export default async function (t) {
     "zip 里有 .. 的路径：整个不恢复，说明原因，现在的数据不动",
     /不安全的路径/.test(evilError) && !existsSync(join(work, "逃出去.md")) && t.exists("工作/需求/A.md") && !beforeRestore().length,
     evilError,
+  );
+  await closeConfirms();
+
+  // 恢复到这里的数据目录后路径会超过 259 个字符的（这里的数据目录比备份时的长）：整个不恢复，说明是哪一项、多长、要短多少。
+  // 最深的待办恢复后比上限多 5 个字符（字数同 Windows 按 UTF-16 算，和 JS 字符串的 length 一样）
+  const deepRel = (() => {
+    let need = 259 + 5 - t.data.length - "\\工作".length - "\\x.md".length;
+    const parts = [];
+    for (; need > 62; need -= 61) parts.push("深".repeat(60));
+    parts.push("层".repeat(need - 1));
+    return `工作/${parts.join("/")}/x.md`;
+  })();
+  const longZip = join(work, "manual", "long.zip");
+  makeZip(longZip, { "backup.json": '{"kind":"data","createdAt":1}', [deepRel]: "深处的正文" });
+  await stub("pickDataBackupFile", longZip);
+  await m.ev(`document.querySelector(".data-restore-file").click(); return 1`);
+  await clickConfirm("恢复");
+  const longError = await m.ev(`const c = await waitFor(() => document.querySelector(".ant-modal-confirm-error .ant-modal-confirm-content"), 15000); return c?.textContent ?? ""`);
+  check(
+    "恢复后路径会超过 259 个字符的：整个不恢复，说明是哪一项、会有多少个字符、数据目录要再短多少，现在的数据不动、也不先备份",
+    longError.includes(deepRel) &&
+      longError.includes("264 个字符") &&
+      longError.includes("要再短 5 个字符") &&
+      t.exists("工作/需求/A.md") &&
+      !beforeRestore().length &&
+      !readdirSync(t.data).some((n) => n.startsWith(".restoring-")),
+    { longError, deepRel },
   );
   await closeConfirms();
   await m.closeModal();

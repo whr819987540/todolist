@@ -2693,7 +2693,7 @@ pub const PATH_LIMIT: usize = MAX_PATH_CHARS - RECYCLE_ROOM;
 const TODO_FILE_ROOM: usize = 22;
 
 /// 路径有多少个字符，和 Windows 一样按 UTF-16 算（一个汉字一个，表情符号两个）
-fn path_len(p: &Path) -> usize {
+pub(crate) fn path_len(p: &Path) -> usize {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;

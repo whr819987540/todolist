@@ -11,7 +11,7 @@
 
 use crate::backup::{self, BackupKind, Manifest, RemoteBackup, DATA_PREFIX, MANIFEST_FILE, SETTINGS_BACKUP_HINT};
 use crate::settings::SETTINGS_FILE;
-use crate::store::{self, Store, UI_STATE_FILE};
+use crate::store::{self, Store, MAX_PATH_CHARS, UI_STATE_FILE};
 use crate::webdav::WebDav;
 use chrono::{DateTime, Local, TimeZone};
 use serde::Serialize;
@@ -406,12 +406,29 @@ fn safe_parts(name: &str) -> Option<Vec<&str>> {
     parts.iter().all(|p| safe_component(p)).then_some(parts)
 }
 
-/// 解压到 dest（空的临时文件夹）：先把每一项的路径检查一遍，有不安全的整个不解压；
-/// 第一级只要工作区文件夹和 .state.json，别的不要。文件、文件夹的修改时间照着说明改回去
-fn extract(zip: &mut ZipArchive<File>, manifest: &Manifest, dest: &Path) -> Result<()> {
+/// 备份里的东西恢复到数据目录 root 后最长的路径超过了 MAX_PATH_CHARS 时的提示：item 是包里的路径、n 是它恢复后的长度，
+/// count 是一共有几项超过
+fn too_long_to_restore(root: &Path, item: &str, n: usize, count: usize) -> String {
+    let more = if count > 1 { format!("（共有 {count} 个文件、文件夹超过）") } else { String::new() };
+    format!(
+        "备份里的「{}」恢复到这里后路径会有 {n} 个字符{more}，超过了 Windows 的上限（{MAX_PATH_CHARS} 个），\
+         资源管理器、用默认程序打开时的编辑器和系统回收站都打不开，没有恢复。数据目录 {} 的路径要再短 {} 个字符以上才放得下这份备份",
+        item.trim_end_matches('/'),
+        root.display(),
+        n - MAX_PATH_CHARS
+    )
+}
+
+/// 解压到 dest（空的临时文件夹）：先把每一项的路径检查一遍，有不安全的、恢复到数据目录 root 后路径会超过 MAX_PATH_CHARS 的
+/// （这里的数据目录比备份时的长）整个不解压；第一级只要工作区文件夹和 .state.json，别的不要。文件、文件夹的修改时间照着说明改回去。
+/// 解压到的临时文件夹在数据目录里、路径比 root 长 30 多个字符，可以超过 260：std 在 Windows 上打开、新建、改名时
+/// 都会把长路径换成 `\\?\` 开头的写法
+fn extract(zip: &mut ZipArchive<File>, manifest: &Manifest, dest: &Path, root: &Path) -> Result<()> {
     let unsafe_path = |name: &str| format!("备份里有不安全的路径「{name}」，备份文件可能损坏或被改过，没有恢复");
     // (序号, 包里的路径, 解压到哪里, 是不是文件夹)
     let mut plan = Vec::new();
+    // 恢复到数据目录后超过上限的：(包里的路径, 恢复后的长度)
+    let mut too_long = Vec::new();
     for i in 0..zip.len() {
         let f = zip.by_index(i).map_err(|e| format!("读取压缩包失败：{e}"))?;
         let name = f.name().to_string();
@@ -422,9 +439,16 @@ fn extract(zip: &mut ZipArchive<File>, manifest: &Manifest, dest: &Path) -> Resu
         let top_dir = parts.len() > 1 || f.is_dir();
         let wanted = if top_dir { !parts[0].starts_with('.') } else { parts[0] == UI_STATE_FILE };
         if wanted {
+            let n = store::path_len(&parts.iter().fold(root.to_path_buf(), |p, part| p.join(part)));
+            if n > MAX_PATH_CHARS {
+                too_long.push((name.clone(), n));
+            }
             let path = parts.iter().fold(dest.to_path_buf(), |p, part| p.join(part));
             plan.push((i, name, path, f.is_dir()));
         }
+    }
+    if let Some((item, n)) = too_long.iter().max_by_key(|(_, n)| *n) {
+        return Err(too_long_to_restore(root, item, *n, too_long.len()));
     }
     let failed = |e: io::Error| format!("解压备份失败：{e}");
     for (i, _, path, dir) in &plan {
@@ -514,7 +538,7 @@ pub fn restore_at(store: &Store, staging: &Path, zip_path: &Path, backup_dir: &P
     let (mut zip, manifest) = open_data_zip(zip_path)?;
     let new = staging.join("new");
     fs::create_dir_all(&new).map_err(|e| format!("恢复失败，无法创建临时文件夹：{e}"))?;
-    extract(&mut zip, &manifest, &new)?;
+    extract(&mut zip, &manifest, &new, store.root())?;
     drop(zip);
     let (workspaces, todos) = store::count_data(&new)?;
     let not_backed_up = |e: String| format!("无法先把现在的数据备份一份（{e}），没有恢复");
@@ -1112,6 +1136,73 @@ mod tests {
         assert!(inspect(&settings).unwrap_err().contains("不是本软件的待办数据备份"));
         fs::write(&settings, "not a zip").unwrap();
         assert!(inspect(&settings).unwrap_err().contains("不是有效的 zip"));
+    }
+
+    /// 在数据目录 root 的工作区「工作」里建一级级很深的子项目，最深处放两条待办，它们的路径相对 root（含开头的分隔符）
+    /// 正好 rel 个字符；返回两条待办在包里的路径
+    fn deep_files(root: &Path, rel: usize) -> [String; 2] {
+        let mut parts = vec!["工作".to_string()];
+        let mut used = 1 + 2;
+        while rel - used > 1 + 40 + 1 + 10 {
+            parts.push("层".repeat(40));
+            used += 1 + 40;
+        }
+        let folder = parts.iter().fold(root.to_path_buf(), |p, part| p.join(part));
+        fs::create_dir_all(&folder).unwrap();
+        ["x", "y"].map(|c| {
+            let file = format!("{}.md", c.repeat(rel - used - 1 - 3));
+            fs::write(folder.join(&file), "深处的正文").unwrap();
+            format!("{}/{file}", parts.join("/"))
+        })
+    }
+
+    /// base 里一个路径正好 len 个字符的数据目录
+    fn root_of_len(base: &Path, len: usize) -> PathBuf {
+        let root = base.join("d".repeat(len - store::path_len(base) - 1));
+        assert_eq!(store::path_len(&root), len);
+        root
+    }
+
+    /// docs/requirements.md「恢复数据 → 路径长度」：备份里的东西恢复到这里的数据目录后路径会超过 259 个字符时（这里的数据目录
+    /// 比备份时的长）整个不恢复，说明是哪一项、会有多长、数据目录要再短多少；现在的数据不动，也不先备份。正好 259 个的照常恢复：
+    /// 解压到数据目录里的临时文件夹时路径比这还长 30 多个字符、超过 260（Windows 上 std 换成 \\?\ 开头的长路径）
+    #[test]
+    fn restore_refuses_paths_too_long_for_this_data_dir() {
+        let tmp = TempRoot::new("long");
+        // 备份时的数据目录很短，最深的两条待办相对它 150 个字符
+        let short = Store::new(tmp.0.join("s")).unwrap();
+        let items = deep_files(short.root(), 150);
+        let zip = tmp.0.join(file_name(time(10)));
+        pack(&short, &zip, time(10)).unwrap();
+        let names = entries(&zip);
+        assert!(items.iter().all(|i| names.contains(i)), "{names:?}");
+
+        // 这里的数据目录长了 110 - 1 - 1 个字符：恢复后最深的两条待办有 260 个字符
+        let long = Store::new(root_of_len(&tmp.0, 110)).unwrap();
+        long.create_workspace("现在的").unwrap();
+        let backups = default_dir(long.root());
+        let err = restore_file(&long, &zip, &backups, time(11)).unwrap_err();
+        assert!(items.iter().any(|i| err.contains(i.as_str())), "说明是哪一项：{err}");
+        assert!(err.contains("260 个字符") && err.contains("共有 2 个") && err.contains("259"), "{err}");
+        assert!(err.contains(&long.root().display().to_string()) && err.contains("要再短 1 个字符"), "{err}");
+        // 现在的数据不动，没有先备份，临时文件夹删掉了
+        let workspaces = |s: &Store| s.list_workspaces().unwrap().into_iter().map(|w| w.name).collect::<Vec<_>>();
+        assert_eq!(workspaces(&long), ["现在的"]);
+        assert!(!backups.exists(), "没有先备份");
+        assert!(!fs::read_dir(long.root()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX)));
+
+        // 正好 259 个字符：照常恢复，恢复出来的打得开
+        let fits = Store::new(root_of_len(&tmp.0, 109)).unwrap();
+        fits.create_workspace("现在的").unwrap();
+        let r = restore_file(&fits, &zip, &default_dir(fits.root()), time(11)).unwrap();
+        assert_eq!((r.workspaces, r.todos), (1, 2));
+        for item in &items {
+            let restored = item.split('/').fold(fits.root().to_path_buf(), |p, part| p.join(part));
+            assert_eq!(store::path_len(&restored), MAX_PATH_CHARS);
+            assert_eq!(fs::read_to_string(&restored).unwrap(), "深处的正文");
+        }
+        assert_eq!(workspaces(&fits), ["工作"]);
+        assert!(!fs::read_dir(fits.root()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX)));
     }
 
     #[test]
