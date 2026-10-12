@@ -2,6 +2,8 @@
 
 基于 Tauri 2 + React + Ant Design 的 Windows 桌面待办管理软件，按「工作区 → 项目 → 待办」三级组织，项目下还可以建子项目，子项目里还能再建，层数不限。
 
+下载：[最新版](https://github.com/whr819987540/todolist/releases/latest)的 `TodoList_<版本>_x64-setup.exe`（只装给当前用户，不需要管理员权限），见下文「发布到 GitHub」。
+
 ## 功能
 
 - **三级结构**：首页列出全部工作区；进入工作区后左侧是可折叠的树（工作区、项目两级都能折叠），右侧显示概览或待办内容
@@ -364,3 +366,19 @@ npm run release:fast         # 同 release，但用 release-fast profile 构建�
 程序只装给当前用户，位置是 `%LOCALAPPDATA%\待办清单\`，不需要管理员权限，可以在「设置 → 应用」里卸载。待办数据在 `%USERPROFILE%\TodoList`，安装、升级、卸载都不会动它。
 
 平时请从开始菜单或桌面快捷方式启动安装版，不要直接运行 `src-tauri\target\release\todo-list.exe`：两者是同一个应用，同时只能开一个；而且它运行时文件被占用，再次构建会报拒绝访问（os error 5）。
+
+### 发布到 GitHub
+
+`.github/workflows/release.yml`：推送 tag 时在 GitHub 的 Windows 机器（windows-latest）上 `npm ci` 后 `npm run tauri build`（和 `npm run release` 一样是 release profile，不用编译缓存），发布成这个 tag 的 Release（标题是 tag，说明由 GitHub 自动生成，附件是安装包）。安装包原名「待办清单_<版本>_x64-setup.exe」，GitHub 会把附件名里的中文换掉，所以改名成 `TodoList_<版本>_x64-setup.exe` 再上传。
+
+```bash
+npm run release -- 0.2.0          # 改版本号（同时在本机打包、装上试一下），见上文「安装到本机与升级」
+git commit -am "chore: 版本号改为 0.2.0"
+git tag v0.2.0
+git push origin main v0.2.0
+gh run list --workflow Release --limit 3
+```
+
+- 什么 tag 都打包发布。tag 是版本号（`v1.2.3`、`1.2.3` 这样开头的）时要和 `src-tauri/tauri.conf.json` 里的版本号一致，不一致的不打包：忘了改版本号就打 tag 时，安装包会是上一版的版本号
+- Latest（[releases/latest](https://github.com/whr819987540/todolist/releases/latest)）指向版本号最大的 tag，按版本号比较（v0.10.0 比 v0.9.0 新，v1.0.0-beta 比 v1.0.0 旧），不看发布的先后：补打旧的 tag、几个 tag 一起推送时先打完的是新版，Latest 也不会落到旧版上。每次发布后按全部 release（草稿、在网页上标成预发布的除外）重新算一遍，在网页上手动改了的下次发布时改回去
+- 重新打包某个已有的 tag（构建失败过、tag 推送得比这个 workflow 早）：在 Actions 页面重新运行，或 `gh workflow run release.yml -f tag=v0.2.0`。这个 tag 已经有 release 时只替换安装包，不改标题和说明

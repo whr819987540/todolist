@@ -1,0 +1,96 @@
+# 推送 tag 时在 Windows 上打 NSIS 安装包，发布成这个 tag 的 GitHub Release；Latest 指向版本号最大的 tag
+# （见 README.md「发布到 GitHub」）
+name: Release
+
+on:
+  push:
+    tags:
+      - "**"
+  # 重新打包某个已有的 tag：Actions 页面，或 gh workflow run release.yml -f tag=v0.2.0
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要打包发布的 tag
+        required: true
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    # 同一个 tag 的发布排队一个个来，不打断正在上传的
+    concurrency:
+      group: release-${{ inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # 只认 tag：手动运行时填的不是 tag（比如分支名）在这里就失败
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      # tag 是版本号（v1.2.3 或 1.2.3）时要和安装包的版本号（tauri.conf.json）一致，忘了改版本号就打 tag 时不发布
+      - name: 检查版本号
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [[ "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]] && [ "${TAG#v}" != "$version" ]; then
+            echo "::error::tag $TAG 和 src-tauri/tauri.conf.json 里的版本号 $version 不一致：先改版本号、提交，再打 tag（见 README.md「发布到 GitHub」）"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 和 npm run release 一样用 release profile；不用编译缓存，每次从头编
+      - name: 打包
+        run: npm run tauri build
+
+      # 安装包原名「待办清单_<版本>_x64-setup.exe」，GitHub 会把附件名里的中文换掉，改成英文名再传。
+      # release 已经有了（重新运行、重新打包）时只替换安装包，不改标题和说明
+      - name: 发布
+        run: |
+          asset="TodoList_${VERSION}_x64-setup.exe"
+          mv src-tauri/target/release/bundle/nsis/*-setup.exe "$asset"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$asset" --clobber
+          else
+            gh release create "$TAG" "$asset" --verify-tag --title "$TAG" --generate-notes --latest=false
+          fi
+
+  # 按全部 release 重新算 Latest，不看发布的先后：补打旧的 tag、几个 tag 一起推送时先打完的是新版，Latest 也不会落到旧版上
+  latest:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 一次改完再改下一次。排队的被更新的一次顶掉（显示为已取消）也没关系：那次在它的 release 发布之后才开始，会算上它
+    concurrency:
+      group: release-latest
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # sort -V 按版本号比较（v0.10.0 比 v0.9.0 新）；先把第一个 - 换成 ~，让 v1.0.0-beta 排在 v1.0.0 前面（tag 里不会有 ~）
+      - name: 版本号最大的标成 Latest
+        run: |
+          newest=$(gh release list --limit 1000 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName' \
+            | sed 's/-/~/' | sort -V | tail -n 1 | sed 's/~/-/')
+          echo "Latest：$newest"
+          gh release edit "$newest" --latest

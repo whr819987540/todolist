@@ -230,5 +230,5 @@ Windows 上：
 | Rust | 测试壳的 `cargo test`；`cargo check --target x86_64-pc-windows-msvc`（假的资源编译器） | `cargo test`（含 `cfg(windows)` 的测试） |
 | 界面 | `@tauri-apps/api/mocks` 模拟后端 + playwright-core + chrome-headless-shell | 测试版程序，经 WebView2 的远程调试端口（CDP）操作页面（`e2e/lib/cdp.mjs`） |
 | 系统 | — | PowerShell 调 Win32 API（`e2e/win/win.ps1`）：窗口、`WM_HOTKEY`、注册表、回收站、任务栏、文件占用 |
-| 打包、安装 | — | NSIS 安装包，`npm run release` |
+| 打包、安装 | 发布：推送 tag 后 GitHub Actions 在 Windows 机器上打包，发布成这个 tag 的 Release（`release.yml`，见 README.md「发布到 GitHub」） | NSIS 安装包，`npm run release`；发布同左 |
 | CI | GitHub Actions（`windows-latest`）：`ci.yml`（lint、单元测试、构建、`cargo test`）和 `e2e.yml`（端到端测试），推送后自动跑，在 Linux 上用 `gh` 看结果 | |
