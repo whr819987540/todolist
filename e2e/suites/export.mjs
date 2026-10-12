@@ -3,10 +3,12 @@
 // 所在的位置、渲染后的表格和任务框、嵌进去的相对路径图片（深层项目里的也是）、找不到的图片的占位，正文里的 script 去掉了；导出前有没保存的修改时先存盘（分屏两边开着的都存）、
 // 导出的是最新的；项目连同各级子项目：确认框里的数目、目录和各节都在、顺序同侧栏（项目自己的待办在前，各级子项目一层层作为
 // 下一级的章，标题跟着加深）、不含已完成的；深层的子项目单独导出；工作区按项目一层层分章；上次导出到的目录记住；PDF 的文件头、
-// 页数（每条待办、每章从新的一页开始）、图片（深层项目里的也是），打印用的窗口和临时文件用完就没了；取消、失败时的提示
+// 页数（每条待办、每章从新的一页开始）、图片（深层项目里的也是），打印用的窗口和临时文件用完就没了，打印用的窗口还没加载完
+// 就被关掉了时马上写明（不说成超时）；取消、失败时的提示
 // （导出 PDF 时选的文件被占用着：不打印、原来的文件不动）；工作区的项目手动排序（顶层、子项目、三级深的那一层都调整过）、
 // 侧栏按优先级排时，章和待办的顺序跟着（深层项目里的待办也按优先级）
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CDP_PORT } from "../lib/app.mjs";
@@ -388,11 +390,70 @@ export default async function (t) {
     const targets = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
     return targets.filter((x) => x.url.startsWith("file:")).length;
   };
-  check(
-    "打印用的看不见的窗口关掉了，临时文件删掉了",
-    (await t.until(async () => (await leftovers()) === 0)) && !readdirSync(tmpdir()).some((n) => /^todolist-export-\d+-\d+\.html$/.test(n)),
-    await leftovers(),
-  );
+  // 程序用的临时文件夹：Rust 的 temp_dir() 先看 TMP，Node 的 tmpdir() 先看 TEMP，两个不一样时以程序的为准
+  const appTemp = process.env.TMP || tmpdir();
+  const noTempHtml = () => !readdirSync(appTemp).some((n) => /^todolist-export-\d+-\d+\.html$/.test(n));
+  check("打印用的看不见的窗口关掉了，临时文件删掉了", (await t.until(async () => (await leftovers()) === 0)) && noTempHtml(), await leftovers());
+
+  /**
+   * 把正文里有一张「慢图」的待办导出成 PDF：图片由这里起的本机服务器给，收到请求后一直不回，打印用的窗口就一直加载不完
+   * （最多等一分钟）。返回 loading（打印用的窗口去要了这张图片、还在加载；没去要时（如 WebView2 不让本地的页面访问本机的
+   * 服务器）加载很快就完了，等它照常导出完）和 done（关掉服务器、删掉这条待办；调几次都行）
+   */
+  const exportSlowPdf = async (path) => {
+    let asked = false;
+    const server = createServer(() => {
+      asked = true;
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    server.unref();
+    t.write("工作/日常/慢图.md", `# 慢图\n\n![慢](http://127.0.0.1:${server.address().port}/slow.png)\n`);
+    await m.emit("tauri://focus");
+    await t.until(async () => {
+      await m.expandAll();
+      return m.ev(`return !!row("工作", "日常", "慢图")`);
+    });
+    await stub("pickExportTarget", path);
+    await m.clearToasts();
+    await rightClickExport(["工作", "日常", "慢图"], "PDF");
+    const loading = await t.until(async () => asked, 20000);
+    if (!loading) await doneToast(120000);
+    let closed = false;
+    const done = () => {
+      if (closed) return;
+      closed = true;
+      server.closeAllConnections();
+      server.close();
+      t.remove("工作/日常/慢图.md");
+    };
+    return { loading, done };
+  };
+  const NO_SLOW_IMAGE = "打印用的窗口没有去要本机服务器上的图片";
+
+  // ----- 打印用的窗口还没加载完就没了：马上写明是窗口关掉了，不等到超时、不说成超时 -----
+  // 打印用的窗口还在加载「慢图」时给它发 WM_CLOSE（打印用的窗口点关闭按钮就真的关掉）
+  const slowPdf = join(out, "慢图.pdf");
+  const slowClosed = await exportSlowPdf(slowPdf);
+  const closedName = "打印用的窗口还没加载完就被关掉了：马上提示窗口关掉了（不说成超时），没有 PDF，窗口和临时文件都没留下";
+  if (slowClosed.loading) {
+    const closedAt = Date.now();
+    t.win.close("导出 PDF");
+    toast = await doneToast(90000);
+    const waited = Date.now() - closedAt;
+    check(
+      closedName,
+      /导出失败：打印用的窗口还没加载完就关掉了/.test(toast) &&
+        waited < 20000 &&
+        !existsSync(slowPdf) &&
+        (await t.until(async () => (await leftovers()) === 0)) &&
+        noTempHtml(),
+      { toast, waited },
+    );
+  } else {
+    t.skip(closedName, NO_SLOW_IMAGE);
+  }
+  slowClosed.done();
+  await m.emit("tauri://focus");
 
   // ----- 导出的范围里开着的待办存不上：不导出；和它无关的照常导出 -----
   const CONFLICT = `[...document.querySelectorAll(".ant-modal-title")].find((e) => e.textContent === "文件已在外部被修改" && e.getClientRects().length > 0)`;

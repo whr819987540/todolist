@@ -1625,11 +1625,38 @@ fn print_file(_app: &AppHandle, _label: &str, _html: &Path, _pdf: &Path, _title:
     Err("只能在 Windows 上导出 PDF".into())
 }
 
+/// 打印用的窗口发回来的一次性消息（加载完了、打印完了）的发送端，发过一次就没了。窗口被关掉时随即放开（print_file 里的
+/// Destroyed），等着的那边马上收到 Disconnected、说明窗口关掉了，不用等到超时、也不说成超时：交给 WebView2 的回调
+/// 什么时候放开说不准，不靠它。退出程序时没有 Destroyed，进程也就结束了
+#[cfg(windows)]
+type Reply<T> = std::sync::Arc<Mutex<Option<mpsc::Sender<T>>>>;
+
+#[cfg(windows)]
+fn reply<T>() -> (Reply<T>, mpsc::Receiver<T>) {
+    let (tx, rx) = mpsc::channel();
+    (std::sync::Arc::new(Mutex::new(Some(tx))), rx)
+}
+
+/// 发回去（只有第一次发得出去）
+#[cfg(windows)]
+fn send_reply<T>(reply: &Reply<T>, value: T) {
+    if let Some(tx) = reply.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = tx.send(value);
+    }
+}
+
+/// 不会再发了：等着的那边收到 Disconnected
+#[cfg(windows)]
+fn drop_reply<T>(reply: &Reply<T>) {
+    reply.lock().unwrap_or_else(|e| e.into_inner()).take();
+}
+
 #[cfg(windows)]
 fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str) -> Cmd<Printed> {
     let url = tauri::Url::from_file_path(html).map_err(|_| format!("临时文件的路径不对：{}", html.display()))?;
-    let (loaded, wait_loaded) = mpsc::channel();
-    let loaded = Mutex::new(Some(loaded));
+    let (loaded, wait_loaded) = reply::<()>();
+    let (done, wait_done) = reply::<Cmd<()>>();
+    let on_loaded = loaded.clone();
     let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title("导出 PDF")
         .inner_size(export::PRINT_WINDOW_SIZE.0, export::PRINT_WINDOW_SIZE.1)
@@ -1639,34 +1666,46 @@ fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str
         // 加载完了（连同图片，同 onload）才打印
         .on_page_load(move |_, payload| {
             if payload.event() == PageLoadEvent::Finished && payload.url().scheme() == "file" {
-                if let Some(tx) = loaded.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                    let _ = tx.send(());
-                }
+                send_reply(&on_loaded, ());
             }
         });
     if let Some(args) = main_browser_args(app) {
         builder = builder.additional_browser_args(&args);
     }
     let window = builder.build().map_err(|e| format!("无法打开打印用的窗口：{e}"))?;
-    // 加载超时也照样打印：多半是网上的图片太慢
-    let _ = wait_loaded.recv_timeout(PDF_LOAD_TIMEOUT);
-    let (done, wait_done) = mpsc::channel();
+    let gone = done.clone();
+    window.on_window_event(move |e| {
+        if let WindowEvent::Destroyed = e {
+            drop_reply(&loaded);
+            drop_reply(&gone);
+        }
+    });
+    // 加载超时也照样打印：多半是网上的图片太慢。还没加载完窗口就没了的打印不了
+    if let Err(RecvTimeoutError::Disconnected) = wait_loaded.recv_timeout(PDF_LOAD_TIMEOUT) {
+        let _ = window.destroy();
+        return Err("打印用的窗口还没加载完就关掉了".into());
+    }
     let (target, title) = (pdf.to_path_buf(), title.to_string());
     let started = window.with_webview(move |w| {
         if let Err(e) = start_print(&w, &target, &title, done.clone()) {
-            let _ = done.send(Err(e));
+            send_reply(&done, Err(e));
         }
     });
-    // 打印出错的（连同 WebView2 太旧的）退回打印对话框；开始不了、超时的直接报错
+    // 打印出错的（连同 WebView2 太旧的）退回打印对话框；开始不了、超时、窗口没了的直接报错
     let reason = match started.map(|()| wait_done.recv_timeout(PDF_PRINT_TIMEOUT)) {
         Ok(Ok(Ok(()))) => {
             let _ = window.destroy();
             return Ok(Printed::Pdf);
         }
         Ok(Ok(Err(reason))) => reason,
-        Ok(Err(_)) => {
+        Ok(Err(RecvTimeoutError::Timeout)) => {
             let _ = window.destroy();
             return Err("打印成 PDF 超时".into());
+        }
+        // 窗口在打印完之前没了（开始打印之前就没了的，with_webview 交过去的也不会执行）
+        Ok(Err(RecvTimeoutError::Disconnected)) => {
+            let _ = window.destroy();
+            return Err("打印用的窗口还没打印完就关掉了".into());
         }
         Err(e) => {
             let _ = window.destroy();
@@ -1738,7 +1777,7 @@ fn force_print_dialog() -> bool {
 
 /// 在主线程上（with_webview 里）开始打印，打完把结果发给 done；出错时返回的、发给 done 的是没做成的原因
 #[cfg(windows)]
-fn start_print(webview: &tauri::webview::PlatformWebview, pdf: &Path, title: &str, done: mpsc::Sender<Cmd<()>>) -> Cmd<()> {
+fn start_print(webview: &tauri::webview::PlatformWebview, pdf: &Path, title: &str, done: Reply<Cmd<()>>) -> Cmd<()> {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         ICoreWebView2Environment6, ICoreWebView2_7, COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT,
     };
@@ -1766,11 +1805,14 @@ fn start_print(webview: &tauri::webview::PlatformWebview, pdf: &Path, title: &st
         settings.SetHeaderTitle(&HSTRING::from(title)).map_err(print_error)?;
         settings.SetFooterUri(&HSTRING::new()).map_err(print_error)?;
         let handler = PrintToPdfCompletedHandler::create(Box::new(move |result, ok| {
-            let _ = done.send(match result {
-                Err(e) => Err(print_error(e)),
-                Ok(()) if !ok => Err("WebView2 没能打印成 PDF".into()),
-                Ok(()) => Ok(()),
-            });
+            send_reply(
+                &done,
+                match result {
+                    Err(e) => Err(print_error(e)),
+                    Ok(()) if !ok => Err("WebView2 没能打印成 PDF".into()),
+                    Ok(()) => Ok(()),
+                },
+            );
             Ok(())
         }));
         core.PrintToPdf(&HSTRING::from(pdf), &settings, &handler).map_err(print_error)?;
