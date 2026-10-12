@@ -479,21 +479,18 @@ async fn open_folder(
     tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("无法打开文件夹：{e}"))
 }
 
-/// 正文里的链接只允许网页和邮件地址，免得 Ctrl+单击链接就运行了本地程序
-fn is_web_link(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    ["http://", "https://", "mailto:"]
-        .iter()
-        .any(|p| lower.starts_with(p) && lower.len() > p.len())
-}
-
-/// 用系统默认的浏览器 / 邮件程序打开正文里的链接
-#[tauri::command]
-fn open_url(url: String) -> Cmd<()> {
-    if !is_web_link(&url) {
+/// 用系统默认的浏览器 / 邮件程序打开链接：只开网页和邮件地址（export::is_web_link），免得点了链接就运行了本地程序
+fn open_web_link(url: &str) -> Cmd<()> {
+    if !export::is_web_link(url) {
         return Err("只能打开网页和邮件链接".into());
     }
-    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| format!("无法打开链接：{e}"))
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| format!("无法打开链接：{e}"))
+}
+
+/// 用系统默认的浏览器 / 邮件程序打开正文里的链接（Ctrl+单击）
+#[tauri::command]
+fn open_url(url: String) -> Cmd<()> {
+    open_web_link(&url)
 }
 
 /// 前端把编辑中的内容写盘后调用，真正退出程序
@@ -1654,6 +1651,7 @@ fn drop_reply<T>(reply: &Reply<T>) {
 #[cfg(windows)]
 fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str) -> Cmd<Printed> {
     let url = tauri::Url::from_file_path(html).map_err(|_| format!("临时文件的路径不对：{}", html.display()))?;
+    let (doc, new_window_doc) = (url.to_string(), url.to_string());
     let (loaded, wait_loaded) = reply::<()>();
     let (done, wait_done) = reply::<Cmd<()>>();
     let on_loaded = loaded.clone();
@@ -1668,6 +1666,14 @@ fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str
             if payload.event() == PageLoadEvent::Finished && payload.url().scheme() == "file" {
                 send_reply(&on_loaded, ());
             }
+        })
+        // 窗口里一直是导出的这一页（见 print_window_navigates）。建窗口时就设好，看不见的时候也拦着：
+        // 导出的 HTML 里没有脚本，本来不会自己跳走，拦着的话万一跳走了也不会把别的页面印进 PDF
+        .on_navigation(move |to| print_window_navigates(to, &doc))
+        // 要开新窗口的（Ctrl / Shift / 中键点链接）：一样处理，不开新窗口
+        .on_new_window(move |to, _| {
+            print_window_navigates(&to, &new_window_doc);
+            tauri::webview::NewWindowResponse::Deny
         });
     if let Some(args) = main_browser_args(app) {
         builder = builder.additional_browser_args(&args);
@@ -1719,6 +1725,24 @@ fn print_file(app: &AppHandle, label: &str, html: &Path, pdf: &Path, title: &str
             let _ = window.destroy();
             Err(format!("{reason}；{e}"))
         }
+    }
+}
+
+/// 打印用的窗口要去 to 时让不让它去（export::print_navigation）：还是导出的这一页（目录、脚注这些锚点）才去；网页、邮件链接
+/// 交给默认的浏览器 / 邮件程序（open_web_link，同正文里的链接；在别的线程里打开，不在 WebView2 的事件里等），窗口里不动；
+/// 别的（本地的文件等）不理。退回打印对话框时窗口显示出来、点得到链接，以前点了整个窗口就跳走了、回不来
+#[cfg(windows)]
+fn print_window_navigates(to: &tauri::Url, doc: &str) -> bool {
+    match export::print_navigation(to.as_str(), doc) {
+        export::PrintNavigation::Stay => true,
+        export::PrintNavigation::Browser => {
+            let url = to.to_string();
+            std::thread::spawn(move || {
+                let _ = open_web_link(&url);
+            });
+            false
+        }
+        export::PrintNavigation::Block => false,
     }
 }
 
@@ -2026,7 +2050,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_web_link, reparent, with_window_state};
+    use super::{reparent, with_window_state};
     use serde_json::json;
 
     #[test]
@@ -2038,16 +2062,6 @@ mod tests {
         assert_eq!(reparent("需求/前端二/组件", "需求/前端", "x"), None);
         assert_eq!(reparent("需求二", "需求", "开发"), None);
         assert_eq!(reparent("日常", "需求", "开发"), None);
-    }
-
-    #[test]
-    fn only_web_links_can_be_opened() {
-        for ok in ["https://example.com", "HTTP://a.cn/x?y=1", "mailto:a@b.com"] {
-            assert!(is_web_link(ok), "{ok}");
-        }
-        for bad in ["https://", "file:///C:/Windows/notepad.exe", "C:\\a.exe", "./a.md", "javascript:alert(1)", ""] {
-            assert!(!is_web_link(bad), "{bad}");
-        }
     }
 
     #[test]

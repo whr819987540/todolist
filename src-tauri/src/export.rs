@@ -397,6 +397,47 @@ pub fn print_window_size(area: (f64, f64)) -> (f64, f64) {
     )
 }
 
+/// 能交给默认的浏览器 / 邮件程序打开的链接：只有网页和邮件地址（lib.rs 的 open_web_link：正文里 Ctrl+单击的链接、
+/// 退回打印对话框时窗口里点的链接），免得点了链接就运行了本地程序
+pub fn is_web_link(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|p| lower.starts_with(p) && lower.len() > p.len())
+}
+
+/// 打印用的窗口要去别的地址时（点了链接）怎么办
+#[derive(Debug, PartialEq, Eq)]
+pub enum PrintNavigation {
+    /// 还是导出的这一页（一开始加载它，目录、脚注这些锚点，刷新）：照常
+    Stay,
+    /// 网页、邮件链接：交给默认的浏览器 / 邮件程序打开，窗口里不动
+    Browser,
+    /// 别的（本地的文件、相对路径、data: 等）：不理
+    Block,
+}
+
+/// 打印用的窗口要去 url 时怎么办：窗口里一直是导出的这一页，点了链接也不跳走（跳走了回不来）。doc 是这一页（临时文件）的地址
+pub fn print_navigation(url: &str, doc: &str) -> PrintNavigation {
+    if same_document(url, doc) {
+        PrintNavigation::Stay
+    } else if is_web_link(url) {
+        PrintNavigation::Browser
+    } else {
+        PrintNavigation::Block
+    }
+}
+
+/// 去掉 # 后面的锚点、还原 %xx 的转义之后是不是同一个地址；不分大小写（Windows 的路径不分，WebView2 报来的地址和
+/// 交给它的写法可能不一样）
+fn same_document(a: &str, b: &str) -> bool {
+    let key = |url: &str| {
+        let base = url.split_once('#').map_or(url, |(base, _)| base);
+        percent_encoding::percent_decode_str(base).decode_utf8_lossy().to_lowercase()
+    };
+    key(a) == key(b)
+}
+
 // ---------------------------------------------------------------------------
 // 整个文档
 // ---------------------------------------------------------------------------
@@ -1693,6 +1734,53 @@ mod tests {
         assert_eq!(print_window_size((700.5, 1200.0)), (652.0, 1000.0));
         // 很小的屏幕：不比最小的还小
         assert_eq!(print_window_size((300.0, 200.0)), (320.0, 240.0));
+    }
+
+    #[test]
+    fn only_web_links_can_be_opened() {
+        for ok in ["https://example.com", "HTTP://a.cn/x?y=1", "mailto:a@b.com"] {
+            assert!(is_web_link(ok), "{ok}");
+        }
+        for bad in ["https://", "file:///C:/Windows/notepad.exe", "C:\\a.exe", "./a.md", "javascript:alert(1)", ""] {
+            assert!(!is_web_link(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn print_window_stays_on_the_document() {
+        use PrintNavigation::*;
+        let doc = "file:///C:/Users/RUNNER~1/AppData/Local/Temp/todolist-export-1234-1.html";
+        // 导出的这一页：一开始加载它，目录、脚注的锚点，刷新；大小写、转义不一样的也算
+        let same = [
+            doc.to_string(),
+            format!("{doc}#todo-3"),
+            format!("{doc}#md-t-fn-1"),
+            "FILE:///c:/users/runner~1/appdata/local/temp/todolist-export-1234-1.html#chapter-2".into(),
+            "file:///C:/Users/RUNNER%7E1/AppData/Local/Temp/todolist-export-1234-1.html".into(),
+        ];
+        for url in &same {
+            assert_eq!(print_navigation(url, doc), Stay, "{url}");
+        }
+        let zh = "file:///C:/Users/%E5%BC%A0%E4%B8%89/AppData/Local/Temp/todolist-export-1-2.html";
+        assert_eq!(print_navigation("file:///C:/Users/张三/AppData/Local/Temp/todolist-export-1-2.html#todo-1", zh), Stay);
+        // 网页、邮件链接交出去
+        for url in ["https://example.com/a?b=1#c", "http://www.example.com", "MAILTO:a@b.com"] {
+            assert_eq!(print_navigation(url, doc), Browser, "{url}");
+        }
+        // 别的不理：本地的别的文件（同一个文件夹里的、带查询参数的同一个文件也是）、data:、javascript:、about:blank、只有开头的
+        let other = [
+            "file:///C:/Windows/notepad.exe".to_string(),
+            "file:///C:/Users/RUNNER~1/AppData/Local/Temp/todolist-export-1234-2.html".into(),
+            "file:///C:/Users/RUNNER~1/AppData/Local/Temp/a.md".into(),
+            format!("{doc}?x=1"),
+            "data:text/html,<p>hi</p>".into(),
+            "javascript:alert(1)".into(),
+            "about:blank".into(),
+            "https://".into(),
+        ];
+        for url in &other {
+            assert_eq!(print_navigation(url, doc), Block, "{url}");
+        }
     }
 
     #[test]
