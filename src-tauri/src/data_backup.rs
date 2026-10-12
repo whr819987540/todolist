@@ -8,10 +8,14 @@
 //!
 //! 自动备份存在备份目录（默认是数据目录旁边的「数据目录名-backups」）里，文件名同上，只留最近几份；
 //! 恢复前先把现在的数据备份成 `…-恢复前.zip`，不算在「最近几份」里，也不会被删。
+//!
+//! 恢复时解压到数据目录里的临时文件夹 `.restoring-…\new`，换下来的放进 `old`，换之前在那里写下记录 `journal.json`
+//! （store.rs 的 replace_data）；程序在换的中途退出时，下次启动先 recover_leftovers 换回原来的数据（或者做完收尾），
+//! 结果交给前端提示一次（BackupJobs::take_recovered）。
 
 use crate::backup::{self, BackupKind, Manifest, RemoteBackup, DATA_PREFIX, MANIFEST_FILE, SETTINGS_BACKUP_HINT};
 use crate::settings::SETTINGS_FILE;
-use crate::store::{self, Store, MAX_PATH_CHARS, UI_STATE_FILE};
+use crate::store::{self, Store, SwapRecovery, MAX_PATH_CHARS, STAGED_NEW, STAGED_OLD, SWAP_JOURNAL, UI_STATE_FILE};
 use crate::webdav::WebDav;
 use chrono::{DateTime, Local, TimeZone};
 use serde::Serialize;
@@ -524,19 +528,30 @@ pub fn staging_dir(root: &Path, time: DateTime<Local>) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// 删掉临时文件夹；替换失败、没能换回来的原来的数据（在 old 里）留着
+/// 删掉临时文件夹。替换失败、没能全部换回来时（记录 journal.json 还在）只删下载的备份，解压出来的（new）、换下来的原来的
+/// 数据（old）和记录都留着，下次启动时 recover_leftovers 凭记录接着换回
 pub fn clean_staging(staging: &Path) {
-    let _ = fs::remove_dir_all(staging.join("new"));
     let _ = fs::remove_file(staging.join("download.zip"));
-    let _ = fs::remove_dir(staging.join("old"));
+    if staging.join(SWAP_JOURNAL).exists() {
+        return;
+    }
+    let _ = fs::remove_dir_all(staging.join(STAGED_NEW));
+    let _ = fs::remove_dir(staging.join(STAGED_OLD));
     let _ = fs::remove_dir(staging);
 }
 
 /// 用本地的备份文件恢复（staging 是 staging_dir 建的临时文件夹）：先解压到临时文件夹里、检查好，
 /// 再拿着存储层的锁把现在的数据备份到 backup_dir（`…-恢复前.zip`，备份不了就不恢复），然后换成备份里的
 pub fn restore_at(store: &Store, staging: &Path, zip_path: &Path, backup_dir: &Path, time: DateTime<Local>) -> Result<Restored> {
+    // 上次恢复没能全部换回来的临时文件夹还在（有记录）：再恢复一次的话，下次启动换回上次的时会把这次换进来的当成上次的
+    if let Some(left) = unfinished_restore(store.root(), staging) {
+        return Err(format!(
+            "上次恢复待办数据没能全部换回来，临时文件夹 {} 还在。请先关掉占用文件的程序、重新打开软件让它换回来，再恢复",
+            left.display()
+        ));
+    }
     let (mut zip, manifest) = open_data_zip(zip_path)?;
-    let new = staging.join("new");
+    let new = staging.join(STAGED_NEW);
     fs::create_dir_all(&new).map_err(|e| format!("恢复失败，无法创建临时文件夹：{e}"))?;
     extract(&mut zip, &manifest, &new, store.root())?;
     drop(zip);
@@ -545,8 +560,18 @@ pub fn restore_at(store: &Store, staging: &Path, zip_path: &Path, backup_dir: &P
     check_backup_dir(backup_dir, store.root()).map_err(not_backed_up)?;
     fs::create_dir_all(backup_dir).map_err(|e| not_backed_up(format!("无法创建备份目录 {}：{e}", backup_dir.display())))?;
     let before = unique_path(backup_dir, &format!("{DATA_PREFIX}{}-{BEFORE_RESTORE}", backup::stamp(time)));
-    store.replace_data(&new, &staging.join("old"), || pack_held(store.root(), &before, time).map_err(not_backed_up))?;
+    store.replace_data(staging, &before, || pack_held(store.root(), &before, time).map_err(not_backed_up))?;
     Ok(Restored { workspaces, todos, time: manifest.created_at, before: before.to_string_lossy().into_owned() })
+}
+
+/// 数据目录里还没处理完的恢复（别的 `.restoring-…` 里有记录 journal.json）
+fn unfinished_restore(root: &Path, except: &Path) -> Option<PathBuf> {
+    fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX) && e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.path())
+        .find(|dir| dir != except && dir.join(SWAP_JOURNAL).exists())
 }
 
 /// 用本地的备份文件恢复，临时文件夹用完删掉
@@ -555,6 +580,97 @@ pub fn restore_file(store: &Store, zip_path: &Path, backup_dir: &Path, time: Dat
     let result = restore_at(store, &staging, zip_path, backup_dir, time);
     clean_staging(&staging);
     result
+}
+
+/// 上次恢复待办数据时中途退出、这次启动时处理掉的结果（还没开始换、直接删掉了的不算），前端启动时提示一次
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreRecovery {
+    pub outcome: RecoveryOutcome,
+    /// 临时文件夹（完整路径）
+    pub staging: String,
+    /// 恢复前的数据备份（完整路径；没有记录时不知道）
+    pub before: Option<String>,
+    /// 留着没处理的原因
+    pub reason: Option<String>,
+    /// 换回时留着没删的换进来过的备份内容（交还给用户后在数据目录里待过、可能改过）
+    pub used: Option<String>,
+    /// 恢复前的数据备份读得出来（原样留着的：没有因为它对不上才留着）；不是时 old 里的可能是原来的数据仅有的一份
+    pub backup_ok: bool,
+    /// 原样留着的：下次启动时会再试着处理
+    pub retry: bool,
+    /// 原样留着的：old 里有东西（换下来的原来的数据）
+    pub old_data: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoveryOutcome {
+    /// 换到一半：换回了恢复前的数据
+    RolledBack,
+    /// 已经换完：收了尾，现在是备份里的数据
+    Finished,
+    /// 处理不了：临时文件夹原样留着
+    Kept,
+}
+
+/// 恢复前的数据备份 zip 还在、读得出说明；给了 old（恢复时换下来的原来的数据）时还要 old 的指纹和说明里记的一样，
+/// 即备份里正是这些（恢复前先备份、再改名移进 old，中间拿着存储层的锁，文件的大小、修改时间都不变）
+fn backup_holds(zip: &Path, old: Option<&Path>) -> bool {
+    let Some(recorded) = read_fingerprint(zip) else { return false };
+    old.is_none_or(|dir| collect(dir).is_ok_and(|items| fingerprint(&items) == recorded))
+}
+
+/// 启动时（用到存储层、开始监听数据目录、自动备份之前）找出数据目录里恢复待办数据时留下的临时文件夹（`.restoring-…`），
+/// 交给 Store::recover_restore 处理：还没开始换的删掉，换到一半的换回原来的数据，已经换完的收尾，说不清的原样留着。
+/// 换完了要删掉换下来的原来的数据时，恢复前的数据备份里要正是这些（backup_holds）
+pub fn recover_leftovers(store: &Store) -> Vec<RestoreRecovery> {
+    let mut dirs: Vec<PathBuf> = fs::read_dir(store.root())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX) && e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.path())
+        .collect();
+    // 新的先处理（同撤销，后恢复的先换回）：文件夹名里是恢复的时间
+    dirs.sort();
+    dirs.reverse();
+    let mut out = Vec::new();
+    for dir in dirs {
+        let staging = dir.to_string_lossy().into_owned();
+        let readable = |before: &Option<String>| before.as_deref().is_some_and(|b| read_fingerprint(Path::new(b)).is_some());
+        let found = match store.recover_restore(&dir, backup_holds) {
+            SwapRecovery::Discarded => continue,
+            SwapRecovery::RolledBack { before, used } => RestoreRecovery {
+                outcome: RecoveryOutcome::RolledBack,
+                staging,
+                before: Some(before),
+                reason: None,
+                used,
+                backup_ok: true,
+                retry: false,
+                old_data: false,
+            },
+            SwapRecovery::Finished { before } => RestoreRecovery {
+                outcome: RecoveryOutcome::Finished,
+                staging,
+                before: Some(before),
+                reason: None,
+                used: None,
+                backup_ok: true,
+                retry: false,
+                old_data: false,
+            },
+            SwapRecovery::Kept { reason, before, backup_bad, retry } => {
+                eprintln!("恢复待办数据时留下的临时文件夹 {staging} 没有处理：{reason}");
+                let backup_ok = !backup_bad && readable(&before);
+                let old_data = fs::read_dir(dir.join(STAGED_OLD)).is_ok_and(|mut d| d.next().is_some());
+                RestoreRecovery { outcome: RecoveryOutcome::Kept, staging, before, reason: Some(reason), used: None, backup_ok, retry, old_data }
+            }
+        };
+        out.push(found);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -639,16 +755,27 @@ impl AutoRun {
 }
 
 /// 备份、恢复在做的事（Tauri 管理的状态）：同一时间只做一件（自动备份、手动备份、恢复）；
-/// 记着这次运行期间最近一次自动备份的结果；可以叫醒定时检查的线程（改了自动备份的设置后马上检查）
+/// 记着这次运行期间最近一次自动备份的结果；可以叫醒定时检查的线程（改了自动备份的设置后马上检查）；
+/// 记着启动时处理掉的恢复中途留下的临时文件夹（recover_leftovers），等前端取走
 #[derive(Default)]
 pub struct BackupJobs {
     busy: Mutex<()>,
     running: AtomicBool,
     last: Mutex<Option<AutoRun>>,
     waker: Mutex<Option<Sender<()>>>,
+    recovered: Mutex<Vec<RestoreRecovery>>,
 }
 
 impl BackupJobs {
+    pub fn with_recovered(recovered: Vec<RestoreRecovery>) -> Self {
+        Self { recovered: Mutex::new(recovered), ..Self::default() }
+    }
+
+    /// 启动时处理掉的恢复中途留下的临时文件夹，只给一次（前端提示过就不再给）
+    pub fn take_recovered(&self) -> Vec<RestoreRecovery> {
+        std::mem::take(&mut *self.recovered.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
     /// 拿着它的时候别的备份、恢复等着
     pub fn exclusive(&self) -> MutexGuard<'_, ()> {
         self.busy.lock().unwrap_or_else(|e| e.into_inner())
@@ -989,6 +1116,147 @@ mod tests {
                 assert_eq!(crate::watch::classify(&rel, false, now), None, "{rel:?}");
             }
         }
+        clean_staging(&staging);
+        assert!(!staging.exists());
+    }
+
+    /// 恢复中途退出时临时文件夹里的样子：zip 解压到 new，现在的数据备份成 before（恢复前的数据备份），写下记录（同 store.rs 的
+    /// replace_data），然后做前 k 步改名（先把现在的都移进 old，再把 new 里的移过来）；k 是 None 时全部做完
+    fn crashed_restore(s: &Store, zip: &Path, before: &Path, at: DateTime<Local>, k: Option<usize>) -> PathBuf {
+        let staging = staging_dir(s.root(), at).unwrap();
+        let (mut archive, manifest) = open_data_zip(zip).unwrap();
+        extract(&mut archive, &manifest, &staging.join(STAGED_NEW), s.root()).unwrap();
+        pack(s, before, at).unwrap();
+        let items = |dir: &Path| {
+            let mut names: Vec<String> = fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_type().unwrap().is_dir() && !e.file_name().to_string_lossy().starts_with('.'))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            if dir.join(UI_STATE_FILE).is_file() {
+                names.push(UI_STATE_FILE.into());
+            }
+            names
+        };
+        let (current, incoming) = (items(s.root()), items(&staging.join(STAGED_NEW)));
+        let journal = serde_json::json!({
+            "version": 1, "phase": "swapping", "current": current, "incoming": incoming, "before": before.to_string_lossy()
+        });
+        fs::create_dir_all(staging.join(STAGED_OLD)).unwrap();
+        fs::write(staging.join(SWAP_JOURNAL), journal.to_string()).unwrap();
+        let moves = current.iter().map(|n| (s.root().join(n), staging.join(STAGED_OLD).join(n)));
+        let moves = moves.chain(incoming.iter().map(|n| (staging.join(STAGED_NEW).join(n), s.root().join(n))));
+        for (from, to) in moves.take(k.unwrap_or(usize::MAX)) {
+            fs::rename(from, to).unwrap();
+        }
+        staging
+    }
+
+    /// docs/requirements.md「恢复数据」：替换中途程序退出了（崩溃、断电、被结束），下次启动时（用到存储层之前）换回恢复前的数据，
+    /// 已经换完的收尾（恢复前的数据备份读得出时才删掉换下来的），还没开始换的悄悄删掉，说不清的（以前的版本留下的）原样留着；
+    /// 除了悄悄删掉的，结果都交给前端提示一次
+    #[test]
+    fn leftovers_are_recovered_on_startup() {
+        let (_tmp, s) = setup("leftovers");
+        let backups = default_dir(s.root());
+        fs::create_dir_all(&backups).unwrap();
+        let zip = backups.join(file_name(time(10)));
+        pack(&s, &zip, time(10)).unwrap();
+        let in_backup = snapshot(s.root());
+        s.create_workspace("后来建的").unwrap();
+        s.write_ui_state(r#"{"later":true}"#).unwrap();
+        let original = (snapshot(s.root()), s.read_ui_state().unwrap());
+
+        // 换到一半（现在的前两项已经移进 old）；还没开始换（只有下载到一半的）；以前的版本留下的（没有记录，old 里有东西）
+        let before = backups.join("TodoList-data-20261009-113012-恢复前.zip");
+        let halfway = crashed_restore(&s, &zip, &before, time(11), Some(2));
+        let downloading = staging_dir(s.root(), time(12)).unwrap();
+        fs::write(downloading.join("download.zip"), "下载到一半").unwrap();
+        let ancient = s.root().join(".restoring-20200101-000000");
+        fs::create_dir_all(ancient.join(STAGED_OLD).join("以前的")).unwrap();
+        fs::write(ancient.join(STAGED_OLD).join("以前的").join("a.md"), "以前的正文").unwrap();
+
+        let found = recover_leftovers(&s);
+        let path = |p: &Path| p.to_string_lossy().into_owned();
+        // 新的先处理：halfway（11 点的）在 ancient（2020 年的）前面
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(
+            found[0],
+            RestoreRecovery {
+                outcome: RecoveryOutcome::RolledBack,
+                staging: path(&halfway),
+                before: Some(path(&before)),
+                reason: None,
+                used: None,
+                backup_ok: true,
+                retry: false,
+                old_data: false
+            }
+        );
+        assert_eq!((found[1].outcome, found[1].staging.as_str(), found[1].before.as_deref()), (RecoveryOutcome::Kept, path(&ancient).as_str(), None));
+        assert!(found[1].reason.as_deref().is_some_and(|r| r.contains("没有记录")), "{found:?}");
+        assert!(!found[1].backup_ok && !found[1].retry && found[1].old_data, "以前的版本留下的：不知道恢复前的数据备份是哪份，也不会再试");
+        assert_eq!((snapshot(s.root()), s.read_ui_state().unwrap()), original, "换回了恢复前的数据");
+        assert!(!halfway.exists() && !downloading.exists());
+        assert_eq!(fs::read_to_string(ancient.join(STAGED_OLD).join("以前的").join("a.md")).unwrap(), "以前的正文", "什么都没删");
+
+        // 全部换完了才退出（还没删 old）：恢复前的数据备份读不出来、里面的和换下来的对不上时留着，正是它们时收尾，是备份里的数据
+        let before = backups.join("TodoList-data-20261009-133012-恢复前.zip");
+        let done = crashed_restore(&s, &zip, &before, time(13), None);
+        let packed = fs::read(&before).unwrap();
+        for wrong in ["坏了".as_bytes().to_vec(), fs::read(&zip).unwrap()] {
+            fs::write(&before, wrong).unwrap();
+            let found = recover_leftovers(&s);
+            assert_eq!(found.len(), 2, "{found:?}");
+            assert!(found[0].outcome == RecoveryOutcome::Kept && found[0].reason.as_deref().is_some_and(|r| r.contains("对不上")), "{found:?}");
+            assert!(!found[0].backup_ok && found[0].retry && found[0].old_data, "恢复前的数据备份对不上：old 里的可能是仅有的一份；下次启动再试");
+            assert!(done.join(STAGED_OLD).join("后来建的").is_dir(), "换下来的原来的数据留着");
+        }
+        // 留着期间再恢复：先要处理好上次的
+        let err = restore_file(&s, &zip, &backups, time(14)).unwrap_err();
+        assert!(err.contains("没能全部换回来") && err.contains(&path(&done)), "{err}");
+        fs::write(&before, packed).unwrap();
+        let found = recover_leftovers(&s);
+        assert_eq!(
+            found[0],
+            RestoreRecovery {
+                outcome: RecoveryOutcome::Finished,
+                staging: path(&done),
+                before: Some(path(&before)),
+                reason: None,
+                used: None,
+                backup_ok: true,
+                retry: false,
+                old_data: false
+            }
+        );
+        assert_eq!(snapshot(s.root()), in_backup, "是备份里的数据");
+        assert!(!done.exists());
+
+        // 前端只取得到一次
+        let jobs = BackupJobs::with_recovered(found);
+        assert_eq!(jobs.take_recovered().len(), 2);
+        assert!(jobs.take_recovered().is_empty());
+    }
+
+    /// 替换失败、没能全部换回来时（记录还在）用完的临时文件夹只删下载的备份：解压出来的、换下来的和记录留给下次启动时换回
+    #[test]
+    fn clean_staging_keeps_what_recovery_needs() {
+        let (_tmp, s) = setup("clean");
+        let staging = staging_dir(s.root(), time(12)).unwrap();
+        for dir in [STAGED_NEW, STAGED_OLD] {
+            fs::create_dir_all(staging.join(dir).join("工作")).unwrap();
+        }
+        fs::write(staging.join("download.zip"), "x").unwrap();
+        fs::write(staging.join(SWAP_JOURNAL), "{}").unwrap();
+        clean_staging(&staging);
+        assert!(!staging.join("download.zip").exists());
+        assert!(staging.join(STAGED_NEW).join("工作").is_dir() && staging.join(STAGED_OLD).join("工作").is_dir());
+        assert!(staging.join(SWAP_JOURNAL).is_file());
+        // 没有记录时整个删掉
+        fs::remove_file(staging.join(SWAP_JOURNAL)).unwrap();
+        fs::remove_dir(staging.join(STAGED_OLD).join("工作")).unwrap();
         clean_staging(&staging);
         assert!(!staging.exists());
     }

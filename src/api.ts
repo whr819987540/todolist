@@ -15,6 +15,7 @@ import type {
   PurgeResult,
   QuickTarget,
   RecycleEntry,
+  RestoreRecovery,
   RestoreResult,
   RemoteBackup,
   SaveResult,
@@ -261,6 +262,8 @@ export const api = {
   /** 用备份替换现在的全部待办数据（先自动备份一份现在的）；要经 dataBackup.ts 的 restoreData 调用 */
   restoreDataFromFile: (path: string) => invoke<DataRestoreDone>("restore_data_from_file", { path }),
   restoreDataFromWebdav: (name: string) => invoke<DataRestoreDone>("restore_data_from_webdav", { name }),
+  /** 上次恢复待办数据时中途退出、这次启动时处理掉的临时文件夹；只给一次 */
+  takeRestoreRecovery: () => invoke<RestoreRecovery[]>("take_restore_recovery"),
   getAutoBackupStatus: () => invoke<AutoBackupStatus>("get_auto_backup_status"),
   /** dir 为空串时用默认的备份目录；keep 超出范围时后端取边界值。改完马上检查一次 */
   setAutoBackup: (options: { enabled: boolean; dir: string; keep: number; webdav: boolean }) =>

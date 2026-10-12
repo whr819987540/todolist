@@ -2490,6 +2490,16 @@ body.drag-moving .editor-tab-close {
 .auto-backup-status .error-text {
   word-break: break-all;
 }
+/* 启动时提示上次恢复中途退出后怎么处理的：路径很长，随处折行 */
+.restore-recovery {
+  word-break: break-all;
+}
+.restore-recovery p {
+  margin: 0 0 8px;
+}
+.restore-recovery p:last-child {
+  margin-bottom: 0;
+}
 .backup-dir-row .backup-dir {
   flex: 1;
   min-width: 0;

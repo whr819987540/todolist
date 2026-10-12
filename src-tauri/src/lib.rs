@@ -9,7 +9,7 @@ mod webdav;
 
 use backup::RemoteBackup;
 use chrono::Local;
-use data_backup::{AutoLocal, AutoRun, BackupInfo, BackupJobs, LocalBackup, Outcome, Packed, Restored};
+use data_backup::{AutoLocal, AutoRun, BackupInfo, BackupJobs, LocalBackup, Outcome, Packed, RestoreRecovery, Restored};
 use serde::Serialize;
 use settings::{
     EditorBackground, FontArea, QuickTarget, Settings, SettingsStore, ShortcutAction, StartupView, Theme,
@@ -1351,6 +1351,12 @@ async fn restore_data_from_webdav(app: AppHandle, webdav: State<'_, WebDavStore>
     result
 }
 
+/// 上次恢复待办数据时中途退出、这次启动时处理掉的（换回了原来的、做完了收尾、处理不了原样留着的）；只给一次，前端启动时提示
+#[tauri::command]
+fn take_restore_recovery(jobs: State<'_, BackupJobs>) -> Vec<RestoreRecovery> {
+    jobs.take_recovered()
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AutoBackupStatus {
@@ -1977,7 +1983,8 @@ pub fn run() {
             app.manage(store);
             app.manage(settings);
             app.manage(webdav);
-            app.manage(BackupJobs::default());
+            // 上次恢复待办数据时中途退出留下的临时文件夹：在开始监听、自动备份和前端读数据之前换回原来的数据（或做完收尾）
+            app.manage(BackupJobs::with_recovered(data_backup::recover_leftovers(&app.state::<Store>())));
             app.manage(ExportedFiles::default());
             // 数据目录在外部变了（网盘同步、别的程序保存、在资源管理器里增删改名）时通知主窗口刷新。
             // 监听建不起来（数据目录在不支持变化通知的网络盘上等）时只在窗口获得焦点、F5 时刷新，不打扰用户
@@ -2103,6 +2110,7 @@ pub fn run() {
             inspect_data_backup,
             restore_data_from_file,
             restore_data_from_webdav,
+            take_restore_recovery,
             get_auto_backup_status,
             set_auto_backup,
             pick_backup_dir,

@@ -18,6 +18,8 @@
 //!     {条目 id}/{原名}       删除的 .md 文件或目录
 //!     {条目 id}/.assets/{待办 id}/   删除的待办的图片，和在项目文件夹里时的相对位置一样
 //!   .restoring-…/            恢复待办数据时的临时文件夹（data_backup.rs），恢复完就删掉
+//!     new/  old/             解压出来的备份、换下来的现在的数据
+//!     journal.json           换之前写下的记录（replace_data），中途退出时下次启动凭它换回（recover_restore）
 //! ```
 //!
 //! 接口里的项目用路径表示：顶层项目是它的名字，下一级用 / 连起来，如「父项目/子项目/孙项目」（名字里不能有 /，不会混淆）。
@@ -1460,42 +1462,64 @@ impl Store {
 
     // ----- 恢复待办数据（data_backup.rs） -----
 
-    /// 用 staged 里的工作区和 .state.json 换掉数据目录里现在的。拿着锁做，期间别的操作（保存、快速记录等）等着：
-    /// 先调 before（把现在的数据备份一份，失败了就什么都不动），再把现在的移进 old、staged 里的移过来。
-    /// 中途失败时换回原来的；换不回来的留在 old 里。软件的回收站和数据目录里别的文件（设置等）不动。
-    /// 移走、移进来的工作区记成软件自己写的（old、staged 在数据目录里点开头的临时文件夹里，监听时本来就不算）
-    pub fn replace_data<T>(&self, staged: &Path, old: &Path, before: impl FnOnce() -> Result<T>) -> Result<T> {
+    /// 用临时文件夹 staging 里 new 的工作区和 .state.json 换掉数据目录里现在的。拿着锁做，期间别的操作（保存、快速记录等）等着：
+    /// 先调 before（把现在的数据备份到 before_zip，失败了就什么都不动），再在 staging 里写下记录（journal.json：现在的、换进来的
+    /// 各是哪些，恢复前的数据备份在哪里），然后把现在的移进 old、new 里的移过来，最后记下换完了、删掉 old。
+    /// 中途失败时换回原来的；换不回来时记录和 old、new 都留着，下次启动时 recover_restore 接着换回。程序在中途退出时也一样。
+    /// 软件的回收站和数据目录里别的文件（设置等）不动。移走、移进来的工作区记成软件自己写的（old、new 在数据目录里点开头的
+    /// 临时文件夹里，监听时本来就不算）
+    pub fn replace_data<T>(&self, staging: &Path, before_zip: &Path, before: impl FnOnce() -> Result<T>) -> Result<T> {
         let mut g = self.guard();
         let done = before()?;
-        let current = data_items(&self.root)?;
-        let incoming = data_items(staged)?;
-        fs::create_dir_all(old).map_err(|e| format!("恢复失败：{e}"))?;
-        let mut moved_out = Vec::new();
-        for name in &current {
-            if let Err(e) = rename_own(&self.root.join(name), &old.join(name)) {
-                let back = move_items(&moved_out, old, &self.root);
-                return Err(rollback_error(name, e, back, old));
+        let (old, journal_path) = (staging.join(STAGED_OLD), staging.join(SWAP_JOURNAL));
+        let mut journal = SwapJournal {
+            version: SWAP_JOURNAL_VERSION,
+            phase: SwapPhase::Swapping,
+            current: data_items(&self.root)?,
+            incoming: data_items(&staging.join(STAGED_NEW))?,
+            before: before_zip.to_string_lossy().into_owned(),
+        };
+        fs::create_dir_all(&old).map_err(|e| format!("恢复失败：{e}"))?;
+        // 第一次改名之前记录要先落盘：之后哪一步退出都能凭它换回来
+        write_journal(&journal_path, &journal).map_err(|e| format!("恢复失败，无法在临时文件夹里写下记录：{e}。现在的数据没有改动"))?;
+        for (name, from, to) in swap_moves(&self.root, staging, &journal) {
+            if let Err(e) = move_into(&from, &to) {
+                let back = roll_back(&self.root, staging, &journal);
+                if back.is_ok() {
+                    let _ = drop_journal(staging);
+                } else {
+                    // 一半一半的数据交还给用户了，之后可能在软件里改：下次启动换回时不再删掉换进来的
+                    mark_exposed(staging);
+                }
+                // 没能全部换回来时数据目录里是一半一半的：缓存整个丢掉
+                *g = MemCache::default();
+                return Err(rollback_error(&name, e, back, &old));
             }
-            moved_out.push(name.clone());
-        }
-        let mut moved_in = Vec::new();
-        for name in &incoming {
-            let target = self.root.join(name);
-            // 数据目录里还有同名的（不是工作区的文件）：不覆盖它（Windows 上文件夹改名能把同名的文件顶掉）
-            let moved = match fs::symlink_metadata(&target) {
-                Ok(_) => Err(io::Error::new(io::ErrorKind::AlreadyExists, "数据目录里已有同名的文件")),
-                Err(_) => rename_own(&staged.join(name), &target),
-            };
-            if let Err(e) = moved {
-                let back = move_items(&moved_in, &self.root, staged).and(move_items(&moved_out, old, &self.root));
-                return Err(rollback_error(name, e, back, old));
-            }
-            moved_in.push(name.clone());
         }
         // 路径没变、内容全换了：缓存整个丢掉
         *g = MemCache::default();
-        let _ = fs::remove_dir_all(old);
+        // 先记下换完了再删换下来的：删到一半退出时下次启动接着删，不当成换到一半
+        journal.phase = SwapPhase::Done;
+        if write_journal(&journal_path, &journal).is_err() {
+            // 记录停在换到一半、old 留着，下次启动看出已经换完、收尾；这期间界面接着用换进来的数据（会再写 .state.json）
+            mark_exposed(staging);
+        } else if fs::remove_dir_all(&old).is_ok() {
+            let _ = drop_journal(staging);
+        }
         Ok(done)
+    }
+
+    /// 启动时（别的地方用到存储层之前）处理恢复待办数据时中途退出（崩溃、断电、被结束）留下的临时文件夹 staging：
+    /// 还没开始换的删掉；换到一半的换回原来的数据；已经换完的删掉换下来的原来的数据——只在恢复前的数据备份里确实有它们时：
+    /// backup_holds(恢复前的数据备份, Some(old)) 看备份里是不是正是 old 里的这些，(…, None) 只看备份还在不在、读不读得出。
+    /// 说不清、做不到的什么都不删，原样留着，交给用户（见 SwapRecovery）
+    pub fn recover_restore(&self, staging: &Path, backup_holds: impl Fn(&Path, Option<&Path>) -> bool) -> SwapRecovery {
+        let mut g = self.guard();
+        let result = recover_swap(&self.root, staging, backup_holds);
+        if result != SwapRecovery::Discarded {
+            *g = MemCache::default();
+        }
+        result
     }
 
     // ----- 软件的回收站 -----
@@ -2027,10 +2051,10 @@ fn deepest_inside(dir: &Path) -> usize {
     deepest
 }
 
-/// 数据目录（或解压出来的备份）里算待办数据的：工作区文件夹（点开头的不算）和 .state.json
+/// 数据目录（或解压出来的备份）里算待办数据的：工作区文件夹（点开头的不算）和 .state.json（符号链接都不算，同备份时）
 fn data_items(dir: &Path) -> Result<Vec<String>> {
     let mut items: Vec<String> = list_subdirs(dir)?.into_iter().map(|(name, _)| name).collect();
-    if dir.join(UI_STATE_FILE).is_file() {
+    if fs::symlink_metadata(dir.join(UI_STATE_FILE)).is_ok_and(|m| m.is_file()) {
         items.push(UI_STATE_FILE.into());
     }
     Ok(items)
@@ -2044,27 +2068,397 @@ fn rename_own(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// 把 names 从 from 移回 to；有没移成的返回错误
-fn move_items(names: &[String], from: &Path, to: &Path) -> io::Result<()> {
-    let mut result = Ok(());
-    for name in names {
-        if let Err(e) = rename_own(&from.join(name), &to.join(name)) {
-            result = Err(e);
-        }
-    }
-    result
-}
-
 /// 替换数据时移不动 name（多半正被其他程序占用）的提示；back 是换回原来的数据成没成
-fn rollback_error(name: &str, e: io::Error, back: io::Result<()>, old: &Path) -> String {
+fn rollback_error(name: &str, e: io::Error, back: std::result::Result<(), String>, old: &Path) -> String {
     match back {
         Ok(()) => format!("恢复失败，「{name}」可能有文件正被其他程序占用：{e}。现在的数据没有改动"),
         Err(back) => format!(
             "恢复失败，「{name}」可能有文件正被其他程序占用：{e}；而且没能把原来的数据全部换回来（{back}）。\
-             原来的数据在自动备份目录里恢复前的备份中，没换回来的部分在 {}",
+             原来的数据在自动备份目录里恢复前的备份中，没换回来的部分在 {}；关掉占用文件的程序后重新打开软件，会再试着换回来",
             old.display()
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 恢复待办数据时换掉工作区：记录和中途退出后的处理
+// ---------------------------------------------------------------------------
+
+/// 恢复用的临时文件夹（data_backup.rs 建在数据目录里，点开头）里解压出来的备份
+pub const STAGED_NEW: &str = "new";
+/// 临时文件夹里换下来的现在的数据
+pub const STAGED_OLD: &str = "old";
+/// 临时文件夹里换之前写下的记录
+pub const SWAP_JOURNAL: &str = "journal.json";
+/// 删不掉的记录改名成这个（drop_journal），不再算记录
+const JOURNAL_DROPPED: &str = ".journal.json.old";
+/// 换回原来的数据时，没换回来就交还给过用户的（见 EXPOSED_MARK），new 改名成这个留着、不删：
+/// 里面换进来过的备份内容在数据目录里待过，可能在软件里改过
+pub const STAGED_USED: &str = "new-换回前用过";
+/// 临时文件夹里的标记：没换回来就交还给用户了（替换失败、没能全部换回；启动时没能处理），软件照常能用，
+/// 之后数据目录里一半一半的数据可能在软件里改过
+const EXPOSED_MARK: &str = "exposed";
+const SWAP_JOURNAL_VERSION: u32 = 1;
+
+/// 换到了哪一步
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum SwapPhase {
+    /// 正在换（或者换失败了、没能全部换回来）：中途退出的话下次启动时换回原来的；已经全部换完的收尾
+    Swapping,
+    /// 已经换完，只差删掉 old
+    Done,
+}
+
+/// 换之前写下的记录（临时文件夹里的 journal.json）。换的时候每一项都只在一处：现在的数据要么在数据目录、要么在 old 里，
+/// 换进来的要么在 new、要么在数据目录里（改名是原子的，不会两边都有或都没有；换回去时也只改名、不覆盖已有的）。
+/// 所以凭这两份名单和磁盘上现在的样子就知道换到了哪里，不用每改一次名就写一次记录；现在的和换进来的有同名的工作区时，
+/// 数据目录里的那个是谁，看另一份在不在 old / new 里
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SwapJournal {
+    version: u32,
+    phase: SwapPhase,
+    /// 换之前数据目录里的工作区和 .state.json（data_items）
+    current: Vec<String>,
+    /// new 里的
+    incoming: Vec<String>,
+    /// 恢复前的数据备份（完整路径）
+    before: String,
+}
+
+/// 处理恢复中途留下的临时文件夹的结果
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SwapRecovery {
+    /// 还没开始换（没有记录，只有解压、下载到一半的）：删掉了，数据没动过
+    Discarded,
+    /// 换到一半：换回了原来的数据。used 是留着没删的换进来过的备份内容（见 STAGED_USED）
+    RolledBack { before: String, used: Option<String> },
+    /// 已经换完：删掉了换下来的原来的数据（恢复前的数据备份里正是它们）
+    Finished { before: String },
+    /// 说不清换到了哪里、换不回来、恢复前的数据备份对不上：临时文件夹原样留着，没删数据。reason 是为什么；
+    /// backup_bad 是恢复前的数据备份找不到、读不出来或者和 old 对不上（old 里的可能是原来的数据仅有的一份）；
+    /// retry 是下次启动时还会再试（记录读不懂、以前的版本留下的这些再试也一样，不算）
+    Kept { reason: String, before: Option<String>, backup_bad: bool, retry: bool },
+}
+
+/// 先写到临时文件、落盘后再改名换上：任何时候退出，记录要么是原来的、要么是新的，不会只写了一半
+fn write_journal(path: &Path, journal: &SwapJournal) -> io::Result<()> {
+    let json = serde_json::to_vec_pretty(journal).map_err(io::Error::other)?;
+    let tmp = path.with_file_name(format!(".{SWAP_JOURNAL}.tmp"));
+    let mut file = File::create(&tmp)?;
+    file.write_all(&json)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp, path)
+}
+
+/// 记下没换回来就交还给用户了（EXPOSED_MARK）：之后再换回时 new 里的不当成备份的副本删掉（留在 STAGED_USED），
+/// 界面这期间又写的 .state.json 让给原来的那份。写不上（被杀毒软件等短暂地占着）时稍等再试几次
+fn mark_exposed(staging: &Path) {
+    let mark = staging.join(EXPOSED_MARK);
+    for attempt in 0..4 {
+        if mark.is_file() || File::create(&mark).and_then(|f| f.sync_all()).is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50 << attempt));
+    }
+    eprintln!("没能在 {} 里记下数据交还给了用户", staging.display());
+}
+
+/// 改名、删除失败是不是一会儿就好的：拒绝访问、共享冲突（刚移过的文件夹常被杀毒软件、索引服务短暂地开着）
+fn transient(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::PermissionDenied || (cfg!(windows) && e.raw_os_error() == Some(32))
+}
+
+/// 做 f，一会儿就好的失败（transient）稍等再试几次（一共等不到 1 秒）
+fn retrying<T>(mut f: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let mut wait = 50;
+    loop {
+        match f() {
+            Err(e) if wait <= 400 && transient(&e) => {
+                std::thread::sleep(Duration::from_millis(wait));
+                wait *= 2;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// 把 from 改名成 to，记下是软件自己写的；to 已经有了（文件、文件夹，大小写不同的同名也算）时不动、返回错误：
+/// Windows 上文件改名会把同名的文件顶掉，那样「每一项只在一处」就不成立了。一会儿就好的失败稍等再试几次
+fn move_into(from: &Path, to: &Path) -> io::Result<()> {
+    if fs::symlink_metadata(to).is_ok() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{} 已经有同名的了", to.display())));
+    }
+    retrying(|| rename_own(from, to))
+}
+
+/// 删掉记录（换回、收尾做完了，old 已经空了）。删不掉（被占着）时稍等再试，还不行就改名成 JOURNAL_DROPPED：没有记录、
+/// old 是空的临时文件夹下次启动当成还没开始换的，不会再凭记录去找已经收拾掉的东西
+fn drop_journal(staging: &Path) -> io::Result<()> {
+    let journal = staging.join(SWAP_JOURNAL);
+    match retrying(|| fs::remove_file(&journal)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => retrying(|| fs::rename(&journal, staging.join(JOURNAL_DROPPED))),
+        _ => Ok(()),
+    }
+}
+
+/// dir 里直接放着的（不跟进符号链接、目录联接，同 list_subdirs 不把它们当工作区）：名字 → 是不是文件夹；dir 不在时是空的
+fn dir_entries(dir: &Path) -> io::Result<HashMap<String, bool>> {
+    let mut out = HashMap::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if let (false, Some(name)) = (kind.is_symlink(), entry.file_name().to_str()) {
+            out.insert(name.to_string(), kind.is_dir());
+        }
+    }
+    Ok(out)
+}
+
+/// 数据目录、old、new 里现在各有什么，交还给过用户没有
+struct SwapSides {
+    root: HashMap<String, bool>,
+    old: HashMap<String, bool>,
+    new: HashMap<String, bool>,
+    exposed: bool,
+}
+
+impl SwapSides {
+    fn read(root: &Path, staging: &Path) -> std::result::Result<Self, String> {
+        let read = |dir: &Path| dir_entries(dir).map_err(|e| format!("读不了 {}：{e}", dir.display()));
+        // 换回之后 new 已经改名成 STAGED_USED、还没删掉记录就退出了：把它当成 new
+        let (new, used) = (staging.join(STAGED_NEW), staging.join(STAGED_USED));
+        let new = if fs::symlink_metadata(&new).is_err() && used.is_dir() { used } else { new };
+        Ok(Self {
+            root: read(root)?,
+            old: read(&staging.join(STAGED_OLD))?,
+            new: read(&new)?,
+            exposed: staging.join(EXPOSED_MARK).exists(),
+        })
+    }
+
+    /// 数据目录里的 .state.json 不是记录里的哪一份（现在的那份在 old 里或者没有，备份里的那份在 new 里或者没有）：
+    /// 交还给用户之后界面又写了一份。它只是界面状态，换回时让给原来的那份
+    fn stray_state(&self, journal: &SwapJournal) -> bool {
+        let elsewhere = |list: &Vec<String>, side: &HashMap<String, bool>| !list.iter().any(|n| n == UI_STATE_FILE) || has(side, UI_STATE_FILE);
+        self.exposed
+            && has(&self.root, UI_STATE_FILE)
+            && elsewhere(&journal.current, &self.old)
+            && elsewhere(&journal.incoming, &self.new)
+    }
+}
+
+/// side 里有没有数据里的 name：工作区是文件夹，.state.json 是文件；按名字原样比（Windows 上大小写不同的是别的东西）
+fn has(side: &HashMap<String, bool>, name: &str) -> bool {
+    side.get(name) == Some(&(name != UI_STATE_FILE))
+}
+
+/// 记录里的名单能不能用：版本认得、名字都是一层的普通名字（不会指到临时文件夹、数据目录外面去）、没有重复的
+fn check_journal(journal: &SwapJournal) -> std::result::Result<(), String> {
+    if journal.version != SWAP_JOURNAL_VERSION {
+        return Err(format!("记录 {SWAP_JOURNAL} 的版本（{}）不认得", journal.version));
+    }
+    for list in [&journal.current, &journal.incoming] {
+        let mut seen = HashSet::new();
+        for name in list.iter() {
+            if check_component(name, "").is_err() || !seen.insert(name.as_str()) {
+                return Err(format!("记录 {SWAP_JOURNAL} 里的「{name}」不对"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 每一项现在在哪里：现在的数据在不在数据目录里（不在就在 old 里），换进来的在不在数据目录里（不在就在 new 里）。
+/// 两份名单里都有的名字（备份里和现在都有「工作」）：数据目录里的「工作」是谁，看另一份——现在的在 old 里，数据目录里的
+/// 就是换进来的；换进来的还在 new 里，数据目录里的就是现在的。说不清的（几处都有或都没有，外部动过）返回错误，什么都不做
+fn locate(journal: &SwapJournal, sides: &SwapSides) -> std::result::Result<(Vec<(String, bool)>, Vec<(String, bool)>), String> {
+    let unclear = |name: &str| format!("说不清「{name}」换到了哪里（数据目录、old、new 里都有或都没有，可能在外部动过）");
+    let stray = sides.stray_state(journal);
+    let in_root = |name: &str| has(&sides.root, name) && !(stray && name == UI_STATE_FILE);
+    let in_both: HashSet<&str> = journal.current.iter().filter(|n| journal.incoming.contains(n)).map(String::as_str).collect();
+    let mut cur = Vec::new();
+    for name in &journal.current {
+        let both = in_both.contains(name.as_str());
+        let (r, o, n) = (in_root(name), has(&sides.old, name), has(&sides.new, name));
+        let in_root = match (r, o) {
+            // 同名的换进来的还在 new 里，数据目录里的才是现在的
+            (true, false) if !both || n => true,
+            (false, true) => false,
+            // 现在的在 old 里，数据目录里的是换进来的
+            (true, true) if both && !n => false,
+            _ => return Err(unclear(name)),
+        };
+        cur.push((name.clone(), in_root));
+    }
+    let mut inc = Vec::new();
+    for name in &journal.incoming {
+        let both = in_both.contains(name.as_str());
+        let (r, o, n) = (in_root(name), has(&sides.old, name), has(&sides.new, name));
+        let in_root = match (r, n) {
+            // 同名的现在的已经在 old 里，数据目录里的才是换进来的
+            (true, false) if !both || o => true,
+            (false, true) => false,
+            // 换进来的还在 new 里，数据目录里的是现在的
+            (true, true) if both && !o => false,
+            _ => return Err(unclear(name)),
+        };
+        inc.push((name.clone(), in_root));
+    }
+    Ok((cur, inc))
+}
+
+/// 换数据时依次改的名：(名字, 从哪里, 到哪里)。先把现在的都移进 old，再把 new 里的移进数据目录
+fn swap_moves(root: &Path, staging: &Path, journal: &SwapJournal) -> Vec<(String, PathBuf, PathBuf)> {
+    let (new, old) = (staging.join(STAGED_NEW), staging.join(STAGED_OLD));
+    let out = journal.current.iter().map(|n| (n.clone(), root.join(n), old.join(n)));
+    out.chain(journal.incoming.iter().map(|n| (n.clone(), new.join(n), root.join(n)))).collect()
+}
+
+/// 从磁盘上现在的样子换回原来的数据要改的名：先把在数据目录里的换进来的移回 new（腾出名字），再把在 old 里的原来的移回数据目录
+fn rollback_moves(root: &Path, staging: &Path, journal: &SwapJournal) -> std::result::Result<Vec<(String, PathBuf, PathBuf)>, String> {
+    let (cur, inc) = locate(journal, &SwapSides::read(root, staging)?)?;
+    let (new, old) = (staging.join(STAGED_NEW), staging.join(STAGED_OLD));
+    let out = inc.into_iter().filter(|(_, in_root)| *in_root).map(|(n, _)| (n.clone(), root.join(&n), new.join(&n)));
+    Ok(out.chain(cur.into_iter().filter(|(_, in_root)| !*in_root).map(|(n, _)| (n.clone(), old.join(&n), root.join(&n)))).collect())
+}
+
+/// 换回原来的数据（rollback_moves）。都只改名、不覆盖已有的（交还给用户后界面又写的 .state.json 让给原来的那份）；
+/// 移不动（被别的程序占用）时停下，已经移了的不动，磁盘上仍然是「每一项只在一处」，之后可以接着换回
+fn roll_back(root: &Path, staging: &Path, journal: &SwapJournal) -> std::result::Result<(), String> {
+    let sides = SwapSides::read(root, staging)?;
+    let moves = rollback_moves(root, staging, journal)?;
+    let new = staging.join(STAGED_NEW);
+    if !moves.is_empty() {
+        fs::create_dir_all(&new).map_err(|e| format!("建不了 {}：{e}", new.display()))?;
+    }
+    let state = root.join(UI_STATE_FILE);
+    if sides.stray_state(journal) && moves.iter().any(|(_, _, to)| *to == state) {
+        fs::remove_file(&state).map_err(|e| format!("换不回 {UI_STATE_FILE}：{e}"))?;
+        note_own(&state);
+    }
+    for (name, from, to) in moves {
+        move_into(&from, &to).map_err(|e| format!("移不动「{name}」（可能有文件正被其他程序占用）：{e}"))?;
+    }
+    Ok(())
+}
+
+/// 删掉临时文件夹里用完的。先删记录（删不掉时别的都不动，下次启动再来）：之后再退出也不会凭记录去找已经删掉的；
+/// 再删解压出来的备份（换回去了、或者已经都移走了）、下载的备份、标记；old 空了才删，别的不认得的（STAGED_USED 等）不删，
+/// 临时文件夹也就留着
+fn remove_staging(staging: &Path) {
+    let _ = fs::remove_file(staging.join(format!(".{SWAP_JOURNAL}.tmp")));
+    if drop_journal(staging).is_err() {
+        return;
+    }
+    let _ = fs::remove_file(staging.join(JOURNAL_DROPPED));
+    let _ = fs::remove_dir_all(staging.join(STAGED_NEW));
+    let _ = fs::remove_file(staging.join("download.zip"));
+    let _ = fs::remove_file(staging.join(EXPOSED_MARK));
+    let _ = fs::remove_dir(staging.join(STAGED_OLD));
+    let _ = fs::remove_dir(staging);
+}
+
+/// 换回原来的数据之后收拾临时文件夹：交还给过用户的，new 里换进来过的可能在数据目录里待过、改过，先改名成 STAGED_USED 留着
+/// （改不了名就什么都不删，返回错误），再 remove_staging。返回留着的 STAGED_USED
+fn after_rollback(staging: &Path, exposed: bool) -> std::result::Result<Option<String>, String> {
+    let (new, used) = (staging.join(STAGED_NEW), staging.join(STAGED_USED));
+    if exposed && fs::symlink_metadata(&new).is_ok() {
+        retrying(|| fs::rename(&new, &used)).map_err(|e| format!("换回了原来的数据，但没能把换进来过的备份内容（new）改名留着：{e}"))?;
+    }
+    remove_staging(staging);
+    Ok(used.is_dir().then(|| used.to_string_lossy().into_owned()))
+}
+
+/// 见 Store::recover_restore
+fn recover_swap(root: &Path, staging: &Path, backup_holds: impl Fn(&Path, Option<&Path>) -> bool) -> SwapRecovery {
+    let journal_path = staging.join(SWAP_JOURNAL);
+    let old = staging.join(STAGED_OLD);
+    let kept = |reason: String, retry: bool| SwapRecovery::Kept { reason, before: None, backup_bad: false, retry };
+    // 有记录、却处理不了而原样留着时，一半一半的数据就交还给用户了（之后可能在软件里改），记下来（EXPOSED_MARK）：
+    // 哪天记录读得出来了，换回时不把 new 当成副本删掉
+    let kept_journal = |reason: String, retry: bool| {
+        mark_exposed(staging);
+        kept(reason, retry)
+    };
+    let journal = match fs::read(&journal_path) {
+        Ok(bytes) => match serde_json::from_slice::<SwapJournal>(strip_bom(&bytes)) {
+            Ok(journal) => journal,
+            Err(e) => return kept_journal(format!("记录换到哪一步的 {SWAP_JOURNAL} 读不懂（{e}）"), false),
+        },
+        // 没有记录：还没开始换（记录在第一次改名之前就落盘了），解压、下载到一半的删掉。old 里有东西的（以前的版本换到一半
+        // 留下的）不删
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return match dir_entries(&old) {
+                Ok(entries) if entries.is_empty() => match after_rollback(staging, staging.join(EXPOSED_MARK).exists()) {
+                    Ok(_) => SwapRecovery::Discarded,
+                    Err(reason) => kept(reason, true),
+                },
+                Ok(_) => kept("没有记录换到了哪一步（可能是以前的版本留下的），old 里可能有原来的数据".into(), false),
+                Err(e) => kept(format!("读不了 {}：{e}", old.display()), true),
+            };
+        }
+        Err(e) => return kept_journal(format!("读不了记录 {SWAP_JOURNAL}：{e}"), true),
+    };
+    let before = journal.before.clone();
+    if let Err(reason) = check_journal(&journal) {
+        return kept_journal(reason, false);
+    }
+    let keep = |reason: String, backup_bad: bool| {
+        mark_exposed(staging);
+        SwapRecovery::Kept { reason, before: Some(before.clone()), backup_bad, retry: true }
+    };
+    let sides = match SwapSides::read(root, staging) {
+        Ok(sides) => sides,
+        Err(reason) => return keep(reason, false),
+    };
+    let finished = match journal.phase {
+        // 已经换完、删 old 删到一半（或删完了、还没删掉记录）
+        SwapPhase::Done => true,
+        SwapPhase::Swapping => match locate(&journal, &sides) {
+            Err(reason) => return keep(reason, false),
+            // 改完了最后一个名、还没来得及记下换完了
+            Ok((cur, inc)) => cur.iter().all(|(_, in_root)| !in_root) && inc.iter().all(|(_, in_root)| *in_root),
+        },
+    };
+    if !finished {
+        if let Err(reason) = roll_back(root, staging, &journal) {
+            return keep(format!("没能换回原来的数据：{reason}"), false);
+        }
+        return match after_rollback(staging, sides.exposed) {
+            Ok(used) => SwapRecovery::RolledBack { before, used },
+            Err(reason) => keep(reason, false),
+        };
+    }
+    // 换完了：换下来的原来的数据只在恢复前的数据备份里正是它们时才删（备份目录在拔掉的 U 盘上、备份坏了、对不上时留着）；
+    // 已经记下换完了的（原来删到一半了）只看备份还在不在
+    let check_old = (journal.phase == SwapPhase::Swapping).then_some(old.as_path());
+    if !sides.old.is_empty() && !backup_holds(Path::new(&before), check_old) {
+        return keep(
+            format!("恢复已经做完，但恢复前的数据备份 {before} 找不到、读不出来或者和换下来的原来的数据对不上，换下来的原来的数据留在 old 里没有删"),
+            true,
+        );
+    }
+    if journal.phase == SwapPhase::Swapping {
+        let done = SwapJournal { phase: SwapPhase::Done, ..journal.clone() };
+        if let Err(e) = write_journal(&journal_path, &done) {
+            return keep(format!("恢复已经做完，但记不下换完了（{e}），换下来的原来的数据留在 old 里没有删"), false);
+        }
+    }
+    if let Err(e) = fs::remove_dir_all(&old) {
+        if e.kind() != io::ErrorKind::NotFound {
+            return keep(format!("恢复已经做完，但换下来的原来的数据（old）没删掉：{e}"), false);
+        }
+    }
+    remove_staging(staging);
+    SwapRecovery::Finished { before }
 }
 
 /// 数据目录（或解压出来的备份）里有几个工作区、几条待办（包括子项目里的），和左侧、首页的算法一样
@@ -5183,13 +5577,14 @@ mod tests {
         assert_eq!(names, [("工作", vec![]), ("收件箱", vec!["快速记录".to_string()])]);
     }
 
-    /// 恢复待办数据用的「备份里的内容」：一个工作区、一条待办，加上界面状态
-    fn staged_backup(tmp: &TempRoot) -> PathBuf {
-        let staged = tmp.0.join("staged");
+    /// 恢复待办数据用的临时文件夹（数据目录里的 .restoring-test），new 里是「备份里的内容」：一个工作区、一条待办，加上界面状态
+    fn staged_backup(s: &Store) -> PathBuf {
+        let staging = s.root().join(".restoring-test");
+        let staged = staging.join(STAGED_NEW);
         fs::create_dir_all(staged.join("备份的工作区").join("项目")).unwrap();
         fs::write(staged.join("备份的工作区").join("项目").join("备份的待办.md"), "备份里的正文").unwrap();
         fs::write(staged.join(UI_STATE_FILE), r#"{"from":"backup"}"#).unwrap();
-        staged
+        staging
     }
 
     #[test]
@@ -5204,17 +5599,16 @@ mod tests {
         fs::write(s.root().join(".settings.json"), "{}").unwrap();
         // 读一遍，缓存里有现在的
         assert_eq!(s.load_workspace("现在的").unwrap().projects[0].todos.len(), 1);
-        let staged = staged_backup(&tmp);
-        let old = s.root().join(".restoring-test").join("old");
+        let staging = staged_backup(&s);
 
         let mut seen = None;
-        s.replace_data(&staged, &old, || {
-            // 替换之前，现在的数据还在原处（这时把它备份一份）
-            seen = Some(s.root().join("现在的").is_dir());
+        s.replace_data(&staging, &tmp.0.join("恢复前.zip"), || {
+            // 替换之前，现在的数据还在原处（这时把它备份一份），还没写记录
+            seen = Some((s.root().join("现在的").is_dir(), staging.join(SWAP_JOURNAL).exists()));
             Ok(())
         })
         .unwrap();
-        assert_eq!(seen, Some(true));
+        assert_eq!(seen, Some((true, false)));
         // 换走、换进来的工作区是软件自己改的名，监听时不当成外部改动
         let now = Instant::now();
         for ws in ["现在的", "备份的工作区"] {
@@ -5226,10 +5620,10 @@ mod tests {
         let tree = s.load_workspace("备份的工作区").unwrap();
         assert_eq!(tree.projects[0].todos[0].preview, "备份里的正文");
         assert_eq!(s.read_ui_state().unwrap().as_deref(), Some(r#"{"from":"backup"}"#));
-        // 回收站、设置文件不动；放原来数据的临时目录删掉了
+        // 回收站、设置文件不动；放原来数据的 old 和记录删掉了
         assert_eq!(s.list_recycle().unwrap().len(), 1);
         assert!(s.root().join(".settings.json").is_file());
-        assert!(!old.exists());
+        assert!(!staging.join(STAGED_OLD).exists() && !staging.join(SWAP_JOURNAL).exists());
         assert_eq!(count_data(s.root()).unwrap(), (1, 1));
     }
 
@@ -5238,9 +5632,9 @@ mod tests {
         let (tmp, s) = store("replace-nostate");
         s.create_workspace("现在的").unwrap();
         s.write_ui_state("{}").unwrap();
-        let staged = staged_backup(&tmp);
-        fs::remove_file(staged.join(UI_STATE_FILE)).unwrap();
-        s.replace_data(&staged, &tmp.0.join("old"), || Ok(())).unwrap();
+        let staging = staged_backup(&s);
+        fs::remove_file(staging.join(STAGED_NEW).join(UI_STATE_FILE)).unwrap();
+        s.replace_data(&staging, &tmp.0.join("恢复前.zip"), || Ok(())).unwrap();
         assert_eq!(s.read_ui_state().unwrap(), None);
     }
 
@@ -5251,24 +5645,26 @@ mod tests {
         s.create_project("现在的", "p").unwrap();
         s.create_todo("现在的", "p", "t", "现在的正文").unwrap();
         s.write_ui_state(r#"{"from":"now"}"#).unwrap();
-        let staged = staged_backup(&tmp);
-        let old = tmp.0.join("old");
+        let staging = staged_backup(&s);
+        let (staged, old) = (staging.join(STAGED_NEW), staging.join(STAGED_OLD));
+        let before = tmp.0.join("恢复前.zip");
 
         // 先备份现在的数据失败：什么都不动
-        let err = s.replace_data(&staged, &old, || Err::<(), _>("磁盘满了".to_string())).unwrap_err();
+        let err = s.replace_data(&staging, &before, || Err::<(), _>("磁盘满了".to_string())).unwrap_err();
         assert_eq!(err, "磁盘满了");
         assert!(s.root().join("现在的").is_dir() && staged.join("备份的工作区").is_dir());
 
-        // 换到一半移不过去（数据目录里有个同名的文件挡着）：换回原来的
+        // 换到一半移不过去（数据目录里有个同名的文件挡着）：换回原来的，记录也删掉
         fs::create_dir_all(staged.join("挡着的")).unwrap();
         fs::write(s.root().join("挡着的"), "不是文件夹").unwrap();
-        let err = s.replace_data(&staged, &old, || Ok(())).unwrap_err();
+        let err = s.replace_data(&staging, &before, || Ok(())).unwrap_err();
         assert!(err.contains("「挡着的」") && err.contains("现在的数据没有改动"), "{err}");
         let names: Vec<String> = s.list_workspaces().unwrap().into_iter().map(|w| w.name).collect();
         assert_eq!(names, ["现在的"]);
         assert_eq!(s.read_ui_state().unwrap().as_deref(), Some(r#"{"from":"now"}"#));
         assert!(staged.join("备份的工作区").join("项目").join("备份的待办.md").is_file());
         assert!(fs::read_dir(&old).map_or(true, |mut d| d.next().is_none()));
+        assert!(!staging.join(SWAP_JOURNAL).exists());
         assert_eq!(fs::read_to_string(s.root().join("挡着的")).unwrap(), "不是文件夹");
     }
 
@@ -5283,16 +5679,374 @@ mod tests {
             s.create_project(ws, "p").unwrap();
             s.create_todo(ws, "p", "t", "现在的正文").unwrap();
         }
-        let staged = staged_backup(&tmp);
+        let staging = staged_backup(&s);
         let busy = s.project_path("乙", "p").unwrap().join(META_FILE);
         let lock = OpenOptions::new().read(true).share_mode(0).open(&busy).unwrap();
-        let err = s.replace_data(&staged, &tmp.0.join("old"), || Ok(())).unwrap_err();
+        let err = s.replace_data(&staging, &tmp.0.join("恢复前.zip"), || Ok(())).unwrap_err();
         drop(lock);
         assert!(err.contains("正被其他程序占用") && err.contains("现在的数据没有改动"), "{err}");
         let mut names: Vec<String> = s.list_workspaces().unwrap().into_iter().map(|w| w.name).collect();
         names.sort();
         assert_eq!(names, ["乙", "甲"]);
         assert_eq!(s.load_workspace("甲").unwrap().projects[0].todos.len(), 1);
+        assert!(!staging.join(SWAP_JOURNAL).exists());
+    }
+
+    /// 目录里的全部（多深都算）：相对路径 → 文件的内容（文件夹是 None）；数据目录第一级的恢复用的临时文件夹不算
+    fn tree(dir: &Path) -> BTreeMap<String, Option<Vec<u8>>> {
+        let mut out = BTreeMap::new();
+        let mut stack = vec![(dir.to_path_buf(), String::new())];
+        while let Some((d, rel)) = stack.pop() {
+            for e in fs::read_dir(&d).unwrap().flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if rel.is_empty() && name.starts_with(".restoring-") {
+                    continue;
+                }
+                let path = format!("{rel}{name}");
+                if e.file_type().unwrap().is_dir() {
+                    out.insert(format!("{path}/"), None);
+                    stack.push((e.path(), format!("{path}/")));
+                } else {
+                    out.insert(path, Some(fs::read(e.path()).unwrap()));
+                }
+            }
+        }
+        out
+    }
+
+    /// 恢复时换数据的测试场景：数据目录里现在有和备份同名的「工作」、只差大小写的「Work」、只有现在才有的工作区、.state.json，
+    /// 还有回收站、设置文件和别的文件（不换）；临时文件夹的 new 里是备份的同名的「工作」（内容不同）、「work」、只有备份里才有的、
+    /// .state.json。返回临时文件夹
+    fn swap_fixture(s: &Store) -> PathBuf {
+        s.create_workspace("工作").unwrap();
+        s.create_project("工作", "需求").unwrap();
+        s.create_todo("工作", "需求", "现在的", "现在的正文").unwrap();
+        s.create_workspace("Work").unwrap();
+        s.create_workspace("只在现在的").unwrap();
+        s.create_project("只在现在的", "项目").unwrap();
+        let t = s.create_todo("只在现在的", "项目", "删掉的", "回收站里的").unwrap();
+        s.delete_todo("只在现在的", "项目", &t.id).unwrap();
+        s.write_ui_state(r#"{"from":"now"}"#).unwrap();
+        fs::write(s.root().join(".settings.json"), "{}").unwrap();
+        fs::write(s.root().join("说明.txt"), "别的文件").unwrap();
+        let staging = s.root().join(".restoring-20261009-153012");
+        let new = staging.join(STAGED_NEW);
+        for (ws, body) in [("工作", "备份里的工作"), ("work", "备份里的 work"), ("备份里才有的", "备份里的")] {
+            fs::create_dir_all(new.join(ws).join("项目")).unwrap();
+            fs::write(new.join(ws).join("项目").join("t.md"), body).unwrap();
+        }
+        fs::write(new.join(UI_STATE_FILE), r#"{"from":"backup"}"#).unwrap();
+        fs::create_dir_all(staging.join(STAGED_OLD)).unwrap();
+        staging
+    }
+
+    /// 照 replace_data 先写下记录、再按同样的顺序做前 k 步改名，模拟换到这里时程序退出了
+    fn swap_until(s: &Store, staging: &Path, k: usize) -> SwapJournal {
+        let journal = SwapJournal {
+            version: SWAP_JOURNAL_VERSION,
+            phase: SwapPhase::Swapping,
+            current: data_items(s.root()).unwrap(),
+            incoming: data_items(&staging.join(STAGED_NEW)).unwrap(),
+            before: "恢复前.zip".into(),
+        };
+        write_journal(&staging.join(SWAP_JOURNAL), &journal).unwrap();
+        for (_, from, to) in swap_moves(s.root(), staging, &journal).into_iter().take(k) {
+            fs::rename(from, to).unwrap();
+        }
+        journal
+    }
+
+    /// 数据目录在恢复前、全部换完后应该是的样子
+    fn swap_expected(s: &Store, staging: &Path) -> (BTreeMap<String, Option<Vec<u8>>>, BTreeMap<String, Option<Vec<u8>>>) {
+        let before = tree(s.root());
+        let mut after: BTreeMap<_, _> = before
+            .iter()
+            .filter(|(k, _)| {
+                // 不换的：数据目录里点开头的（回收站、设置文件）和直接放着的文件，.state.json 除外
+                let top = k.split('/').next().unwrap();
+                top != UI_STATE_FILE && (top.starts_with('.') || !k.contains('/'))
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        after.extend(tree(&staging.join(STAGED_NEW)));
+        (before, after)
+    }
+
+    /// docs/requirements.md「恢复数据」：替换中途程序退出（崩溃、断电、被结束）时，下次启动时凭记录换回恢复前的数据：
+    /// 在每一步改名之后退出都试一遍，数据目录和恢复前一模一样（和备份同名的工作区、只差大小写的也分得清），临时文件夹删掉；
+    /// 全部换完了才退出的（还没来得及记下换完了）收尾，数据目录是备份里的
+    #[test]
+    fn crash_at_every_step_of_the_swap_is_recovered() {
+        let (_tmp, s) = store("crash-steps");
+        let total = {
+            let staging = swap_fixture(&s);
+            let journal = swap_until(&s, &staging, 0);
+            let total = journal.current.len() + journal.incoming.len();
+            assert_eq!(total, 8, "{journal:?}");
+            total
+        };
+        for k in 0..=total {
+            let (_tmp, s) = store(&format!("crash-step-{k}"));
+            let staging = swap_fixture(&s);
+            let (before, after) = swap_expected(&s, &staging);
+            let journal = swap_until(&s, &staging, k);
+            let result = s.recover_restore(&staging, |p, _| p == Path::new("恢复前.zip"));
+            if k < total {
+                assert_eq!(result, SwapRecovery::RolledBack { before: "恢复前.zip".into(), used: None }, "第 {k} 步");
+                assert_eq!(tree(s.root()), before, "第 {k} 步之后退出：换回恢复前的数据");
+                // 移回 new 的记成软件自己写的（数据目录里不在了），监听时不当成外部改动。OwnWrites 同 Windows 不分大小写，
+                // 和现在的只差大小写的（work 和 Work）在 Linux 上记成了同一个，不看
+                let moved_in = &journal.incoming[..k.saturating_sub(journal.current.len())];
+                for name in moved_in.iter().filter(|n| !journal.current.iter().any(|c| c.to_lowercase() == n.to_lowercase())) {
+                    let path = s.root().join(name);
+                    assert!(own_writes().is_own(&path, PathState::Absent, Instant::now()), "第 {k} 步：{name}");
+                }
+            } else {
+                assert_eq!(result, SwapRecovery::Finished { before: "恢复前.zip".into() });
+                assert_eq!(tree(s.root()), after, "全部换完了：是备份里的");
+            }
+            assert!(!staging.exists(), "第 {k} 步：临时文件夹删掉了");
+        }
+    }
+
+    /// 替换到第 f 步失败、换回原来的数据换到第 r 步时程序退出了：下次启动接着换回，数据目录和恢复前一样
+    #[test]
+    fn crash_while_rolling_back_is_recovered() {
+        for f in 1..8 {
+            for r in 0..=f {
+                let (_tmp, s) = store(&format!("crash-back-{f}-{r}"));
+                let staging = swap_fixture(&s);
+                let (before, _) = swap_expected(&s, &staging);
+                let journal = swap_until(&s, &staging, f);
+                let moves = rollback_moves(s.root(), &staging, &journal).unwrap();
+                for (_, from, to) in moves.into_iter().take(r) {
+                    fs::rename(from, to).unwrap();
+                }
+                assert_eq!(s.recover_restore(&staging, |_, _| true), SwapRecovery::RolledBack { before: "恢复前.zip".into(), used: None });
+                assert_eq!(tree(s.root()), before, "第 {f} 步失败、换回到第 {r} 步时退出");
+                assert!(!staging.exists());
+            }
+        }
+    }
+
+    /// 已经记下换完了、删 old 删到一半时退出：接着删，数据目录是备份里的
+    #[test]
+    fn crash_while_removing_old_is_finished() {
+        let (_tmp, s) = store("crash-done");
+        let staging = swap_fixture(&s);
+        let (_, after) = swap_expected(&s, &staging);
+        let mut journal = swap_until(&s, &staging, 8);
+        journal.phase = SwapPhase::Done;
+        write_journal(&staging.join(SWAP_JOURNAL), &journal).unwrap();
+        fs::remove_dir_all(staging.join(STAGED_OLD).join("工作")).unwrap();
+        assert_eq!(s.recover_restore(&staging, |_, _| true), SwapRecovery::Finished { before: "恢复前.zip".into() });
+        assert_eq!(tree(s.root()), after);
+        assert!(!staging.exists());
+    }
+
+    /// 还没开始换（没有记录）：解压、下载到一半的删掉，数据不动；old 里有东西的（以前的版本换到一半留下的）什么都不删
+    #[test]
+    fn leftovers_without_a_journal() {
+        let (_tmp, s) = store("no-journal");
+        let staging = swap_fixture(&s);
+        fs::write(staging.join("download.zip"), "下载到一半").unwrap();
+        fs::write(staging.join(format!(".{SWAP_JOURNAL}.tmp")), "{").unwrap();
+        let before = tree(s.root());
+        assert_eq!(s.recover_restore(&staging, |_, _| true), SwapRecovery::Discarded);
+        assert_eq!(tree(s.root()), before);
+        assert!(!staging.exists());
+
+        let staging = swap_fixture_again(&s);
+        fs::rename(s.root().join("工作"), staging.join(STAGED_OLD).join("工作")).unwrap();
+        let left = tree(&staging);
+        let result = s.recover_restore(&staging, |_, _| true);
+        assert!(matches!(&result, SwapRecovery::Kept { reason, before: None, retry: false, .. } if reason.contains("没有记录")), "{result:?}");
+        assert_eq!(tree(&staging), left, "什么都没删");
+        assert!(!s.root().join("工作").exists());
+    }
+
+    /// 已经有数据时再建一份临时文件夹（同 swap_fixture 的 new 和空的 old）
+    fn swap_fixture_again(s: &Store) -> PathBuf {
+        let staging = s.root().join(".restoring-20261009-160000");
+        fs::create_dir_all(staging.join(STAGED_NEW).join("备份里才有的")).unwrap();
+        fs::create_dir_all(staging.join(STAGED_OLD)).unwrap();
+        staging
+    }
+
+    /// 说不清换到了哪里、记录读不懂或不对、换完了但恢复前的数据备份不在了：什么都不动，原样留着，说明原因
+    #[test]
+    fn unclear_leftovers_are_kept() {
+        let kept = |r: &SwapRecovery, what: &str| matches!(r, SwapRecovery::Kept { reason, .. } if reason.contains(what));
+        // 一项哪里都没有了（外部删掉了）
+        let (_tmp, s) = store("unclear-gone");
+        let staging = swap_fixture(&s);
+        swap_until(&s, &staging, 2);
+        let gone = fs::read_dir(staging.join(STAGED_OLD)).unwrap().flatten().next().unwrap().path();
+        if gone.is_dir() { fs::remove_dir_all(&gone) } else { fs::remove_file(&gone) }.unwrap();
+        // 除了记下交还给了用户（标记文件），什么都不动
+        let others = |dir: &Path| tree(dir).into_iter().filter(|(k, _)| k != EXPOSED_MARK).collect::<BTreeMap<_, _>>();
+        let (root, left) = (tree(s.root()), others(&staging));
+        let r = s.recover_restore(&staging, |_, _| true);
+        assert!(kept(&r, "说不清"), "{r:?}");
+        assert!(matches!(&r, SwapRecovery::Kept { before: Some(b), .. } if b == "恢复前.zip"));
+        assert_eq!((tree(s.root()), others(&staging)), (root, left), "什么都没动");
+        assert!(staging.join(EXPOSED_MARK).is_file());
+
+        // 同名的工作区两边都有（old 和 new 里都有、数据目录里也有）
+        let (_tmp, s) = store("unclear-both");
+        let staging = swap_fixture(&s);
+        swap_until(&s, &staging, 0);
+        fs::create_dir_all(staging.join(STAGED_OLD).join("工作")).unwrap();
+        assert!(kept(&s.recover_restore(&staging, |_, _| true), "说不清"));
+        assert!(staging.join(STAGED_NEW).join("工作").is_dir() && s.root().join("工作").is_dir());
+
+        // 记录读不懂、名字不对（会指到外面去）、版本不认得
+        for (i, (bad, what)) in [
+            ("{坏了".to_string(), "读不懂"),
+            (r#"{"version":1,"phase":"swapping","current":["../外面"],"incoming":[],"before":""}"#.to_string(), "不对"),
+            (r#"{"version":1,"phase":"swapping","current":["工作","工作"],"incoming":[],"before":""}"#.to_string(), "不对"),
+            (r#"{"version":9,"phase":"swapping","current":[],"incoming":[],"before":""}"#.to_string(), "版本"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (_tmp, s) = store(&format!("unclear-journal-{i}"));
+            let staging = swap_fixture(&s);
+            fs::write(staging.join(SWAP_JOURNAL), bad).unwrap();
+            let left = tree(&staging);
+            let r = s.recover_restore(&staging, |_, _| true);
+            assert!(kept(&r, what), "{what}");
+            assert!(matches!(r, SwapRecovery::Kept { retry: false, .. }), "记录本身不对，再试也一样：{r:?}");
+            // 除了记下交还给了用户（哪天记录读得出来了，换回时不把 new 当成副本删掉），什么都不动
+            assert_eq!(others(&staging), left.into_iter().filter(|(k, _)| k != EXPOSED_MARK).collect::<BTreeMap<_, _>>());
+            assert!(staging.join(EXPOSED_MARK).is_file(), "{what}");
+        }
+
+        // 全部换完了，但恢复前的数据备份找不到（备份目录在拔掉的 U 盘上）：换下来的原来的数据留着
+        let (_tmp, s) = store("unclear-backup");
+        let staging = swap_fixture(&s);
+        let (_, after) = swap_expected(&s, &staging);
+        swap_until(&s, &staging, 8);
+        let old = tree(&staging.join(STAGED_OLD));
+        let r = s.recover_restore(&staging, |_, _| false);
+        assert!(kept(&r, "恢复前的数据备份"), "{r:?}");
+        assert_eq!(tree(&staging.join(STAGED_OLD)), old, "原来的数据还在 old 里");
+        assert_eq!(tree(s.root()), after);
+        // 备份找回来了（插上了 U 盘）：下次启动收尾
+        assert_eq!(s.recover_restore(&staging, |_, _| true), SwapRecovery::Finished { before: "恢复前.zip".into() });
+        assert!(!staging.exists());
+    }
+
+    /// 换回原来的数据时有一项移不动（被别的程序占用；这里把它设成只读，Linux 上移不了别的文件夹里去）：停下、什么都不删，
+    /// 记录留着、记下交还给了用户；下次启动时（不再占用）接着换回，数据目录和恢复前一样。没换回来的这段时间里用户接着用：
+    /// 界面又写了 .state.json（让给原来的那份），在已经换回来的工作区里记的还在
+    #[cfg(unix)]
+    #[test]
+    fn blocked_rollback_is_retried_on_the_next_start() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, s) = store("blocked");
+        let staging = swap_fixture(&s);
+        let (mut before, _) = swap_expected(&s, &staging);
+        let journal = swap_until(&s, &staging, 6);
+        // 原来的工作区里排在最后的那个移不动（它前面的先移回去了，.state.json 在它后面、还在 old 里）
+        let blocked = staging.join(STAGED_OLD).join(&journal.current[journal.current.len() - 2]);
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o555)).unwrap();
+        let r = s.recover_restore(&staging, |_, _| true);
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(&r, SwapRecovery::Kept { reason, .. } if reason.contains("移不动")), "{r:?}");
+        assert!(blocked.is_dir() && staging.join(STAGED_OLD).join(UI_STATE_FILE).is_file());
+        assert!(staging.join(SWAP_JOURNAL).is_file() && staging.join(EXPOSED_MARK).is_file(), "记录留着，记下交还给了用户");
+        // 这段时间里用户接着用：界面写了 .state.json，在已经换回来的工作区里记了一条
+        s.write_ui_state(r#"{"from":"later"}"#).unwrap();
+        let back = &journal.current[0];
+        fs::write(s.root().join(back).join("后来记的.md"), "交还之后记的").unwrap();
+        before.insert(format!("{back}/后来记的.md"), Some("交还之后记的".as_bytes().to_vec()));
+        // 交还给过用户的：new 里的分不清哪些在用户手里待过，整个留在 new-换回前用过 里
+        let used = staging.join(STAGED_USED);
+        assert_eq!(
+            s.recover_restore(&staging, |_, _| true),
+            SwapRecovery::RolledBack { before: "恢复前.zip".into(), used: Some(used.to_string_lossy().into_owned()) }
+        );
+        assert_eq!(tree(s.root()), before, "换回了原来的数据（.state.json 是原来的），交还之后记的还在");
+        assert!(tree(&staging).keys().all(|k| k.starts_with(STAGED_USED)), "别的都收拾掉了");
+    }
+
+    /// 交还给过用户的（替换失败没能全部换回、启动时没能处理）：换回时 new 里换进来过的可能在数据目录里待过、改过，
+    /// 改名成 new-换回前用过 留着不删；改不了名时什么都不删，下次再来
+    #[test]
+    fn exposed_rollback_keeps_used_backup_content() {
+        let (_tmp, s) = store("exposed");
+        let staging = swap_fixture(&s);
+        let (before, _) = swap_expected(&s, &staging);
+        swap_until(&s, &staging, 6);
+        mark_exposed(&staging);
+        // new-换回前用过 被占着（这里放一个同名、不空的文件夹，哪个系统上都改不过去）：换回了，但 new 改不了名，什么都不删
+        fs::create_dir_all(staging.join(STAGED_USED).join("挡着")).unwrap();
+        let r = s.recover_restore(&staging, |_, _| true);
+        assert!(matches!(&r, SwapRecovery::Kept { reason, .. } if reason.contains("改名留着")), "{r:?}");
+        assert_eq!(tree(s.root()), before, "已经换回来了");
+        let new = tree(&staging.join(STAGED_NEW));
+        assert!(new.contains_key("工作/") && new.contains_key("work/") && new.contains_key(UI_STATE_FILE), "{new:?}");
+        assert!(staging.join(SWAP_JOURNAL).is_file());
+        // 放开后再启动：new 改名留着，别的收拾掉
+        fs::remove_dir_all(staging.join(STAGED_USED)).unwrap();
+        let used = staging.join(STAGED_USED);
+        assert_eq!(
+            s.recover_restore(&staging, |_, _| true),
+            SwapRecovery::RolledBack { before: "恢复前.zip".into(), used: Some(used.to_string_lossy().into_owned()) }
+        );
+        assert_eq!(tree(s.root()), before);
+        assert_eq!(tree(&used), new, "换进来过的备份内容都留着");
+        assert!(tree(&staging).keys().all(|k| k.starts_with(STAGED_USED)), "别的都收拾掉了");
+        // 再启动：没有记录了，留着的不删、也不再提示
+        assert_eq!(s.recover_restore(&staging, |_, _| true), SwapRecovery::Discarded);
+        assert_eq!(tree(&used), new);
+    }
+
+    /// 收尾时退出的几个时刻，下次启动接着收尾，不会因为找不到已经删掉的东西就一直留着
+    #[test]
+    fn crash_while_cleaning_up_is_finished() {
+        // 已经记下换完了、old 已经删完，还没删掉记录
+        let (_tmp, s) = store("cleanup-done");
+        let staging = swap_fixture(&s);
+        let (_, after) = swap_expected(&s, &staging);
+        let mut journal = swap_until(&s, &staging, 8);
+        journal.phase = SwapPhase::Done;
+        write_journal(&staging.join(SWAP_JOURNAL), &journal).unwrap();
+        fs::remove_dir_all(staging.join(STAGED_OLD)).unwrap();
+        assert_eq!(s.recover_restore(&staging, |_, _| false), SwapRecovery::Finished { before: "恢复前.zip".into() });
+        assert_eq!(tree(s.root()), after);
+        assert!(!staging.exists());
+
+        // 换回之后收拾时（先删记录）退出：new 删了一半
+        let (_tmp, s) = store("cleanup-back");
+        let staging = swap_fixture(&s);
+        let (before, _) = swap_expected(&s, &staging);
+        let journal = swap_until(&s, &staging, 6);
+        roll_back(s.root(), &staging, &journal).unwrap();
+        fs::remove_file(staging.join(SWAP_JOURNAL)).unwrap();
+        fs::remove_dir_all(staging.join(STAGED_NEW).join("工作")).unwrap();
+        assert_eq!(s.recover_restore(&staging, |_, _| true), SwapRecovery::Discarded);
+        assert_eq!(tree(s.root()), before);
+        assert!(!staging.exists());
+
+        // 交还给过用户的：new 已经改名成 new-换回前用过、还没删掉记录
+        let (_tmp, s) = store("cleanup-used");
+        let staging = swap_fixture(&s);
+        let (before, _) = swap_expected(&s, &staging);
+        let journal = swap_until(&s, &staging, 6);
+        mark_exposed(&staging);
+        roll_back(s.root(), &staging, &journal).unwrap();
+        let used = staging.join(STAGED_USED);
+        fs::rename(staging.join(STAGED_NEW), &used).unwrap();
+        let kept = tree(&used);
+        assert_eq!(
+            s.recover_restore(&staging, |_, _| true),
+            SwapRecovery::RolledBack { before: "恢复前.zip".into(), used: Some(used.to_string_lossy().into_owned()) }
+        );
+        assert_eq!(tree(s.root()), before);
+        assert_eq!(tree(&used), kept);
+        assert!(!staging.join(SWAP_JOURNAL).exists() && !staging.join(EXPOSED_MARK).exists());
     }
 
     #[test]

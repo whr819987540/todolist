@@ -2,8 +2,9 @@
 // 换成直接返回路径）、备份里有什么（多级子项目、各级的项目顺序 .projects.json、深处的附件目录），拿错了的备份和不安全的路径，
 // 恢复（分屏时两边打开着的待办先存盘、有存不上的就不恢复，换掉数据、各级的项目顺序（换成了按名称的又是手动排序）和图片换回来、
 // 回收站不动、修改时间不变、整页重新加载、恢复出来的 .state.json 不被覆盖、快速记录小窗列出新的项目），恢复到这里后路径太长的
-// 整个不恢复，自动备份的保留份数、数据没变时跳过（只调整了项目的顺序也算变了）、失败时在设置里写明原因
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+// 整个不恢复，自动备份的保留份数、数据没变时跳过（只调整了项目的顺序也算变了）、失败时在设置里写明原因，恢复到一半软件退出了
+// 再启动时换回恢复前的数据
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeZip, zipEntries, zipText } from "../lib/win.mjs";
 
@@ -418,4 +419,87 @@ export default async function (t) {
   await t.until(async () => settingsFile().autoBackup === false && /自动备份已关闭/.test(await statusText()));
   check("关掉自动备份：存在设置文件里", settingsFile().autoBackup === false && /自动备份已关闭/.test(await statusText()), await statusText());
   await m.closeModal();
+
+  // ----- 恢复到一半软件退出了（崩溃、断电、被结束）：下次启动时换回恢复前的数据，提示一次 -----
+  // 退出测试版后照替换到一半的样子摆好临时文件夹（同 store.rs 的 replace_data）：先写下记录，现在的都已经移进 old，
+  // 备份里和现在同名的「工作」已经换进了数据目录，只有备份里才有的「备份的工作区」还在 new 里
+  await t.quit();
+  const topDirs = () => readdirSync(t.data).filter((n) => !n.startsWith(".") && statSync(t.file(n)).isDirectory()).sort();
+  const hadState = t.exists(".state.json");
+  const current = [...topDirs(), ...(hadState ? [".state.json"] : [])];
+  const aBefore = t.read("工作/需求/A.md");
+  const staging = t.file(".restoring-20261009-153012");
+  mkdirSync(join(staging, "new", "工作", "需求"), { recursive: true });
+  writeFileSync(join(staging, "new", "工作", "需求", "A.md"), "备份里的 A");
+  mkdirSync(join(staging, "new", "备份的工作区", "项目"), { recursive: true });
+  writeFileSync(join(staging, "new", "备份的工作区", "项目", "x.md"), "备份里的");
+  writeFileSync(
+    join(staging, "journal.json"),
+    JSON.stringify({ version: 1, phase: "swapping", current, incoming: ["工作", "备份的工作区"], before: join(BK, beforeRestore()[0] ?? "x.zip") }),
+  );
+  mkdirSync(join(staging, "old"));
+  for (const n of current) renameSync(t.file(n), join(staging, "old", n));
+  renameSync(join(staging, "new", "工作"), t.file("工作"));
+  await t.restart();
+  m = t.main;
+  const recovered = await m.ev(`const c = await waitFor(() => document.querySelector(".ant-modal-confirm .restore-recovery"), 15000); return c?.textContent ?? ""`);
+  const cardsAfter = await t.until(() => m.ev(`return [...document.querySelectorAll(".ws-card .card-name")].map((c) => c.textContent).sort().join("、")`));
+  check(
+    "恢复到一半软件退出了：再启动时换回恢复前的数据（和备份同名的「工作」也换回原来的），临时文件夹删掉，提示一次",
+    /换回了恢复前的数据/.test(recovered) &&
+      t.read("工作/需求/A.md") === aBefore &&
+      t.exists(".state.json") === hadState &&
+      JSON.stringify(topDirs()) === JSON.stringify(current.filter((n) => n !== ".state.json")) &&
+      !existsSync(staging) &&
+      cardsAfter === current.filter((n) => n !== ".state.json").join("、"),
+    { recovered, top: topDirs(), current, cardsAfter },
+  );
+  await closeConfirms();
+
+  // 换回时有文件被别的程序占着（移不动）：什么都不删、原样留着，提示原因和临时文件夹在哪里；这期间界面照常能用（又写了
+  // .state.json）。放开后再启动就换回来了，.state.json 是原来的那份；交还给过用户，new 里的留在 new-换回前用过 里
+  await t.quit();
+  const locked = t.file(".restoring-20261009-163012");
+  mkdirSync(join(locked, "new", "备份的工作区"), { recursive: true });
+  // 「工作」排在 .state.json 前面、别的后面：别的先移回去，移到「工作」时停下，.state.json 还在 old 里
+  const order = [...current.filter((n) => n !== "工作" && n !== ".state.json"), "工作", ...(hadState ? [".state.json"] : [])];
+  writeFileSync(
+    join(locked, "journal.json"),
+    JSON.stringify({ version: 1, phase: "swapping", current: order, incoming: ["备份的工作区"], before: join(BK, beforeRestore()[0] ?? "x.zip") }),
+  );
+  mkdirSync(join(locked, "old"));
+  for (const n of order) renameSync(t.file(n), join(locked, "old", n));
+  const lock = await t.win.lockFile(join(locked, "old", "工作", "需求", "A.md"), 30);
+  await t.restart();
+  m = t.main;
+  const keptText = await m.ev(`const c = await waitFor(() => document.querySelector(".ant-modal-confirm .restore-recovery"), 15000); return c?.textContent ?? ""`);
+  check(
+    "换回时有文件被占用：什么都不删、原样留着，提示没能处理、原因和临时文件夹在哪里",
+    /没能自动处理/.test(keptText) &&
+      keptText.includes(locked) &&
+      existsSync(join(locked, "old", "工作", "需求", "A.md")) &&
+      existsSync(join(locked, "journal.json")) &&
+      !t.exists("工作"),
+    { keptText, top: topDirs() },
+  );
+  await closeConfirms();
+  // 这期间界面写了 .state.json（模拟：直接写一份；界面自己稍后也可能再写）
+  writeFileSync(t.file(".state.json"), JSON.stringify({ openTodos: [], 这期间写的: true }));
+  await lock.released;
+  await t.restart();
+  m = t.main;
+  const backText = await m.ev(`const c = await waitFor(() => document.querySelector(".ant-modal-confirm .restore-recovery"), 15000); return c?.textContent ?? ""`);
+  check(
+    "放开后再启动：换回了恢复前的数据，.state.json 是原来的那份（这期间写的让给它）；交还给过用户，备份里的那部分留在 new-换回前用过 里",
+    /换回了恢复前的数据/.test(backText) &&
+      backText.includes("new-换回前用过") &&
+      t.read("工作/需求/A.md") === aBefore &&
+      (!hadState || (t.exists(".state.json") && !t.read(".state.json").includes("这期间写的"))) &&
+      JSON.stringify(topDirs()) === JSON.stringify(current.filter((n) => n !== ".state.json")) &&
+      existsSync(join(locked, "new-换回前用过", "备份的工作区")) &&
+      !existsSync(join(locked, "journal.json")) &&
+      !existsSync(join(locked, "old")),
+    { backText, top: topDirs() },
+  );
+  await closeConfirms();
 }

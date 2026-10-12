@@ -289,6 +289,26 @@ export interface DataRestoreDone {
   before: string;
 }
 
+/** 上次恢复待办数据时中途退出（崩溃、断电、被结束）、这次启动时 Rust 端处理掉的临时文件夹 */
+export interface RestoreRecovery {
+  /** rolledBack：换到一半，换回了恢复前的数据；finished：已经换完，收了尾；kept：处理不了，原样留着 */
+  outcome: "rolledBack" | "finished" | "kept";
+  /** 临时文件夹（完整路径） */
+  staging: string;
+  /** 恢复前的数据备份（完整路径；没有记录时不知道） */
+  before: string | null;
+  /** 原样留着的原因 */
+  reason: string | null;
+  /** 换回时留着没删的换进来过的备份内容（没换回来期间在数据目录里待过、可能在软件里改过） */
+  used: string | null;
+  /** 恢复前的数据备份读得出来（原样留着的不是因为它对不上）；不是时 old 里的可能是原来的数据仅有的一份 */
+  backupOk: boolean;
+  /** 原样留着的：下次启动会再试着处理 */
+  retry: boolean;
+  /** 原样留着的：old 里有东西（换下来的原来的数据） */
+  oldData: boolean;
+}
+
 /** 自动备份的一次结果：备份了、数据没有变化而跳过、失败了 */
 export interface AutoBackupRun {
   time: number;

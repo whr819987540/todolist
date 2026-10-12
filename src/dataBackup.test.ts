@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AutoBackupStatus, DataRestoreDone } from "./types";
+import type { AutoBackupStatus, DataRestoreDone, RestoreRecovery } from "./types";
 import { type DataChange, dataTouched, todoTouched, workspacesTouched } from "./watch";
 
 // docs/requirements.md「数据备份」：恢复前先保存打开着的待办（分屏时两边的），有存不上的就不恢复；之后界面状态不再写盘，
@@ -223,6 +223,70 @@ describe("提示的文字", () => {
     error: null,
     webdavError: null,
     ...patch,
+  });
+
+  // docs/requirements.md「恢复数据」：替换中途退出了，下次启动时换回恢复前的数据（或做完收尾、处理不了的原样留着），提示一次
+  const recovery = (patch: Partial<RestoreRecovery>): RestoreRecovery => ({
+    outcome: "rolledBack",
+    staging: "C:\\Users\\me\\TodoList\\.restoring-20261009-160000",
+    before: DONE.before,
+    reason: null,
+    used: null,
+    backupOk: true,
+    retry: true,
+    oldData: true,
+    ...patch,
+  });
+
+  it("上次恢复中途退出：换回了恢复前的数据、做完了收尾时说清现在是哪份数据", () => {
+    expect(backup.recoveryNotice([])).toBeNull();
+    expect(backup.recoveryNotice(null)).toBeNull();
+    const back = backup.recoveryNotice([recovery({})]);
+    expect(back?.type).toBe("info");
+    expect(back?.title).toBe("已换回恢复前的数据");
+    expect(back?.paragraphs[0]).toContain("换回了恢复前的数据");
+    expect(back?.paragraphs[0]).toContain("再恢复一次");
+    expect(back?.paragraphs[0]).not.toContain("没有删");
+    // 没换回来期间换进来的备份内容在数据目录里待过：留着没删，说在哪里
+    const used = backup.recoveryNotice([recovery({ used: "C:\\Users\\me\\TodoList\\.restoring-1\\new-换回前用过" })]);
+    expect(used?.paragraphs[0]).toContain("new-换回前用过");
+    expect(used?.paragraphs[0]).toContain("没有删");
+    const done = backup.recoveryNotice([recovery({ outcome: "finished" })]);
+    expect(done?.type).toBe("success");
+    expect(done?.paragraphs[0]).toContain("恢复已经完成，现在是备份里的数据");
+    expect(done?.paragraphs[0]).toContain(DONE.before);
+  });
+
+  it("上次恢复中途退出、没能自动处理：说明原因，临时文件夹原样留着，原来的数据在哪里", () => {
+    const kept = backup.recoveryNotice([recovery({ outcome: "kept", reason: "移不动「工作」（可能有文件正被其他程序占用）" })]);
+    expect(kept?.type).toBe("warning");
+    expect(kept?.title).toBe("上次恢复待办数据没有完成");
+    const text = kept?.paragraphs[0] ?? "";
+    expect(text).toContain("移不动「工作」");
+    expect(text).toContain(".restoring-20261009-160000");
+    expect(text).toContain("old 里是换下来的原来的数据");
+    expect(text).toContain(`原来的全部数据也在恢复前的数据备份 ${DONE.before} 里`);
+    expect(text).toContain("会再试着处理");
+    expect(text).not.toContain("仅有的一份");
+    // 恢复前的数据备份对不上（因此才留着）：old 可能是仅有的一份，不叫用户删
+    const bad = backup.recoveryNotice([recovery({ outcome: "kept", backupOk: false, reason: "对不上" })])?.paragraphs[0] ?? "";
+    expect(bad).toContain("仅有的一份");
+    expect(bad).toContain(DONE.before);
+    expect(bad).not.toContain("也在恢复前的数据备份");
+    expect(bad).not.toMatch(/可以.*删/);
+    // 以前的版本留下的：不知道恢复前的数据备份是哪一份，也不会再试
+    const ancient = backup.recoveryNotice([recovery({ outcome: "kept", before: null, backupOk: false, retry: false, reason: "没有记录" })]);
+    expect(ancient?.paragraphs[0]).toContain("仅有的一份");
+    expect(ancient?.paragraphs[0]).not.toContain("再试");
+    expect(ancient?.paragraphs[0]).toContain("搬回数据目录");
+    // old 是空的（只是 new 改不了名）：不说 old 里有原来的数据
+    const empty = backup.recoveryNotice([recovery({ outcome: "kept", backupOk: false, oldData: false, reason: "改不了名" })]);
+    expect(empty?.paragraphs[0]).not.toContain("仅有的一份");
+    expect(empty?.paragraphs[0]).not.toContain("搬回");
+    // 有几处时各说一段；有没处理的就按没处理的提示
+    const both = backup.recoveryNotice([recovery({}), recovery({ outcome: "kept", reason: "x" })]);
+    expect(both?.type).toBe("warning");
+    expect(both?.paragraphs).toHaveLength(2);
   });
 
   it("自动备份：上次的时间和份数；没有过时说明；正在备份；关掉了", () => {

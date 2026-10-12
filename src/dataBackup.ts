@@ -1,8 +1,9 @@
 // 待办数据的备份与恢复（docs/requirements.md「数据备份」）：恢复的流程（先存盘、停掉界面状态写盘、恢复后整页重新加载），
-// 重新加载后显示的结果，以及提示、确认、自动备份状态的文字。界面在 components/settings/DataBackupSettings.tsx
+// 重新加载后显示的结果，上次恢复中途退出、启动时处理掉之后的提示，以及提示、确认、自动备份状态的文字。
+// 界面在 components/settings/DataBackupSettings.tsx
 
 import { emitAppEvent, flushTodos, holdDataRefresh } from "./hooks";
-import type { AutoBackupStatus, DataBackupDone, DataBackupInfo, DataRestoreDone } from "./types";
+import type { AutoBackupStatus, DataBackupDone, DataBackupInfo, DataRestoreDone, RestoreRecovery } from "./types";
 import { fullTime } from "./utils";
 import { resumeUiState, suspendUiState } from "./workspaceState";
 import type { DataChanged } from "./watch";
@@ -61,6 +62,47 @@ export function takeRestoreNotice(): DataRestoreDone | null {
 }
 
 const counts = (workspaces: number, todos: number) => `${workspaces} 个工作区、${todos} 条待办`;
+
+/**
+ * 上次恢复待办数据时中途退出（崩溃、断电、被结束），这次启动时 Rust 端处理掉了留下的临时文件夹：提示一次的样子、标题和各段内容。
+ * 换回了恢复前的数据、做完了收尾的说清现在是哪份数据；处理不了、原样留着的说明原因，原来的数据在哪里（临时文件夹里的 old、
+ * 恢复前的数据备份）。没有时是 null
+ */
+export function recoveryNotice(
+  list: RestoreRecovery[] | null | undefined,
+): { type: "success" | "info" | "warning"; title: string; paragraphs: string[] } | null {
+  if (!list?.length) return null;
+  const paragraphs = list.map((r) => {
+    if (r.outcome === "rolledBack")
+      return (
+        "上次恢复待办数据没有做完（软件在替换到一半时退出了，或者没能全部换回来）。这次启动时已经换回了恢复前的数据；要用备份恢复的话请再恢复一次。" +
+        (r.used
+          ? `没换回来的这段时间里软件照常能用，备份里换进来的那部分可能在数据目录里待过、在软件里改过，所以没有删，整个留在 ${r.used}，确认不需要了可以删掉。`
+          : "")
+      );
+    if (r.outcome === "finished")
+      return `上次恢复待办数据后没能收尾（软件在替换完之后退出了，或者换下来的数据当时删不掉）。这次启动时做完了收尾：恢复已经完成，现在是备份里的数据。${r.before ? `恢复前的数据备份在 ${r.before}。` : ""}`;
+    // 恢复前的数据备份没核对过（读不出来、对不上、不知道是哪份）时不说「数据也在备份里」，也不叫用户删：old 可能是仅有的一份
+    const before =
+      r.backupOk && r.before
+        ? `原来的全部数据也在恢复前的数据备份 ${r.before} 里。`
+        : r.oldData
+          ? `${r.before ? `恢复前的数据备份 ${r.before} 找不到、读不出来或者对不上，` : ""}old 里的可能是原来的数据仅有的一份，请不要删掉。`
+          : "";
+    const next = r.retry
+      ? "关掉占用文件的程序后重新打开软件，会再试着处理。"
+      : r.oldData
+        ? "需要的话可以自己把 old 里的工作区搬回数据目录。"
+        : "";
+    return (
+      `上次恢复待办数据时软件中途退出了，留下的临时文件夹没能自动处理：${r.reason ?? "原因不明"}。` +
+      `临时文件夹原样留着：${r.staging}（old 里是换下来的原来的数据，new 里是备份里的）。${before}${next}`
+    );
+  });
+  if (list.some((r) => r.outcome === "kept")) return { type: "warning", title: "上次恢复待办数据没有完成", paragraphs };
+  if (list.every((r) => r.outcome === "finished")) return { type: "success", title: "上次的恢复已经完成", paragraphs };
+  return { type: "info", title: "已换回恢复前的数据", paragraphs };
+}
 
 /** 备份成功的提示：存到哪里（本地的是完整路径），备份了几个工作区几条待办 */
 export function backupDoneText(done: DataBackupDone, where: "local" | "webdav"): string {

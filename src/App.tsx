@@ -6,7 +6,7 @@ import { api } from "./api";
 import Home from "./components/Home";
 import type { Selection } from "./components/sidebar/tree";
 import WorkspaceView, { type WorkspaceViewHandle } from "./components/WorkspaceView";
-import { restoreDoneText, takeRestoreNotice } from "./dataBackup";
+import { recoveryNotice, restoreDoneText, takeRestoreNotice } from "./dataBackup";
 import { flushAll, flushBeforeQuit, QUIT_FLUSH_TIMEOUT, useAppEvent } from "./hooks";
 import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
@@ -78,6 +78,27 @@ export default function App() {
     restoreNoticeShown = true;
     modal.success({ title: "待办数据已恢复", content: restoreDoneText(restoreNotice), okText: "知道了" });
   }, [modal]);
+
+  // 上次恢复待办数据时中途退出了：启动时 Rust 端已经换回了恢复前的数据（或做完了收尾，处理不了的原样留着），提示一次。
+  // Rust 端只给一次（开发时 StrictMode 执行两次 effect，第二次拿到的是空的），所以不随 effect 的清理作废
+  useEffect(() => {
+    api.takeRestoreRecovery().then((list) => {
+      const notice = recoveryNotice(list);
+      if (!notice) return;
+      modalRef.current[notice.type]({
+        title: notice.title,
+        content: (
+          <div className="restore-recovery">
+            {notice.paragraphs.map((p, i) => (
+              <p key={i}>{p}</p>
+            ))}
+          </div>
+        ),
+        okText: "知道了",
+        width: 560,
+      });
+    }, () => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
