@@ -132,11 +132,15 @@ pub struct LocalBackup {
     pub name: String,
     /// 备份时间，从文件名看
     pub time: i64,
+    /// 同一秒里的第几份（`…-2.zip`；没有编号的是 1）
+    #[serde(skip)]
+    pub seq: u64,
     #[serde(skip)]
     pub path: PathBuf,
 }
 
-/// 备份目录里按自动备份命名的（包括手动存到这里的；恢复前的那份不算），新的在前；目录还不在时是空的
+/// 备份目录里按自动备份命名的（包括手动存到这里的；恢复前的那份不算），新的在前（同一秒里的按编号，见 backup::newest_first）；
+/// 目录还不在时是空的
 pub fn local_backups(dir: &Path) -> Vec<LocalBackup> {
     let mut list: Vec<LocalBackup> = fs::read_dir(dir)
         .into_iter()
@@ -145,11 +149,11 @@ pub fn local_backups(dir: &Path) -> Vec<LocalBackup> {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter_map(|e| {
             let name = e.file_name().to_str()?.to_string();
-            let time = backup::parse_data_file_name(&name)?;
-            Some(LocalBackup { name, time, path: e.path() })
+            let (time, seq) = backup::parse_data_file_name(&name)?;
+            Some(LocalBackup { name, time, seq, path: e.path() })
         })
         .collect();
-    list.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| b.name.cmp(&a.name)));
+    list.sort_by(|a, b| backup::newest_first((a.time, a.seq, &a.name), (b.time, b.seq, &b.name)));
     list
 }
 
@@ -1225,6 +1229,55 @@ mod tests {
         assert_eq!(unique_path(&tmp.0, &base), tmp.0.join(format!("{base}-2.zip")));
     }
 
+    /// docs/requirements.md「数据备份 → 自动备份」：同一秒里备份了几份时（后存的是 `…-2.zip`、`…-3.zip`…），编号大的是后备份的：
+    /// 设置里的「上次自动备份」、判断数据变没变时比的最新一份、「保留最近 N 份」删掉的最旧的都按这个顺序
+    #[test]
+    fn same_second_backups_sort_by_their_number() {
+        let (tmp, s) = setup("same-second");
+        let dir = tmp.0.join("备份");
+        fs::create_dir_all(&dir).unwrap();
+        let base = format!("{DATA_PREFIX}20261009-083012");
+        // 同一秒里的第一份是改动之前的数据，第二份（-2）是现在的
+        pack(&s, &dir.join(format!("{base}.zip")), time(8)).unwrap();
+        s.create_workspace("改了").unwrap();
+        let second = unique_path(&dir, &base);
+        assert_eq!(second, dir.join(format!("{base}-2.zip")));
+        pack(&s, &second, time(8)).unwrap();
+        fs::write(dir.join(format!("{DATA_PREFIX}20261009-083011.zip")), "更早的").unwrap();
+        let names = |dir: &Path| local_backups(dir).into_iter().map(|b| b.name).collect::<Vec<_>>();
+        assert_eq!(
+            names(&dir),
+            [format!("{base}-2.zip"), format!("{base}.zip"), format!("{DATA_PREFIX}20261009-083011.zip")]
+        );
+        // 最新的一份是 -2，数据和它一样：过了一天也不备份
+        let later = time(8) + chrono::Duration::days(1);
+        assert!(matches!(run_auto(&s, &dir, 10, later, || ()).unwrap(), AutoLocal::Unchanged));
+        // 编号按数比，-10 比 -9、-3 新；只留 2 份时删掉的是没有编号的和更早的
+        for n in [3, 9, 10] {
+            fs::write(dir.join(format!("{base}-{n}.zip")), "x").unwrap();
+        }
+        assert_eq!(names(&dir)[..3], [format!("{base}-10.zip"), format!("{base}-9.zip"), format!("{base}-3.zip")]);
+        prune(&dir, 4);
+        assert_eq!(
+            names(&dir),
+            [format!("{base}-10.zip"), format!("{base}-9.zip"), format!("{base}-3.zip"), format!("{base}-2.zip")]
+        );
+    }
+
+    /// WebDAV 上的数据备份同样按编号：同一秒里的几份只留最近 1 份时留下编号最大的
+    #[test]
+    fn remote_same_second_keeps_the_numbered_one() {
+        use crate::webdav::RemoteFile;
+        let file = |name: &str| RemoteFile { name: name.into(), size: None };
+        let list = backup::backups(vec![
+            file("TodoList-data-20261009-083012.zip"),
+            file("TodoList-data-20261009-083012-2.zip"),
+            file("TodoList-data-20261009-083012-10.zip"),
+            file("TodoList-settings-20261009-083012.zip"),
+        ]);
+        assert_eq!(remote_to_prune(&list, 1), ["TodoList-data-20261009-083012-2.zip", "TodoList-data-20261009-083012.zip"]);
+    }
+
     #[test]
     fn uploads_to_webdav_and_keeps_the_newest_there() {
         use crate::webdav::fake;
@@ -1260,7 +1313,7 @@ mod tests {
 
     #[test]
     fn remote_keeps_newest_data_backups() {
-        let b = |name: &str, kind| RemoteBackup { name: name.into(), size: None, time: 0, kind };
+        let b = |name: &str, kind| RemoteBackup { name: name.into(), size: None, time: 0, seq: 1, kind };
         let list = [
             b("TodoList-data-3.zip", BackupKind::Data),
             b("TodoList-settings-2.zip", BackupKind::Settings),

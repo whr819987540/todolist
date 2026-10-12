@@ -115,6 +115,9 @@ pub struct RemoteBackup {
     /// 备份时间（从文件名解析）
     pub time: i64,
     pub kind: BackupKind,
+    /// 同一秒里的第几份（数据备份的 `…-2.zip`；没有编号的、设置备份是 1）
+    #[serde(skip)]
+    pub seq: u64,
 }
 
 pub fn file_name(time: DateTime<Local>) -> String {
@@ -137,17 +140,24 @@ fn parse_stamp(stamp: &str) -> Option<i64> {
     Some(Local.from_local_datetime(&time).earliest()?.timestamp_millis())
 }
 
-/// 待办数据备份的文件名 `TodoList-data-年月日-时分秒.zip`（同一秒里已有一份时是 `…-2.zip`），返回备份时间；
-/// 恢复前自动备份的那份（`…-恢复前.zip`）和别的文件返回 None
-pub fn parse_data_file_name(name: &str) -> Option<i64> {
+/// 待办数据备份的文件名 `TodoList-data-年月日-时分秒.zip`（同一秒里已有一份时后存的是 `…-2.zip`、`…-3.zip`…），
+/// 返回备份时间和它是那一秒里的第几份（没有编号的是第 1 份）；恢复前自动备份的那份（`…-恢复前.zip`）和别的文件返回 None
+pub fn parse_data_file_name(name: &str) -> Option<(i64, u64)> {
     let rest = name.strip_prefix(DATA_PREFIX)?.strip_suffix(".zip")?;
     let stamp = rest.get(..15)?;
     let tail = &rest[15..];
-    let numbered = tail.strip_prefix('-').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    if !tail.is_empty() && !numbered {
-        return None;
-    }
-    parse_stamp(stamp)
+    let seq = match tail.strip_prefix('-') {
+        None if tail.is_empty() => 1,
+        Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => n.parse().unwrap_or(u64::MAX),
+        _ => return None,
+    };
+    Some((parse_stamp(stamp)?, seq))
+}
+
+/// 备份新的在前：先按备份时间，同一秒里的按编号（`…-10.zip` 比 `…-9.zip`、`…-2.zip` 比 `….zip` 新；
+/// 按文件名比的话 `.` 排在 `-` 后面、`-10` 排在 `-9` 前面，都反了），最后按文件名，顺序总是确定的
+pub fn newest_first(a: (i64, u64, &str), b: (i64, u64, &str)) -> std::cmp::Ordering {
+    b.cmp(&a)
 }
 
 /// 从远程目录的文件里挑出备份（设置的和待办数据的），新的在前
@@ -155,14 +165,17 @@ pub fn backups(files: Vec<RemoteFile>) -> Vec<RemoteBackup> {
     let mut list: Vec<_> = files
         .into_iter()
         .filter_map(|f| {
-            let (time, kind) = match parse_file_name(&f.name) {
-                Some(t) => (t, BackupKind::Settings),
-                None => (parse_data_file_name(&f.name)?, BackupKind::Data),
+            let (time, seq, kind) = match parse_file_name(&f.name) {
+                Some(t) => (t, 1, BackupKind::Settings),
+                None => {
+                    let (t, seq) = parse_data_file_name(&f.name)?;
+                    (t, seq, BackupKind::Data)
+                }
             };
-            Some(RemoteBackup { time, kind, name: f.name, size: f.size })
+            Some(RemoteBackup { time, seq, kind, name: f.name, size: f.size })
         })
         .collect();
-    list.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| b.name.cmp(&a.name)));
+    list.sort_by(|a, b| newest_first((a.time, a.seq, &a.name), (b.time, b.seq, &b.name)));
     list
 }
 
@@ -250,12 +263,14 @@ mod tests {
     #[test]
     fn data_backup_names() {
         let t = time().timestamp_millis();
-        assert_eq!(parse_data_file_name("TodoList-data-20260926-153012.zip"), Some(t));
-        // 同一秒里的第二份
-        assert_eq!(parse_data_file_name("TodoList-data-20260926-153012-2.zip"), Some(t));
-        // 恢复前自动备份的那份、别的文件不算
+        assert_eq!(parse_data_file_name("TodoList-data-20260926-153012.zip"), Some((t, 1)));
+        // 同一秒里后存的几份
+        assert_eq!(parse_data_file_name("TodoList-data-20260926-153012-2.zip"), Some((t, 2)));
+        assert_eq!(parse_data_file_name("TodoList-data-20260926-153012-10.zip"), Some((t, 10)));
+        // 恢复前自动备份的那份（同一秒里的第二份也是）、别的文件不算
         for name in [
             "TodoList-data-20260926-153012-恢复前.zip",
+            "TodoList-data-20260926-153012-恢复前-2.zip",
             "TodoList-data-20260926-153012-.zip",
             "TodoList-data-20260926.zip",
             "TodoList-data-20260926-153012.zip.tmp",
@@ -376,6 +391,32 @@ mod tests {
                 ("TodoList-settings-20260926-153012.zip", BackupKind::Settings),
                 ("TodoList-data-20260801-090000.zip", BackupKind::Data),
                 ("TodoList-settings-20260101-080000.zip", BackupKind::Settings),
+            ]
+        );
+    }
+
+    /// docs/requirements.md「数据备份 → 自动备份」：同一秒里的几份（后存的加 -2、-3…）编号大的是后备份的，排在前面
+    #[test]
+    fn same_second_data_backups_newest_first() {
+        let file = |name: &str| RemoteFile { name: name.into(), size: None };
+        let list = backups(vec![
+            file("TodoList-data-20260801-090000.zip"),
+            file("TodoList-data-20260801-090000-10.zip"),
+            file("TodoList-data-20260801-085959.zip"),
+            file("TodoList-data-20260801-090000-2.zip"),
+            file("TodoList-data-20260801-090000-9.zip"),
+            file("TodoList-data-20260801-090001.zip"),
+        ]);
+        let names: Vec<_> = list.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "TodoList-data-20260801-090001.zip",
+                "TodoList-data-20260801-090000-10.zip",
+                "TodoList-data-20260801-090000-9.zip",
+                "TodoList-data-20260801-090000-2.zip",
+                "TodoList-data-20260801-090000.zip",
+                "TodoList-data-20260801-085959.zip",
             ]
         );
     }
