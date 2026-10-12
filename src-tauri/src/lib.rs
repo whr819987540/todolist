@@ -1472,10 +1472,12 @@ fn auto_backup_once(app: &AppHandle) {
     let jobs = app.state::<BackupJobs>();
     let dir = data_backup::backup_dir(&settings.auto_backup_dir, store.root());
     let keep = settings.auto_backup_keep as usize;
+    // 监听着数据目录时外部的改动也会记下来，数据目录没变时少重扫几次（见 run_auto）
+    let watching = app.try_state::<watch::DataWatcher>().is_some();
     // 只在本地打包时和别的备份、恢复错开；上传 WebDAV（可能要好几分钟）在外面做，不让手动备份、恢复一直等着
     let result = {
         let _busy = jobs.exclusive();
-        data_backup::run_auto(&store, &dir, keep, Local::now(), || {
+        data_backup::run_auto(&store, &dir, keep, Local::now(), jobs.scan(), watching, || {
             jobs.set_running(true);
             let _ = app.emit_to("main", "auto-backup", ());
         })

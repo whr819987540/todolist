@@ -10,7 +10,7 @@
 //! 监听建不起来（数据目录不在等）时 start 返回错误；建起来之后出了错（数据目录被删、网络盘不支持变化通知），
 //! notify 在 Windows 上悄悄停掉、不再报。都只是不再自动刷新，窗口获得焦点、F5 时照常刷新
 
-use crate::store::{own_writes, PathState, META_FILE, ORDER_FILE, RECYCLE_DIR};
+use crate::store::{note_change, own_writes, PathState, META_FILE, ORDER_FILE, RECYCLE_DIR};
 use notify::event::{EventKind, ModifyKind};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -226,11 +226,26 @@ pub fn start(root: &Path, on_change: impl FnMut(DataChanged) + Send + 'static) -
     Ok(DataWatcher { _watcher: watcher })
 }
 
+/// 收到的一个变化（只是读了一下的不算）给数据目录记一次（store.rs 的 note_change，自动备份据此判断要不要重扫；
+/// 不管是不是软件自己写的、刷不刷新界面：附件目录里的图片、项目里不是 .md 的文件不刷新界面，但在备份里）。
+/// 出错了、系统说要重新扫描的（可能漏了一些）、不带路径的当成数据目录整个变了。notify 在 Windows 上缓冲区满了时只是悄悄停掉、
+/// 什么都不报，那种只能靠自动备份隔几小时的重扫兜底
+fn count_change(root: &Path, res: &notify::Result<Event>) {
+    match res {
+        Ok(e) if e.need_rescan() => note_change(root),
+        Ok(e) if matches!(e.kind, EventKind::Access(_)) => {}
+        Ok(e) if e.paths.is_empty() => note_change(root),
+        Ok(e) => e.paths.iter().for_each(|p| note_change(p)),
+        Err(_) => note_change(root),
+    }
+}
+
 /// 监听线程：没有变化时一直等着（不占 CPU）；来了一处变化就开始攒，静下来 QUIET（最多攒 MAX_WAIT）后报一次。
 /// 监听停了（DataWatcher 丢掉了）时结束
 fn run(root: &Path, rx: &Receiver<notify::Result<Event>>, mut on_change: impl FnMut(DataChanged)) {
     while let Ok(first) = rx.recv() {
         let mut batch = Pending::default();
+        count_change(root, &first);
         batch.add(first);
         let started = Instant::now();
         loop {
@@ -239,7 +254,10 @@ fn run(root: &Path, rx: &Receiver<notify::Result<Event>>, mut on_change: impl Fn
                 break;
             }
             match rx.recv_timeout(wait) {
-                Ok(e) => batch.add(e),
+                Ok(e) => {
+                    count_change(root, &e);
+                    batch.add(e)
+                }
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => return,
             }
@@ -313,6 +331,27 @@ mod tests {
         assert_eq!(moved("工作/需求/前端/组件/按钮/.projects.json", GONE), path("工作/需求/前端/组件/按钮/.projects.json"));
         // 数据目录本身
         assert_eq!(classify(&[], true, GONE), Some(Changed::All));
+    }
+
+    /// 自动备份看的「数据目录变了几次」：监听到的变化（附件目录里的图片、项目里别的文件这些不刷新界面的也算，在备份里）都记一次；
+    /// 只是读了一下、数据目录里点开头的不算；出错了、要重新扫描的当成整个变了
+    #[test]
+    fn watched_changes_are_counted_for_auto_backup() {
+        let root = std::env::temp_dir().join(format!("todolist-watch-count-{}", std::process::id()));
+        let count = || crate::store::change_count(&root);
+        let start = count();
+        let ev = |kind, path: PathBuf| -> notify::Result<Event> { Ok(Event::new(kind).add_path(path)) };
+        count_change(&root, &ev(EventKind::Create(CreateKind::Any), root.join("工作").join("需求").join(".assets").join("图.png")));
+        count_change(&root, &ev(EventKind::Modify(ModifyKind::Data(DataChange::Content)), root.join("工作").join("需求").join("附件.pdf")));
+        assert_eq!(count(), start + 2);
+        count_change(&root, &ev(EventKind::Access(AccessKind::Read), root.join("工作").join("需求").join("A.md")));
+        count_change(&root, &ev(EventKind::Modify(ModifyKind::Any), root.join(".state.json")));
+        count_change(&root, &ev(EventKind::Create(CreateKind::Any), root.join(".recycle").join("x")));
+        assert_eq!(count(), start + 2);
+        count_change(&root, &Ok(Event::new(EventKind::Any).set_flag(notify::event::Flag::Rescan)));
+        count_change(&root, &Err(notify::Error::generic("出错了")));
+        count_change(&root, &Ok(Event::new(EventKind::Other)));
+        assert_eq!(count(), start + 5);
     }
 
     #[test]

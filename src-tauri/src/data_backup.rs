@@ -33,6 +33,10 @@ type Result<T> = std::result::Result<T, String>;
 
 /// 自动备份：距上次满这么久（24 小时）才再备份
 pub const AUTO_INTERVAL_MS: i64 = 24 * 3600 * 1000;
+/// 自动备份：监听着数据目录时，数据目录没再变也隔这么久（6 小时）重扫一遍（兜底：监听可能悄悄停了、漏了一些）
+pub const RESCAN_WATCHED_MS: i64 = 6 * 3600 * 1000;
+/// 自动备份：没在监听数据目录时（建不起来，如网络盘上的）看不到外部的改动，隔这么久（1 小时）重扫一遍
+pub const RESCAN_UNWATCHED_MS: i64 = 3600 * 1000;
 /// 恢复前自动备份的那份，文件名里带着它
 const BEFORE_RESTORE: &str = "恢复前";
 /// 恢复时解压、放原来数据的临时文件夹（在数据目录里，点开头，不会被当成工作区，也不会被备份）
@@ -687,9 +691,54 @@ pub enum AutoLocal {
     Done(Packed),
 }
 
+/// 一个文件是哪一个：路径、大小、修改时间（读不出来时大小是 0、没有修改时间）
+type FileId = (PathBuf, u64, Option<SystemTime>);
+
+fn file_id(path: &Path) -> FileId {
+    let md = fs::metadata(path).ok();
+    (path.to_path_buf(), md.as_ref().map_or(0, |m| m.len()), md.and_then(|m| m.modified().ok()))
+}
+
+/// 上次扫数据目录算指纹、数据和最新的一份一样（跳过了）时的情况
+#[derive(Debug, Clone, PartialEq)]
+struct Scanned {
+    /// 扫之前数据目录变了几次（store::change_count）
+    changes: u64,
+    /// 备份目录里最新的一份
+    latest: FileId,
+    /// 什么时候扫的（毫秒）
+    at: i64,
+}
+
+/// 自动备份上次扫数据目录的情况（这次运行期间，BackupJobs 里的）：之后数据目录没再变、最新的一份还是那个文件、离上次扫不太久，
+/// 数据就还是和最新的一份一样，不用每 10 分钟都拿着存储层的锁把整个数据目录读一遍。刚启动时是空的，第一次检查总要扫
+#[derive(Debug, Default)]
+pub struct AutoScan(Mutex<Option<Scanned>>);
+
+impl AutoScan {
+    fn get(&self) -> Option<Scanned> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set(&self, scanned: Option<Scanned>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = scanned;
+    }
+}
+
 /// 检查一次：距备份目录里最新的一份满 24 小时、数据有变化时备份到 dir（备份前调 started），然后只留最近 keep 份。
-/// 最新的一份时间在将来的（系统时间被往回调过）不算
-pub fn run_auto(store: &Store, dir: &Path, keep: usize, now: DateTime<Local>, started: impl FnOnce()) -> Result<AutoLocal> {
+/// 最新的一份时间在将来的（系统时间被往回调过）不算。
+/// 数据有没有变化要扫一遍数据目录算指纹；上次扫过、数据和最新的一份一样之后，数据目录没再变（软件自己写的、监听到外部改的
+/// 都会记一次，store::change_count）、最新的一份还是那个文件、离上次扫不到 RESCAN_WATCHED_MS（watching 为 false，没在监听
+/// 数据目录时是 RESCAN_UNWATCHED_MS）的，沿用上次的结果，不再扫
+pub fn run_auto(
+    store: &Store,
+    dir: &Path,
+    keep: usize,
+    now: DateTime<Local>,
+    scan: &AutoScan,
+    watching: bool,
+    started: impl FnOnce(),
+) -> Result<AutoLocal> {
     check_backup_dir(dir, store.root())?;
     let now_ms = now.timestamp_millis();
     let list = local_backups(dir);
@@ -697,13 +746,23 @@ pub fn run_auto(store: &Store, dir: &Path, keep: usize, now: DateTime<Local>, st
     if latest.is_some_and(|b| now_ms - b.time < AUTO_INTERVAL_MS) {
         return Ok(AutoLocal::NotYet);
     }
+    let latest_id = latest.map(|b| file_id(&b.path));
+    // 扫之前先记下变了几次：扫的时候又变了的，下次一定重扫
+    let changes = store::change_count(store.root());
+    let every = if watching { RESCAN_WATCHED_MS } else { RESCAN_UNWATCHED_MS };
+    let fresh = |s: &Scanned| s.changes == changes && Some(&s.latest) == latest_id.as_ref() && (0..every).contains(&(now_ms - s.at));
+    if scan.get().is_some_and(|s| fresh(&s)) {
+        return Ok(AutoLocal::Unchanged);
+    }
     let current = store
         .locked(|| collect(store.root()))
         .map(|items| fingerprint(&items))
         .map_err(|e| format!("读取数据目录失败：{e}"))?;
     if latest.and_then(|b| read_fingerprint(&b.path)).is_some_and(|f| f == current) {
+        scan.set(latest_id.map(|latest| Scanned { changes, latest, at: now_ms }));
         return Ok(AutoLocal::Unchanged);
     }
+    scan.set(None);
     started();
     fs::create_dir_all(dir).map_err(|e| format!("无法创建备份目录 {}：{e}", dir.display()))?;
     let dest = unique_path(dir, &format!("{DATA_PREFIX}{}", backup::stamp(now)));
@@ -755,18 +814,24 @@ impl AutoRun {
 }
 
 /// 备份、恢复在做的事（Tauri 管理的状态）：同一时间只做一件（自动备份、手动备份、恢复）；
-/// 记着这次运行期间最近一次自动备份的结果；可以叫醒定时检查的线程（改了自动备份的设置后马上检查）；
+/// 记着这次运行期间最近一次自动备份的结果和上次扫数据目录的情况；可以叫醒定时检查的线程（改了自动备份的设置后马上检查）；
 /// 记着启动时处理掉的恢复中途留下的临时文件夹（recover_leftovers），等前端取走
 #[derive(Default)]
 pub struct BackupJobs {
     busy: Mutex<()>,
     running: AtomicBool,
     last: Mutex<Option<AutoRun>>,
+    scan: AutoScan,
     waker: Mutex<Option<Sender<()>>>,
     recovered: Mutex<Vec<RestoreRecovery>>,
 }
 
 impl BackupJobs {
+    /// 自动备份上次扫数据目录的情况（run_auto 用）
+    pub fn scan(&self) -> &AutoScan {
+        &self.scan
+    }
+
     pub fn with_recovered(recovered: Vec<RestoreRecovery>) -> Self {
         Self { recovered: Mutex::new(recovered), ..Self::default() }
     }
@@ -815,6 +880,11 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
     use zip::write::SimpleFileOptions;
+
+    /// 检查一次自动备份，每次都像刚启动时一样扫数据目录（监听着数据目录）
+    fn auto(s: &Store, dir: &Path, keep: usize, now: DateTime<Local>, started: impl FnOnce()) -> Result<AutoLocal> {
+        run_auto(s, dir, keep, now, &AutoScan::default(), true, started)
+    }
 
     struct TempRoot(PathBuf);
 
@@ -1045,7 +1115,7 @@ mod tests {
         assert_eq!((rank("A/B/C/D2"), rank("A/B/C/D")), (Some(0), Some(1)), "深处的顺序和备份时一样");
         // 恢复出来的和那份备份一样，指纹相同：过了一天也不再备份一份一样的
         let later = time(11) + chrono::Duration::days(2);
-        assert!(matches!(run_auto(&s, &backups, 10, later, || ()).unwrap(), AutoLocal::Unchanged));
+        assert!(matches!(auto(&s, &backups, 10, later, || ()).unwrap(), AutoLocal::Unchanged));
         drop(tmp);
     }
 
@@ -1516,40 +1586,112 @@ mod tests {
         let dir = tmp.0.join("备份");
         let mut started = 0;
         // 还没有备份：马上备份
-        let r = run_auto(&s, &dir, 10, time(8), || started += 1).unwrap();
+        let r = auto(&s, &dir, 10, time(8), || started += 1).unwrap();
         assert!(matches!(r, AutoLocal::Done(ref p) if p.name == "TodoList-data-20261009-083012.zip"), "{r:?}");
         assert_eq!(started, 1);
         // 不到 24 小时：不备份
         s.create_workspace("改了").unwrap();
         let next_day = |h| time(h) + chrono::Duration::days(1);
-        assert!(matches!(run_auto(&s, &dir, 10, next_day(8) - chrono::Duration::minutes(1), || ()).unwrap(), AutoLocal::NotYet));
+        assert!(matches!(auto(&s, &dir, 10, next_day(8) - chrono::Duration::minutes(1), || ()).unwrap(), AutoLocal::NotYet));
         // 满 24 小时、有变化：备份
-        assert!(matches!(run_auto(&s, &dir, 10, next_day(8), || ()).unwrap(), AutoLocal::Done(_)));
+        assert!(matches!(auto(&s, &dir, 10, next_day(8), || ()).unwrap(), AutoLocal::Done(_)));
         // 又过了一天，数据没变：跳过（只改界面状态也算没变）
         s.write_ui_state(r#"{"x":1}"#).unwrap();
         let mut called = false;
-        assert!(matches!(run_auto(&s, &dir, 10, next_day(8) + chrono::Duration::days(1), || called = true).unwrap(), AutoLocal::Unchanged));
+        assert!(matches!(auto(&s, &dir, 10, next_day(8) + chrono::Duration::days(1), || called = true).unwrap(), AutoLocal::Unchanged));
         assert!(!called);
         assert_eq!(local_backups(&dir).len(), 2);
         // 最新的一份在将来（系统时间被往回调过）：不算
         fs::copy(dir.join("TodoList-data-20261009-083012.zip"), dir.join("TodoList-data-20991231-000000.zip")).unwrap();
         s.create_workspace("又改了").unwrap();
-        assert!(matches!(run_auto(&s, &dir, 10, next_day(8) + chrono::Duration::days(2), || ()).unwrap(), AutoLocal::Done(_)));
+        assert!(matches!(auto(&s, &dir, 10, next_day(8) + chrono::Duration::days(2), || ()).unwrap(), AutoLocal::Done(_)));
         // 不能备份到数据目录里面
-        assert!(run_auto(&s, &s.root().join("x"), 10, time(8), || ()).is_err());
+        assert!(auto(&s, &s.root().join("x"), 10, time(8), || ()).is_err());
+    }
+
+    /// 在数据目录里外部加一个文件、不经软件也不经监听（模拟监听漏了）：只有重扫数据目录才看得出数据变了
+    fn sneak_in(s: &Store, name: &str) {
+        fs::write(s.project_path("工作", "需求").unwrap().join(name), "外面加的").unwrap();
+    }
+
+    /// docs/requirements.md「自动备份」：扫过一遍、数据和最新的一份一样之后，数据目录没再变、最新的一份还是那个文件时不再扫；
+    /// 软件里改了、监听到外部改了（附件目录里的图片也算）就重扫。界面状态、回收站这些不在备份里的变了不算。
+    /// 启动后第一次检查总是扫
+    #[test]
+    fn auto_backup_rescans_only_when_something_changed() {
+        let (tmp, s) = setup("rescan");
+        let dir = tmp.0.join("备份");
+        let scan = AutoScan::default();
+        let at = |days: i64, minutes: i64| time(8) + chrono::Duration::days(days) + chrono::Duration::minutes(minutes);
+        let check = |scan: &AutoScan, now| run_auto(&s, &dir, 10, now, scan, true, || ()).unwrap();
+        assert!(matches!(check(&scan, at(0, 0)), AutoLocal::Done(_)));
+        // 满 24 小时、数据没变：扫一遍，跳过
+        assert!(matches!(check(&scan, at(1, 0)), AutoLocal::Unchanged));
+        // 之后数据目录没再变（只是没经软件、监听也没报的外部改动）：不重扫，还是跳过——说明没有扫
+        sneak_in(&s, "漏掉的.md");
+        assert!(matches!(check(&scan, at(1, 10)), AutoLocal::Unchanged));
+        // 界面状态、回收站、设置文件变了：不在备份里，还是不扫
+        s.write_ui_state(r#"{"x":2}"#).unwrap();
+        store::note_change(&s.root().join(store::RECYCLE_DIR).join("x"));
+        store::note_change(&s.root().join(SETTINGS_FILE));
+        assert!(matches!(check(&scan, at(1, 20)), AutoLocal::Unchanged));
+        // 监听报来了附件目录里的变化（不刷新界面，但在备份里）：重扫，看出数据变了，备份
+        store::note_change(&s.project_path("工作", "需求").unwrap().join(store::ASSETS_DIR).join("图.png"));
+        assert!(matches!(check(&scan, at(1, 30)), AutoLocal::Done(_)));
+        // 又过了一天：扫一遍、跳过；软件里改了（新建项目）：重扫，备份
+        assert!(matches!(check(&scan, at(2, 40)), AutoLocal::Unchanged));
+        sneak_in(&s, "又漏掉的.md");
+        assert!(matches!(check(&scan, at(2, 50)), AutoLocal::Unchanged));
+        s.create_project("工作", "新项目").unwrap();
+        assert!(matches!(check(&scan, at(2, 60)), AutoLocal::Done(_)));
+        // 启动后第一次检查（新的 AutoScan）总是扫
+        assert!(matches!(check(&scan, at(3, 70)), AutoLocal::Unchanged));
+        sneak_in(&s, "第三个.md");
+        assert!(matches!(check(&scan, at(3, 80)), AutoLocal::Unchanged));
+        assert!(matches!(check(&AutoScan::default(), at(3, 90)), AutoLocal::Done(_)));
+    }
+
+    /// 数据目录没再变也隔一阵重扫一遍：监听着时 6 小时（监听可能悄悄停了），没在监听时（如网络盘）1 小时；
+    /// 备份目录里最新的一份换了（被替换、删掉、多了更新的）时也重扫
+    #[test]
+    fn auto_backup_rescans_after_a_while_or_when_the_latest_backup_changed() {
+        let (tmp, s) = setup("rescan-time");
+        let dir = tmp.0.join("备份");
+        let scan = AutoScan::default();
+        let at = |minutes: i64| time(8) + chrono::Duration::days(1) + chrono::Duration::minutes(minutes);
+        let check = |now, watching| run_auto(&s, &dir, 10, now, &scan, watching, || ()).unwrap();
+        assert!(matches!(check(time(8), true), AutoLocal::Done(_)));
+        // 没在监听：1 小时后重扫
+        assert!(matches!(check(at(0), false), AutoLocal::Unchanged));
+        sneak_in(&s, "一.md");
+        assert!(matches!(check(at(59), false), AutoLocal::Unchanged));
+        assert!(matches!(check(at(60), false), AutoLocal::Done(_)));
+        // 监听着：6 小时后重扫
+        let later = |minutes: i64| at(60 + 24 * 60 + minutes);
+        assert!(matches!(check(later(0), true), AutoLocal::Unchanged));
+        sneak_in(&s, "二.md");
+        assert!(matches!(check(later(6 * 60 - 1), true), AutoLocal::Unchanged));
+        assert!(matches!(check(later(6 * 60), true), AutoLocal::Done(_)));
+        // 最新的一份被换了（同名、修改时间不同）：重扫
+        let next = |minutes: i64| later(6 * 60 + 24 * 60 + minutes);
+        assert!(matches!(check(next(0), true), AutoLocal::Unchanged));
+        sneak_in(&s, "三.md");
+        let newest = local_backups(&dir)[0].path.clone();
+        File::options().write(true).open(&newest).unwrap().set_modified(UNIX_EPOCH + Duration::from_secs(1_600_000_000)).unwrap();
+        assert!(matches!(check(next(10), true), AutoLocal::Done(_)));
     }
 
     #[test]
     fn restored_data_is_not_backed_up_again() {
         let (tmp, s) = setup("restored");
         let dir = tmp.0.join("备份");
-        assert!(matches!(run_auto(&s, &dir, 10, time(8), || ()).unwrap(), AutoLocal::Done(_)));
+        assert!(matches!(auto(&s, &dir, 10, time(8), || ()).unwrap(), AutoLocal::Done(_)));
         let zip = dir.join("TodoList-data-20261009-083012.zip");
         s.create_workspace("后来建的").unwrap();
         restore_file(&s, &zip, &dir, time(9)).unwrap();
         // 恢复出来的和那份备份一样（修改时间也改回去了）：过了一天也不再备份一份一样的
         let later = time(9) + chrono::Duration::days(2);
-        assert!(matches!(run_auto(&s, &dir, 10, later, || ()).unwrap(), AutoLocal::Unchanged));
+        assert!(matches!(auto(&s, &dir, 10, later, || ()).unwrap(), AutoLocal::Unchanged));
     }
 
     #[test]
@@ -1568,7 +1710,7 @@ mod tests {
             fs::write(dir.join(name), "旧的").unwrap();
         }
         // 最新的一份读不出指纹：当成数据变了
-        assert!(matches!(run_auto(&s, &dir, 2, time(8), || ()).unwrap(), AutoLocal::Done(_)));
+        assert!(matches!(auto(&s, &dir, 2, time(8), || ()).unwrap(), AutoLocal::Done(_)));
         let mut left: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         left.sort();
         assert_eq!(
@@ -1614,7 +1756,7 @@ mod tests {
         );
         // 最新的一份是 -2，数据和它一样：过了一天也不备份
         let later = time(8) + chrono::Duration::days(1);
-        assert!(matches!(run_auto(&s, &dir, 10, later, || ()).unwrap(), AutoLocal::Unchanged));
+        assert!(matches!(auto(&s, &dir, 10, later, || ()).unwrap(), AutoLocal::Unchanged));
         // 编号按数比，-10 比 -9、-3 新；只留 2 份时删掉的是没有编号的和更早的
         for n in [3, 9, 10] {
             fs::write(dir.join(format!("{base}-{n}.zip")), "x").unwrap();

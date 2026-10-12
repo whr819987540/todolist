@@ -3561,10 +3561,46 @@ pub(crate) fn own_writes() -> MutexGuard<'static, OwnWrites> {
     OWN_WRITES.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// 记下软件自己刚写过 path（文件或文件夹；移走、删掉了的记成不在）
+/// 记下软件自己刚写过 path（文件或文件夹；移走、删掉了的记成不在），同时给数据目录记一次变化（note_change）
 pub(crate) fn note_own(path: &Path) {
     let state = PathState::of(path);
     own_writes().note(path, state, Instant::now());
+    note_change(path);
+}
+
+/// 各数据目录里的东西变了几次（数据目录 → 次数）：软件自己写的（note_own）、监听到外部改的（watch.rs）都算。自动备份据此
+/// 判断要不要重新扫一遍数据目录算指纹（data_backup.rs 的 run_auto）。单元测试里同时有好几个数据目录，各记各的
+static DATA_CHANGES: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+
+/// 数据目录的写法（同 own_key，去掉末尾的分隔符）
+fn changes_key(root: &Path) -> String {
+    own_key(root).trim_end_matches('\\').to_string()
+}
+
+/// 数据目录里 path 处变了：给它所在的数据目录（change_count 问过的）记一次。数据目录里点开头的（界面状态 .state.json、
+/// 回收站、设置文件、恢复用的临时文件夹等，都不在待办数据的备份里）不算；path 是数据目录本身（监听出错了）时算
+pub(crate) fn note_change(path: &Path) {
+    let key = own_key(path);
+    let mut changes = DATA_CHANGES.lock().unwrap_or_else(|e| e.into_inner());
+    for (root, n) in changes.iter_mut() {
+        let rel = if key == *root { Some("") } else { key.strip_prefix(root.as_str()).and_then(|r| r.strip_prefix('\\')) };
+        if rel.is_some_and(|rel| !rel.starts_with('.')) {
+            *n += 1;
+        }
+    }
+}
+
+/// 数据目录 root 里的东西到现在变了几次（第一次问时从 0 记起）
+pub(crate) fn change_count(root: &Path) -> u64 {
+    let key = changes_key(root);
+    let mut changes = DATA_CHANGES.lock().unwrap_or_else(|e| e.into_inner());
+    match changes.iter().find(|(r, _)| *r == key) {
+        Some((_, n)) => *n,
+        None => {
+            changes.push((key, 0));
+            0
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -6047,6 +6083,39 @@ mod tests {
         assert_eq!(tree(s.root()), before);
         assert_eq!(tree(&used), kept);
         assert!(!staging.join(SWAP_JOURNAL).exists() && !staging.join(EXPOSED_MARK).exists());
+    }
+
+    /// 自动备份看的「数据目录变了几次」：软件里新建、保存、改名、删除都算；界面状态、设置文件、回收站里的、恢复用的临时文件夹
+    /// 不在备份里，不算；别的数据目录里的变化不算
+    #[test]
+    fn data_changes_are_counted_per_data_dir() {
+        let (_tmp, s) = store("changes");
+        let (_other_tmp, other) = store("changes-other");
+        let count = || change_count(s.root());
+        let start = count();
+        s.create_workspace("工作").unwrap();
+        s.create_project("工作", "需求").unwrap();
+        let t = s.create_todo("工作", "需求", "t", "正文").unwrap();
+        let after_create = count();
+        assert!(after_create > start);
+        s.save_todo_content("工作", "需求", &t.id, "改过的", None, true).unwrap();
+        let after_save = count();
+        assert!(after_save > after_create);
+        s.delete_todo("工作", "需求", &t.id).unwrap();
+        let after_delete = count();
+        assert!(after_delete > after_save);
+        // 不在备份里的
+        s.write_ui_state("{}").unwrap();
+        note_change(&s.root().join(".settings.json"));
+        note_change(&s.root().join(RECYCLE_DIR).join("x").join(ENTRY_FILE));
+        note_change(&s.root().join(".restoring-1").join("new").join("工作"));
+        other.create_workspace("别处").unwrap();
+        assert_eq!(count(), after_delete);
+        // 外部改的（监听报来的）、数据目录本身（监听出错）
+        note_change(&s.root().join("工作").join("需求").join("外部.md"));
+        assert_eq!(count(), after_delete + 1);
+        note_change(s.root());
+        assert_eq!(count(), after_delete + 2);
     }
 
     #[test]
