@@ -1,4 +1,5 @@
-# 推送 tag 时在 Windows 上打 NSIS 安装包，发布成这个 tag 的 GitHub Release；Latest 指向版本号最大的 tag
+# 推送 tag 时在 Windows 上打 NSIS 安装包（带自动更新用的签名），发布成这个 tag 的 GitHub Release（附上 latest.json）；
+# Latest 指向版本号最大的 tag
 # （见 README.md「发布到 GitHub」）
 name: Release
 
@@ -33,10 +34,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      # 只认 tag：手动运行时填的不是 tag（比如分支名）在这里就失败
+      # 只认 tag：手动运行时填的不是 tag（比如分支名）在这里就失败。拿全部历史和 tag：更新说明列出和上一个 tag 之间的提交
       - uses: actions/checkout@v5
         with:
           ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -58,20 +60,51 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
-      # 和 npm run release 一样用 release profile；不用编译缓存，每次从头编
+      # 和 npm run release 一样用 release profile；不用编译缓存，每次从头编。
+      # 同时给安装包签名（自动更新只装签过名的，私钥在仓库的 Secrets 里，见 README.md「发布到 GitHub」）：
+      # 只在这里打开 createUpdaterArtifacts，本机打包不用私钥
       - name: 打包
-        run: npm run tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+      # 更新说明：和上一个 tag 之间的新功能、修正（feat / fix / perf 的提交说明，只改测试、CI、文档、构建的不算），
+      # release 的说明和软件里的更新提示都用它
+      - name: 更新说明
+        run: |
+          prev=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          git log --no-merges --format='%s' "${prev:+$prev..}$TAG" \
+            | grep -E '^(feat|fix|perf)(\([^)]*\))?: ' | grep -vE '^[a-z]+\((e2e|ci|test|docs|build)\): ' \
+            | sed -E 's/^[a-z]+(\([^)]*\))?: /- /' > notes.md || true
+          [ -s notes.md ] || echo "- 其他改进" > notes.md
+          cat notes.md
 
       # 安装包原名「待办清单_<版本>_x64-setup.exe」，GitHub 会把附件名里的中文换掉，改成英文名再传。
-      # release 已经有了（重新运行、重新打包）时只替换安装包，不改标题和说明
+      # latest.json 是给自动更新看的：版本号、更新说明、安装包的签名和下载地址；软件检查的是 Latest 那个 release 里的它
+      # （releases/latest/download/latest.json），下面的 latest 任务把版本号最大的标成 Latest。
+      # release 已经有了（重新运行、重新打包）时只替换安装包和 latest.json，不改标题和说明
       - name: 发布
         run: |
           asset="TodoList_${VERSION}_x64-setup.exe"
+          sig=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe.sig)
           mv src-tauri/target/release/bundle/nsis/*-setup.exe "$asset"
+          node -e '
+            const fs = require("fs");
+            const [sig, url] = process.argv.slice(1);
+            const latest = {
+              version: process.env.VERSION,
+              notes: fs.readFileSync("notes.md", "utf8").trim(),
+              pub_date: new Date().toISOString(),
+              platforms: { "windows-x86_64": { signature: fs.readFileSync(sig, "utf8").trim(), url } },
+            };
+            fs.writeFileSync("latest.json", JSON.stringify(latest, null, 2));
+          ' "$sig" "https://github.com/$GH_REPO/releases/download/$TAG/$asset"
+          cat latest.json
           if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" "$asset" --clobber
+            gh release upload "$TAG" "$asset" latest.json --clobber
           else
-            gh release create "$TAG" "$asset" --verify-tag --title "$TAG" --generate-notes --latest=false
+            gh release create "$TAG" "$asset" latest.json --verify-tag --title "$TAG" --notes-file notes.md --latest=false
           fi
 
   # 按全部 release 重新算 Latest，不看发布的先后：补打旧的 tag、几个 tag 一起推送时先打完的是新版，Latest 也不会落到旧版上

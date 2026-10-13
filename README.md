@@ -374,7 +374,7 @@ npm run release:fast         # 同 release，但用 release-fast profile 构建�
 
 ### 发布到 GitHub
 
-`.github/workflows/release.yml`：推送 tag 时在 GitHub 的 Windows 机器（windows-latest）上 `npm ci` 后 `npm run tauri build`（和 `npm run release` 一样是 release profile，不用编译缓存），发布成这个 tag 的 Release（标题是 tag，说明由 GitHub 自动生成，附件是安装包）。安装包原名「待办清单_<版本>_x64-setup.exe」，GitHub 会把附件名里的中文换掉，所以改名成 `TodoList_<版本>_x64-setup.exe` 再上传。
+`.github/workflows/release.yml`：推送 tag 时在 GitHub 的 Windows 机器（windows-latest）上 `npm ci` 后 `npm run tauri build`（和 `npm run release` 一样是 release profile，不用编译缓存），发布成这个 tag 的 Release（标题是 tag，附件是安装包和 `latest.json`）。安装包原名「待办清单_<版本>_x64-setup.exe」，GitHub 会把附件名里的中文换掉，所以改名成 `TodoList_<版本>_x64-setup.exe` 再上传。
 
 ```bash
 npm run release -- 0.2.0          # 改版本号（同时在本机打包、装上试一下），见上文「安装到本机与升级」
@@ -384,6 +384,13 @@ git push origin main v0.2.0
 gh run list --workflow Release --limit 3
 ```
 
+自动更新（见 `lib.rs` 的「自动更新」）靠这里发布的东西：
+
+- 签名：打包时打开 `createUpdaterArtifacts`（只在这个 workflow 里经 `--config` 打开，本机打包不用私钥），tauri 用私钥给安装包签名（`.sig`）；软件里只认 `tauri.conf.json` 里 `plugins.updater.pubkey` 那个公钥，签名对不上的不安装。私钥和密码放在仓库的 Secrets 里（`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），生成时的原件在维护者电脑的 `~/.tauri/todolist-updater.key`（密码在旁边的 `.password`），要另外备份好：私钥丢了以后发的版本签不了名，已经装了的软件就再也收不到自动更新，只能让用户手动装一次换了公钥的新版
+- `latest.json`：版本号、更新说明、安装包的签名和下载地址（这个 release 的附件）。软件检查的是 `releases/latest/download/latest.json`，即标成 Latest 的那个 release 里的；下面的 latest 任务把版本号最大的标成 Latest，补发旧版本不会让已装的软件「更新」回去
+- 更新说明：和上一个 tag 之间 `feat` / `fix` / `perf` 的提交说明（去掉前缀；scope 是 `e2e`、`ci`、`test`、`docs`、`build` 的不算），没有时写「其他改进」；release 的说明和软件里的更新提示都用它，所以提交说明要写成用户看得懂的
+- 0.1.1 及以前发布的版本里没有自动更新，要手动装一次
+
 - 什么 tag 都打包发布。tag 是版本号（`v1.2.3`、`1.2.3` 这样开头的）时要和 `src-tauri/tauri.conf.json` 里的版本号一致，不一致的不打包：忘了改版本号就打 tag 时，安装包会是上一版的版本号
 - Latest（[releases/latest](https://github.com/whr819987540/todolist/releases/latest)）指向版本号最大的 tag，按版本号比较（v0.10.0 比 v0.9.0 新，v1.0.0-beta 比 v1.0.0 旧），不看发布的先后：补打旧的 tag、几个 tag 一起推送时先打完的是新版，Latest 也不会落到旧版上。每次发布后按全部 release（草稿、在网页上标成预发布的除外）重新算一遍，在网页上手动改了的下次发布时改回去
-- 重新打包某个已有的 tag（构建失败过、tag 推送得比这个 workflow 早）：在 Actions 页面重新运行，或 `gh workflow run release.yml -f tag=v0.2.0`。这个 tag 已经有 release 时只替换安装包，不改标题和说明
+- 重新打包某个已有的 tag（构建失败过、tag 推送得比这个 workflow 早）：在 Actions 页面重新运行，或 `gh workflow run release.yml -f tag=v0.2.0`。这个 tag 已经有 release 时只替换安装包和 `latest.json`，不改标题和说明
