@@ -11,6 +11,7 @@ import { flushAll, flushBeforeQuit, QUIT_FLUSH_TIMEOUT, useAppEvent } from "./ho
 import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
 import { inDialog } from "./shortcuts";
+import { useUpdatePrompt } from "./update";
 import { compareName } from "./utils";
 import {
   keepTodoTab,
@@ -71,6 +72,9 @@ export default function App() {
     viewRef.current = view;
     modalRef.current = modal;
   });
+
+  // 发现新版本时在右下角提示；刚更新完时提示更新好了没有
+  useUpdatePrompt();
 
   // 刚恢复完待办数据：显示恢复了什么（开发时 StrictMode 会把 effect 执行两次，只显示一次）
   useEffect(() => {

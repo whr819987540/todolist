@@ -40,6 +40,7 @@ const SUITES = [
   "images",
   "tables",
   "backup",
+  "update",
   "history",
   "export",
   "regress",

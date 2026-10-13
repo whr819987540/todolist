@@ -5,6 +5,7 @@ import { matchTarget, parseTargetKey, shortTargetLabel, targetKey, targetLabel, 
 import { useSettings } from "../../settings";
 import { shortcutLabel } from "../../shortcuts";
 import type { StartupView, WorkspaceProjects } from "../../types";
+import UpdateSettings from "./UpdateSettings";
 
 const STARTUP_ITEMS: { value: StartupView; label: string; desc: string }[] = [
   { value: "home", label: "显示首页", desc: "列出全部工作区。" },
@@ -15,7 +16,7 @@ const STARTUP_ITEMS: { value: StartupView; label: string; desc: string }[] = [
   },
 ];
 
-/** 常规：开机自启，打开软件时显示的界面（下次启动时生效），快速记录存到哪里 */
+/** 常规：开机自启，打开软件时显示的界面（下次启动时生效），快速记录存到哪里，更新 */
 export default function GeneralSettings() {
   const { message } = AntApp.useApp();
   const { info, setInfo } = useSettings();
@@ -117,6 +118,8 @@ export default function GeneralSettings() {
           onChange={(key) => run(async () => setInfo(await api.setQuickCaptureTarget(parseTargetKey(key))))}
         />
       </div>
+
+      <UpdateSettings />
     </>
   );
 }

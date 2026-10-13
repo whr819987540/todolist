@@ -51,6 +51,7 @@ export function seed(dir, settings = {}) {
   mkdirSync(join(dir, "学习"), { recursive: true });
   // 自动备份默认关掉：开着的话每个套件启动几秒后都要打包一份，打包时读着文件，和套件在外面改名、删除文件夹撞上时
   // （Windows 上文件夹里有文件开着时改不了名）会偶尔失败。backup 套件导出 settings = { autoBackup: undefined }，用软件的默认值（开着）
+  // 自动检查更新也默认关掉：别的套件用不着，启动后不去连更新服务器。update 套件导出 settings = { autoUpdate: undefined }
   writeFileSync(
     join(dir, ".settings.json"),
     JSON.stringify(
@@ -60,6 +61,7 @@ export function seed(dir, settings = {}) {
         startupView: "home",
         theme: "light",
         autoBackup: false,
+        autoUpdate: false,
         ...settings,
       },
       null,

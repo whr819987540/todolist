@@ -75,6 +75,8 @@ pub struct Settings {
     pub auto_backup_keep: u32,
     /// 自动备份时同时上传到 WebDAV（那里同样只留最近 auto_backup_keep 份）
     pub auto_backup_webdav: bool,
+    /// 启动后和每隔一段时间检查 GitHub 上有没有新版本（见 lib.rs 的「自动更新」）
+    pub auto_update: bool,
 }
 
 /// 快速记录存到的项目
@@ -139,6 +141,7 @@ impl Default for Settings {
             auto_backup_dir: String::new(),
             auto_backup_keep: 10,
             auto_backup_webdav: false,
+            auto_update: true,
         }
     }
 }
@@ -419,6 +422,8 @@ mod tests {
         assert_eq!(s.theme, Theme::System);
         assert_eq!(s.quick_capture_shortcut.as_deref(), Some("Ctrl+Alt+N"));
         assert_eq!(s.quick_capture_target, QuickTarget::default());
+        // 加自动更新之前的设置文件：照样自动检查更新
+        assert!(s.auto_update);
     }
 
     #[test]

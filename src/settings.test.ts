@@ -29,6 +29,7 @@ const DEFAULTS: AppSettings = {
   autoBackupDir: "",
   autoBackupKeep: 10,
   autoBackupWebdav: false,
+  autoUpdate: true,
 };
 const info = (settings: Partial<AppSettings> = {}): SettingsInfo => ({
   settings: { ...DEFAULTS, ...settings },

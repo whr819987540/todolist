@@ -23,12 +23,15 @@ export const DATA = join(WORK, "data");
 /** 自动备份默认存在数据目录旁边的「数据目录名-backups」，测试数据的就在这里，不碰真实的备份目录 */
 export const BACKUPS = join(WORK, "data-backups");
 export const CDP_PORT = 9223;
+/** 测试版检查更新时连的本机假服务器（e2e/lib/updater.mjs）的端口 */
+export const UPDATE_PORT = 9231;
 export const VITE_URL = "http://localhost:1420";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 测试版的配置，盖在 tauri.conf.json 上：换 identifier、产品名，主窗口的 WebView2 打开远程调试端口（CDP）。
+ * 测试版的配置，盖在 tauri.conf.json 上：换 identifier、产品名，主窗口的 WebView2 打开远程调试端口（CDP），
+ * 检查更新时连本机的假服务器、认测试用的签名（e2e/updater/test.key，没有密码，只用来测试）。
  * 端口写在配置里，不用环境变量 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS：GitHub 的 Windows 机器上 WebView2 不认它。
  * 设了 additionalBrowserArgs 就不再带 wry 默认的参数，要一起写上；快速记录小窗在 lib.rs 里沿用主窗口的
  */
@@ -40,7 +43,12 @@ function testConfig() {
       ? { ...w, additionalBrowserArgs: `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=${CDP_PORT}` }
       : w,
   );
-  return { identifier: IDENTIFIER, productName: PRODUCT, app: { windows } };
+  const updater = {
+    pubkey: readFileSync(join(ROOT, "e2e", "updater", "test.key.pub"), "utf8").trim(),
+    endpoints: [`http://127.0.0.1:${UPDATE_PORT}/latest.json`],
+    dangerousInsecureTransportProtocol: true,
+  };
+  return { identifier: IDENTIFIER, productName: PRODUCT, app: { windows }, plugins: { updater } };
 }
 
 /** 构建测试版（增量构建，没改 Rust 代码时几秒） */

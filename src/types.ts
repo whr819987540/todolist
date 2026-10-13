@@ -224,6 +224,8 @@ export interface AppSettings {
   autoBackupKeep: number;
   /** 自动备份时同时上传到 WebDAV */
   autoBackupWebdav: boolean;
+  /** 启动后和每隔一段时间检查有没有新版本 */
+  autoUpdate: boolean;
 }
 
 export interface SettingsInfo {
@@ -333,6 +335,34 @@ export interface AutoBackupStatus {
   count: number;
   /** 这次运行期间最近一次自动备份的结果 */
   lastRun: AutoBackupRun | null;
+}
+
+/** 检查更新的结果（get_update_status、update-status 事件） */
+export interface UpdateStatus {
+  /** 正在用的版本 */
+  current: string;
+  /** 正在检查 */
+  checking: boolean;
+  /** 上次检查完的时间（毫秒时间戳），还没检查过时为 null */
+  checkedAt: number | null;
+  /** 上次检查失败的原因 */
+  error: string | null;
+  /** 检查到的新版本；之后哪次检查失败了也留着 */
+  available: { version: string; notes: string } | null;
+}
+
+/** 下载新版本的进度（update-progress 事件）；total 是安装包的大小，不知道时为 null */
+export interface UpdateProgress {
+  downloaded: number;
+  total: number | null;
+}
+
+/** 上次的更新装好了没有：刚更新完重新打开时给一次 */
+export interface UpdateOutcome {
+  from: string;
+  to: string;
+  /** 现在运行的就是要更新到的版本 */
+  done: boolean;
 }
 
 /** 导出成什么：HTML（一个文件，图片嵌在里面）或 PDF（WebView2 把同样的 HTML 打印出来） */

@@ -4,6 +4,7 @@ mod data_backup;
 mod export;
 mod settings;
 mod store;
+mod update;
 mod watch;
 mod webdav;
 
@@ -33,6 +34,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_updater::UpdaterExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 use watch::DataChanged;
 use webdav::{WebDav, WebDavConfig, WebDavInfo, WebDavStore};
@@ -1304,6 +1306,9 @@ fn restore_settings(app: &AppHandle, settings: &SettingsStore, mut next: Setting
     register_global_shortcuts(app, &next);
     // 自动备份的设置可能变了，马上检查一次
     app.state::<BackupJobs>().wake();
+    if next.auto_update {
+        app.state::<Updates>().wake();
+    }
     Ok(settings_info(settings))
 }
 
@@ -2041,6 +2046,233 @@ async fn reveal_exported(files: State<'_, ExportedFiles>, path: String) -> Cmd<(
     tauri_plugin_opener::reveal_item_in_dir(files.check(&path)?).map_err(|e| format!("无法打开资源管理器：{e}"))
 }
 
+// ----- 自动更新 -----
+
+/// 启动后多久第一次检查更新（不和启动抢时间），之后每隔多久检查一次（藏在托盘里也照常）
+const UPDATE_FIRST_CHECK: Duration = Duration::from_secs(10);
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// 检查、下载最多等多久（网络卡住时不一直挂着）
+const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// 检查更新的结果：设置里显示，主窗口据此提示（update-status 事件）
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateStatus {
+    /// 正在用的版本
+    current: String,
+    /// 正在检查
+    checking: bool,
+    /// 上次检查完的时间（毫秒时间戳），还没检查过时为 None
+    checked_at: Option<i64>,
+    /// 上次检查失败的原因
+    error: Option<String>,
+    /// 检查到的新版本；之后哪次检查失败了也留着
+    available: Option<AvailableUpdate>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AvailableUpdate {
+    version: String,
+    /// 更新说明（发布时写在 latest.json 里的）
+    notes: String,
+}
+
+/// 下载新版本的进度（update-progress 事件）
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateProgress {
+    downloaded: u64,
+    total: Option<u64>,
+}
+
+#[derive(Default)]
+struct Updates {
+    status: Mutex<UpdateStatus>,
+    /// 检查到的新版本（下载、安装用）
+    found: Mutex<Option<tauri_plugin_updater::Update>>,
+    /// 下载好、验过签名的安装包：版本号和内容
+    downloaded: Mutex<Option<(String, Vec<u8>)>>,
+    /// 叫醒定时检查的线程：打开「自动检查更新」时马上检查一次
+    waker: Mutex<Option<mpsc::Sender<()>>>,
+    /// 上次的更新装好了没有：启动时从标记文件读出来，前端取一次（take_update_outcome）
+    outcome: Mutex<Option<update::Outcome>>,
+}
+
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Updates {
+    fn new(current: String, outcome: Option<update::Outcome>) -> Self {
+        Self {
+            status: Mutex::new(UpdateStatus { current, ..Default::default() }),
+            outcome: Mutex::new(outcome),
+            ..Default::default()
+        }
+    }
+
+    /// 改检查的结果，发给主窗口
+    fn set_status(&self, app: &AppHandle, f: impl FnOnce(&mut UpdateStatus)) -> UpdateStatus {
+        let status = {
+            let mut s = locked(&self.status);
+            f(&mut s);
+            s.clone()
+        };
+        let _ = app.emit_to("main", "update-status", status.clone());
+        status
+    }
+
+    fn wake(&self) {
+        if let Some(tx) = locked(&self.waker).as_ref() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+/// 插件的错误换成给用户看的说明
+fn update_error(e: &tauri_plugin_updater::Error) -> String {
+    use tauri_plugin_updater::Error as E;
+    match e {
+        E::Reqwest(_) | E::Network(_) => format!("连不上更新服务器：{e}"),
+        E::ReleaseNotFound => "没能从更新服务器读到最新版本的信息".into(),
+        E::Minisign(_) | E::Base64(_) | E::SignatureUtf8(_) => {
+            "下载的安装包和签名对不上（可能下载出错或被改过），没有安装".into()
+        }
+        _ => e.to_string(),
+    }
+}
+
+/// 检查一次有没有新版本：结果记下来、发给主窗口；失败不弹窗，设置里显示原因
+async fn check_update_now(app: &AppHandle) -> UpdateStatus {
+    let updates = app.state::<Updates>();
+    updates.set_status(app, |s| s.checking = true);
+    let handle = app.clone();
+    let builder = app.updater_builder().timeout(UPDATE_CHECK_TIMEOUT);
+    let checked = match builder.on_before_exit(move || before_update_exit(&handle)).build() {
+        Ok(updater) => updater.check().await,
+        Err(e) => Err(e),
+    };
+    let mut found = locked(&updates.found);
+    updates.set_status(app, |s| {
+        s.checking = false;
+        s.checked_at = Some(Local::now().timestamp_millis());
+        match checked {
+            Ok(Some(u)) => {
+                s.error = None;
+                s.available = Some(AvailableUpdate { version: u.version.clone(), notes: u.body.clone().unwrap_or_default() });
+                *found = Some(u);
+            }
+            Ok(None) => {
+                s.error = None;
+                s.available = None;
+                *found = None;
+            }
+            Err(e) => s.error = Some(update_error(&e)),
+        }
+    })
+}
+
+/// 定时检查更新：启动后 UPDATE_FIRST_CHECK 检查一次，之后每 UPDATE_CHECK_EVERY 一次；关了「自动检查更新」时不检查
+fn start_update_checks(app: &AppHandle) {
+    let (tx, rx) = mpsc::channel();
+    *locked(&app.state::<Updates>().waker) = Some(tx);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let mut wait = UPDATE_FIRST_CHECK;
+        loop {
+            if let Err(RecvTimeoutError::Disconnected) = rx.recv_timeout(wait) {
+                return;
+            }
+            while rx.try_recv().is_ok() {}
+            if app.state::<SettingsStore>().get().auto_update {
+                tauri::async_runtime::block_on(check_update_now(&app));
+            }
+            wait = UPDATE_CHECK_EVERY;
+        }
+    });
+}
+
+/// 安装程序运行起来后插件直接结束进程（不经 RunEvent::Exit）：这里做正常退出时的收尾，记下窗口的大小位置、删掉导出用的临时文件
+fn before_update_exit(app: &AppHandle) {
+    let _ = app.save_window_state(window_state_flags());
+    keep_unshown_window_state(app);
+    remove_temp_htmls();
+}
+
+#[tauri::command]
+fn get_update_status(updates: State<'_, Updates>) -> UpdateStatus {
+    locked(&updates.status).clone()
+}
+
+/// 设置里的「检查更新」
+#[tauri::command]
+async fn check_update(app: AppHandle) -> UpdateStatus {
+    check_update_now(&app).await
+}
+
+/// 下载检查到的新版本、验签名，留着等 install_update；下载中发 update-progress（进度变了 1% 以上才发）
+#[tauri::command]
+async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()> {
+    let mut update = locked(&updates.found).clone().ok_or("没有检查到新版本，先检查更新")?;
+    if locked(&updates.downloaded).as_ref().is_some_and(|(v, _)| *v == update.version) {
+        return Ok(());
+    }
+    update.timeout = Some(UPDATE_DOWNLOAD_TIMEOUT);
+    let (mut done, mut sent) = (0u64, 0u64);
+    let bytes = update
+        .download(
+            |chunk, total| {
+                done += chunk as u64;
+                let step = total.map_or(256 * 1024, |t| (t / 100).max(1));
+                if done - sent >= step || total == Some(done) {
+                    sent = done;
+                    let _ = app.emit_to("main", "update-progress", UpdateProgress { downloaded: done, total });
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| update_error(&e))?;
+    *locked(&updates.downloaded) = Some((update.version.clone(), bytes));
+    Ok(())
+}
+
+/// 运行下载好的安装程序：先记下从哪个版本更新到哪个版本（下次启动时提示），插件运行安装程序后结束这个进程
+/// （之前 before_update_exit 做正常退出时的收尾），装好后安装程序重新打开软件。只有出错时才返回
+#[tauri::command]
+async fn install_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()> {
+    let update = locked(&updates.found).clone().ok_or("没有检查到新版本，先检查更新")?;
+    let bytes = match locked(&updates.downloaded).as_ref() {
+        Some((v, bytes)) if *v == update.version => bytes.clone(),
+        _ => return Err("新版本还没下载好".into()),
+    };
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    update::write_marker(&dir, &update::Marker { from: update.current_version.clone(), to: update.version.clone() })?;
+    let result = update.install(bytes);
+    // 走到这里说明安装程序没运行起来
+    update::remove_marker(&dir);
+    result.map_err(|e| format!("没能运行安装程序：{}", update_error(&e)))
+}
+
+#[tauri::command]
+fn set_auto_update(settings: State<'_, SettingsStore>, updates: State<'_, Updates>, enabled: bool) -> Cmd<SettingsInfo> {
+    let mut next = settings.get();
+    next.auto_update = enabled;
+    settings.save(next)?;
+    if enabled {
+        updates.wake();
+    }
+    Ok(settings_info(&settings))
+}
+
+/// 上次的更新装好了没有（只给一次）：刚更新完重新打开时提示
+#[tauri::command]
+fn take_update_outcome(updates: State<'_, Updates>) -> Option<update::Outcome> {
+    locked(&updates.outcome).take()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2069,6 +2301,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let store = Store::new(data_root(app)?)?;
             let root = store.root().to_path_buf();
@@ -2088,6 +2321,11 @@ pub fn run() {
             // 上次恢复待办数据时中途退出留下的临时文件夹：在开始监听、自动备份和前端读数据之前换回原来的数据（或做完收尾）
             app.manage(BackupJobs::with_recovered(data_backup::recover_leftovers(&app.state::<Store>())));
             app.manage(ExportedFiles::default());
+            // 上次运行时开始了更新：这次照常显示主窗口（开机自启只在托盘里时也是），提示装好了没有
+            let current = app.package_info().version.to_string();
+            let outcome = app.path().app_config_dir().ok().and_then(|d| update::take_outcome(&d, &current));
+            let just_updated = outcome.is_some();
+            app.manage(Updates::new(current, outcome));
             // 数据目录在外部变了（网盘同步、别的程序保存、在资源管理器里增删改名）时通知主窗口刷新。
             // 监听建不起来（数据目录在不支持变化通知的网络盘上等）时只在窗口获得焦点、F5 时刷新，不打扰用户
             let handle = app.handle().clone();
@@ -2100,6 +2338,7 @@ pub fn run() {
             }
             setup_tray(app)?;
             start_auto_backup(app.handle());
+            start_update_checks(app.handle());
             // 启动后过一会儿（不和主窗口抢启动时间）先把快速记录小窗建好，第一次按快捷键时不用等它加载；
             // 清掉以前导出 PDF 时留在临时文件夹里的临时文件；软件回收站里放了超过 30 天的移到系统回收站
             let handle = app.handle().clone();
@@ -2110,7 +2349,7 @@ pub fn run() {
                 quick_window(&handle);
             });
             // 主窗口一开始是隐藏的（tauri.conf.json 里 visible: false）：开机自启、设置了只在托盘里时不显示
-            let hidden = autostart::launched_at_login(std::env::args()) && settings_hidden;
+            let hidden = !just_updated && autostart::launched_at_login(std::env::args()) && settings_hidden;
             if let Some(w) = app.get_webview_window("main") {
                 #[cfg(windows)]
                 set_window_icons(&w);
@@ -2213,6 +2452,12 @@ pub fn run() {
             restore_data_from_file,
             restore_data_from_webdav,
             take_restore_recovery,
+            get_update_status,
+            check_update,
+            download_update,
+            install_update,
+            set_auto_update,
+            take_update_outcome,
             get_auto_backup_status,
             set_auto_backup,
             pick_backup_dir,

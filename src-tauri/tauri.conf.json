@@ -32,6 +32,17 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY1NDM1QjNDMUMzMzc5QzcKUldUSGVUTWNQRnREOWRVMTA0cDBMUDdEM2M2STBRMnZua0cyNzBhMFpkSmFRUWFJRU9aWDJvQ2oK",
+      "endpoints": [
+        "https://github.com/whr819987540/todolist/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": [

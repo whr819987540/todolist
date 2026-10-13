@@ -27,6 +27,8 @@ import type {
   ThemeMode,
   TodoDetail,
   TodoSummary,
+  UpdateOutcome,
+  UpdateStatus,
   WebDavConfig,
   WebDavInfo,
   WorkspaceInfo,
@@ -271,6 +273,20 @@ export const api = {
   /** 选备份目录的对话框，返回选中的文件夹；取消时返回 null */
   pickBackupDir: () => invoke<string | null>("pick_backup_dir"),
   openBackupDir: () => invoke<void>("open_backup_dir"),
+
+  // 自动更新
+
+  getUpdateStatus: () => invoke<UpdateStatus>("get_update_status"),
+  /** 马上检查一次（设置里的「检查更新」）；检查失败时不 reject，原因在返回的 error 里 */
+  checkUpdate: () => invoke<UpdateStatus>("check_update"),
+  /** 下载检查到的新版本并验签名，下载中发 update-progress；要经 update.tsx 的 startUpdate 调用 */
+  downloadUpdate: () => invoke<void>("download_update"),
+  /** 运行下载好的安装程序，软件随即退出（装好后重新打开）；只有出错时才返回（reject） */
+  installUpdate: () => invoke<void>("install_update"),
+  /** 打开时马上检查一次 */
+  setAutoUpdate: (enabled: boolean) => invoke<SettingsInfo>("set_auto_update", { enabled }),
+  /** 上次的更新装好了没有；只给一次 */
+  takeUpdateOutcome: () => invoke<UpdateOutcome | null>("take_update_outcome"),
 
   // 导出成 HTML / PDF
 

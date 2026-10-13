@@ -2490,6 +2490,37 @@ body.drag-moving .editor-tab-close {
 .auto-backup-status .error-text {
   word-break: break-all;
 }
+/* 更新：当前版本和「检查更新」一行，下面是检查的结果 */
+.update-row,
+.update-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.update-state {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--c-text-3);
+  word-break: break-all;
+}
+.update-state.error-text {
+  color: var(--c-error);
+}
+/* 右下角的新版本提示：更新说明较长时在框里滚动，保留换行 */
+.update-notes {
+  margin-top: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+.update-progress .ant-progress {
+  margin: 4px 0 0;
+}
+.update-error {
+  word-break: break-all;
+}
 /* 启动时提示上次恢复中途退出后怎么处理的：路径很长，随处折行 */
 .restore-recovery {
   word-break: break-all;

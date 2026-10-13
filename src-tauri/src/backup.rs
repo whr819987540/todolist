@@ -296,6 +296,7 @@ mod tests {
             auto_backup_dir: r"D:\备份".into(),
             auto_backup_keep: 30,
             auto_backup_webdav: true,
+            auto_update: false,
             ..Default::default()
         };
         let data = pack(&settings, time()).unwrap();
@@ -316,6 +317,8 @@ mod tests {
         assert_eq!(back.auto_backup_dir, r"D:\备份");
         assert_eq!(back.auto_backup_keep, 30);
         assert!(back.auto_backup_webdav);
+        // 自动检查更新也是
+        assert!(!back.auto_update);
         // 说明里写着是设置备份
         let mut zip = ZipArchive::new(Cursor::new(data)).unwrap();
         let m = read_manifest(&mut zip).unwrap().unwrap();
