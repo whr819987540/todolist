@@ -65,8 +65,17 @@ export async function connect(kind = "main") {
       pending.delete(m.id);
     }
   });
+  // 程序退出了（如自动更新运行了安装程序）、页面断开时，还在等的都当作没有结果（ev 返回 undefined），不一直等下去；
+  // 不 reject：退出程序时发的 quit-requested 没人等它的结果，reject 了会变成没处理的错误、让测试进程退出
+  let closed = false;
+  ws.addEventListener("close", () => {
+    closed = true;
+    for (const r of pending.values()) r({ closed: true });
+    pending.clear();
+  });
   const send = (method, params = {}) =>
     new Promise((r) => {
+      if (closed) return r({ closed: true });
       const i = ++id;
       pending.set(i, r);
       ws.send(JSON.stringify({ id: i, method, params }));

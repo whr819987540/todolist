@@ -60,7 +60,8 @@ export default async function (t) {
     await m().ev(`const v = view(); v.focus(); v.dispatch({ changes: { from: v.state.doc.length, insert: "更新前没存的一行\\n" } }); await sleep(200); return 1`);
     await m().invoke("check_update");
     check("又发布了更新的版本：再提示", !!(await t.until(async () => (await notice()).includes("发现新版本 99.1.0"))));
-    await clickIn(".update-now");
+    // 点了以后程序很快就退出：不等页面回话
+    await m().ev(`const e = await waitFor(() => document.querySelector(".update-now")); setTimeout(() => e?.click(), 50); return !!e`);
     const exited = await t.until(() => runningPids().length === 0, 20000);
     const args = (await t.until(() => existsSync(ARGS_FILE), 5000)) ? readFileSync(ARGS_FILE, "utf8") : "";
     check("「立即更新」：下载、验过签名后运行安装程序（被动模式、按更新安装），软件退出",
