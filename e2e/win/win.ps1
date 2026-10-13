@@ -1,5 +1,5 @@
 ﻿# 文件带 UTF-8 BOM：Windows PowerShell 5.1 读没有 BOM 的脚本时按系统的 ANSI 代码页（中文系统是 GBK）解码
-# 端到端测试用的 Windows 操作，都只针对测试版的进程（ProcId）或测试数据目录（DataDir），不碰别的程序：
+# 端到端测试用的 Windows 操作，都只针对测试版的进程（ProcId）或测试数据目录（DataDir），不碰别的程序（keys 除外）：
 #   windows     列出进程的顶层窗口：标题|可见|最大化|最小化|前台|扩展样式
 #   show        对标题为 Title 的窗口 ShowWindow(Cmd)：3 最大化、9 还原、6 最小化
 #   close       给标题为 Title 的窗口发 WM_CLOSE（等于点右上角的关闭按钮）
@@ -11,6 +11,9 @@
 #   undelete    还原回收站里从 DataDir 删掉的、名字是 Name 的（Name 为空时全部）
 #   taskbar     任务栏上名字里带 Name 的按钮
 #   lock        独占打开文件 Path（不让删、不让改名），占住 Hold 秒
+#   desktop     标题为 Title 的窗口在哪个虚拟桌面（IVirtualDesktopManager）：在不在当前桌面|桌面的 id；问不出来时 err|HRESULT
+#   desktops    现在有几个虚拟桌面（explorer 记在注册表里的 VirtualDesktopIDs，没有时算 1 个）
+#   keys        真的按下组合键 Keys（如 LWin,Ctrl,D：依次按下、倒着放开），送到系统，会动到整个桌面；只用来新建、切换、关掉虚拟桌面
 param(
   [string]$Action,
   [int]$ProcId = 0,
@@ -20,7 +23,8 @@ param(
   [int]$Hold = 0,
   [string]$DataDir = "",
   [string]$Name = "",
-  [string]$Path = ""
+  [string]$Path = "",
+  [string]$Keys = ""
 )
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $ProgressPreference = "SilentlyContinue"
@@ -30,6 +34,11 @@ using System;
 using System.Text;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+[ComImport, Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IVirtualDesktopManager {
+  [PreserveSig] int IsWindowOnCurrentVirtualDesktop(IntPtr h, out int onCurrent);
+  [PreserveSig] int GetWindowDesktopId(IntPtr h, out Guid id);
+}
 public class E2E {
   public delegate bool EnumProc(IntPtr h, IntPtr l);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
@@ -46,6 +55,7 @@ public class E2E {
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
   [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
 
   public static string Text(IntPtr h) { var s = new StringBuilder(256); GetWindowText(h, s, 256); return s.ToString(); }
   public static string Class(IntPtr h) { var s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
@@ -58,6 +68,15 @@ public class E2E {
   public static IntPtr Find(uint pid, string cls, string title) {
     foreach (var h in Windows(pid)) if (Class(h) == cls && (title == null || Text(h) == title)) return h;
     return IntPtr.Zero;
+  }
+  static IVirtualDesktopManager desktops;
+  /** 窗口在哪个虚拟桌面：在不在当前桌面|桌面的 id，问不出来时 err|HRESULT */
+  public static string Desktop(IntPtr h) {
+    if (desktops == null) desktops = (IVirtualDesktopManager)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("aa509086-5ca9-4c25-8f95-589d3c07b48a")));
+    int on; Guid id;
+    int hr = desktops.IsWindowOnCurrentVirtualDesktop(h, out on);
+    if (hr == 0) hr = desktops.GetWindowDesktopId(h, out id); else id = Guid.Empty;
+    return hr != 0 ? "err|0x" + hr.ToString("X8") : (on != 0) + "|" + id;
   }
 }
 "@
@@ -106,6 +125,20 @@ switch ($Action) {
     foreach ($e in $tray.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
       if ($e.Current.Name.Contains($Name)) { $e.Current.Name }
     }
+  }
+  "desktop" { [E2E]::Desktop((TauriWindow)) }
+  "desktops" {
+    $ids = (Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops" -Name VirtualDesktopIDs -ErrorAction SilentlyContinue).VirtualDesktopIDs
+    if ($ids) { $ids.Length / 16 } else { 1 }
+  }
+  "keys" {
+    $vk = @{ LWin = 0x5B; Ctrl = 0xA2; Left = 0x25; Right = 0x27; D = 0x44; F4 = 0x73 }
+    # Win 键和方向键是扩展键（KEYEVENTF_EXTENDEDKEY = 1），放开加 KEYEVENTF_KEYUP = 2
+    $ext = { param($k) if ($k -in "LWin", "Left", "Right") { 1 } else { 0 } }
+    $list = @($Keys -split ",")
+    foreach ($k in $list) { [E2E]::keybd_event($vk[$k], 0, (& $ext $k), [UIntPtr]::Zero); Start-Sleep -Milliseconds 30 }
+    [array]::Reverse($list)
+    foreach ($k in $list) { [E2E]::keybd_event($vk[$k], 0, 2 -bor (& $ext $k), [UIntPtr]::Zero); Start-Sleep -Milliseconds 30 }
   }
   "lock" {
     $f = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)

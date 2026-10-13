@@ -46,11 +46,13 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 ammonia = "4"
 base64 = "0.22"
 
-# 给窗口补设大图标（见 lib.rs set_window_icons）；启动时清理导出 PDF 的临时文件，看写它的进程还在不在（lib.rs process_running）
+# 给窗口补设大图标（见 lib.rs set_window_icons）；启动时清理导出 PDF 的临时文件，看写它的进程还在不在（lib.rs process_running）；
+# 读当前虚拟桌面时要这个进程的会话号（lib.rs current_desktop_ids）
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",
+  "Win32_System_RemoteDesktop",
   "Win32_System_Threading",
   "Win32_UI_HiDpi",
   "Win32_UI_WindowsAndMessaging",
@@ -60,6 +62,9 @@ windows-registry = "0.6"
 # 导出 PDF：用 WebView2 的 PrintToPdf（lib.rs print_pdf），版本和 Tauri（wry）用的一致
 webview2-com = "0.38"
 windows-core = "0.61"
+# 主窗口在别的虚拟桌面上时挪到当前桌面（lib.rs move_to_current_desktop）：IVirtualDesktopManager；
+# 版本和 Tauri 用的一致，WebviewWindow::hwnd() 给的 HWND 才是同一个类型
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

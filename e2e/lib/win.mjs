@@ -1,5 +1,6 @@
-// 端到端测试里的 Windows 操作（窗口状态、全局快捷键、注册表、回收站、任务栏、占用文件），都经 PowerShell 调 Win32 API。
-// 只针对测试版的进程和测试数据目录，不碰别的程序；模拟快捷键是直接给测试版发 WM_HOTKEY，不经过键盘
+// 端到端测试里的 Windows 操作（窗口状态、全局快捷键、注册表、回收站、任务栏、占用文件、虚拟桌面），都经 PowerShell 调 Win32 API。
+// 只针对测试版的进程和测试数据目录，不碰别的程序；模拟快捷键是直接给测试版发 WM_HOTKEY，不经过键盘。
+// 例外是虚拟桌面：只能用真的按键（Ctrl+Win+D 等）新建、切换、关掉，用到它的套件自己收拾好
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -71,6 +72,16 @@ function holdWith(action, params, ready) {
     child.on("close", () => reject(new Error(`${action} 没有成功：${out.trim()}`)));
   });
 }
+
+/** 窗口在哪个虚拟桌面：{ current: 在不在当前桌面, id: 桌面的 id }，问不出来时 { error } */
+export function desktopOf(pid, title = MAIN_TITLE) {
+  const [a, b] = win("desktop", { ProcId: pid, Title: title }).split("|");
+  return a === "err" ? { error: b } : { current: a === "True", id: b };
+}
+/** 现在有几个虚拟桌面 */
+export const desktopCount = () => Number(win("desktops"));
+/** 真的按下组合键（如 ["LWin", "Ctrl", "D"]），送到系统、会动到整个桌面：只用来新建、切换、关掉虚拟桌面 */
+export const pressKeys = (keys) => win("keys", { Keys: keys.join(",") });
 
 /** Windows 回收站里从 dataDir 删掉的东西：[{ name, from }]（不列用户自己删的） */
 export const recycleBin = (dataDir) =>

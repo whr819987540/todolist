@@ -740,8 +740,108 @@ fn with_window_state(text: Option<&str>, label: &str, state: serde_json::Value) 
     serde_json::to_string_pretty(&all).ok()
 }
 
-/// 把主窗口从托盘 / 最小化状态调回前台；藏在托盘里时数据目录有变化的，这时让它刷新
+/// 把主窗口从托盘 / 最小化状态调回前台；藏在托盘里时数据目录有变化的，这时让它刷新。
+/// 开着的主窗口可能在别的虚拟桌面上：先挪到当前桌面（move_to_current_desktop）再调到前台，在后台线程里做
 fn show_main_window(app: &AppHandle) {
+    #[cfg(windows)]
+    {
+        if app.get_webview_window("main").is_some_and(|w| w.is_visible().unwrap_or(false)) {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                if let Some(w) = app.get_webview_window("main") {
+                    move_to_current_desktop(&w);
+                }
+                present_main_window(&app);
+            });
+            return;
+        }
+    }
+    present_main_window(app);
+}
+
+/// 主窗口开着、但在别的虚拟桌面上（用户切到了另一个桌面，在那里按快捷键、点托盘图标调它）：直接调到前台的话，
+/// Windows 会把用户切回窗口所在的桌面，所以先把它挪到当前桌面。
+/// 用 IVirtualDesktopManager（有文档的接口）的 MoveWindowToDesktop 挪，挪完再问一次是不是到了当前桌面；当前桌面的 id
+/// 没有公开的接口能问，读 explorer 记在注册表里的（current_desktop_ids）。读不到、挪不过去时退回藏起来再显示：
+/// 窗口藏起来时 explorer 马上把它从原来的桌面上拿掉，再显示出来就放在当前桌面上（同从托盘里调出来时）。只当退路：
+/// 在 GitHub 的 Windows Server 2025 上，主窗口刚在桌面 1 上用过、切到新建的空桌面 2 后这样做，用户仍被切回了桌面 1（原因不明；
+/// 最小化着的、藏在托盘里的没有这个问题）。
+/// 藏、显示直接调 ShowWindow，不经 tao 的 hide / show：tao 隐藏最大化的窗口前先 ShowWindow(SW_MAXIMIZE)，会激活它、把用户切过去；
+/// 藏起来又显示出来，tao 记着的「可见」前后一样，不用让它知道。
+/// 都是到 explorer 的跨进程 COM 调用，只在后台线程里调：在主线程上等回话时主线程会被重入（Chromium 同样放在别的线程上做）
+#[cfg(windows)]
+fn move_to_current_desktop(w: &WebviewWindow) {
+    use std::time::Instant;
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED};
+    use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SHOW_WINDOW_CMD, SW_HIDE, SW_SHOWNA};
+
+    let Ok(hwnd) = w.hwnd() else { return };
+    // HWND 是裸指针，不能直接带进主线程上执行的闭包
+    let raw = hwnd.0 as isize;
+    let show = |cmd: SHOW_WINDOW_CMD| {
+        let _ = w.run_on_main_thread(move || unsafe {
+            ShowWindow(raw as windows_sys::Win32::Foundation::HWND, cmd);
+        });
+    };
+    unsafe {
+        if CoInitializeEx(None, COINIT_MULTITHREADED).is_err() {
+            return;
+        }
+        let desktops: windows::core::Result<IVirtualDesktopManager> =
+            CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL);
+        if let Ok(desktops) = desktops {
+            let here = || desktops.IsWindowOnCurrentVirtualDesktop(hwnd).map(|on| on.as_bool());
+            // 问不出来（explorer 没在运行等）时当在当前桌面上，照常调到前台
+            if here().is_ok_and(|on| !on)
+                && !current_desktop_ids()
+                    .iter()
+                    .any(|id| desktops.MoveWindowToDesktop(hwnd, id).is_ok() && here().is_ok_and(|on| on))
+            {
+                let old = desktops.GetWindowDesktopId(hwnd).ok();
+                show(SW_HIDE);
+                // 等 explorer 把它从原来的桌面上拿掉（问不出它在原来的桌面上了）再显示，还没拿掉就显示的话仍在原来的桌面上；
+                // 一般几毫秒，最多等 0.5 秒
+                let deadline = Instant::now() + Duration::from_millis(500);
+                while Instant::now() < deadline && desktops.GetWindowDesktopId(hwnd).ok() == old {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                show(SW_SHOWNA);
+            }
+        }
+        CoUninitialize();
+    }
+}
+
+/// explorer 记在注册表里的当前虚拟桌面的 id：Windows 11 记在 Explorer\VirtualDesktops，
+/// Windows 10 记在 Explorer\SessionInfo\{会话}\VirtualDesktops。都列出来，由用的地方挨个试
+#[cfg(windows)]
+fn current_desktop_ids() -> Vec<windows::core::GUID> {
+    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+
+    const EXPLORER: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer";
+    let mut keys = vec![format!(r"{EXPLORER}\VirtualDesktops")];
+    let mut session = 0;
+    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) } != 0 {
+        keys.push(format!(r"{EXPLORER}\SessionInfo\{session}\VirtualDesktops"));
+    }
+    keys.iter()
+        .filter_map(|k| {
+            let v = windows_registry::CURRENT_USER.open(k).ok()?.get_value("CurrentVirtualDesktop").ok()?;
+            // GUID 结构按内存里的样子存：前三段是小端
+            let b: [u8; 16] = v[..].try_into().ok()?;
+            Some(windows::core::GUID::from_values(
+                u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+                u16::from_le_bytes([b[4], b[5]]),
+                u16::from_le_bytes([b[6], b[7]]),
+                [b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]],
+            ))
+        })
+        .collect()
+}
+
+fn present_main_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if hidden_at_start().take().is_some() {
             let _ = w.restore_state(StateFlags::MAXIMIZED);
