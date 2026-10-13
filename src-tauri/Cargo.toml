@@ -1,6 +1,6 @@
 [package]
 name = "todo-list"
-version = "0.1.0"
+version = "0.1.1"
 description = "待办清单 - 工作区 / 项目 / 待办三级管理"
 authors = ["whr819987540"]
 edition = "2021"
