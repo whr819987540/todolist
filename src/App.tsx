@@ -170,7 +170,7 @@ export default function App() {
       api.holdQuit().catch(() => {});
       const r = await flushBeforeQuit();
       if (r === "saved") return api.quitApp();
-      api.cancelQuit().catch(() => {});
+      api.showMain().catch(() => {});
       modalRef.current.confirm({
         title: r === "failed" ? "有修改没能保存" : "还没保存完",
         content:

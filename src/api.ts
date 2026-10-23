@@ -205,8 +205,11 @@ export const api = {
   quitApp: () => invoke<void>("quit_app"),
   /** 收到退出请求、开始存盘：Rust 端这一次不再强制退出，存好后调 quitApp */
   holdQuit: () => invoke<void>("hold_quit"),
-  /** 有修改存不下来，这次不退出：把主窗口调出来 */
-  cancelQuit: () => invoke<void>("cancel_quit"),
+  /**
+   * 把主窗口调出来（藏在托盘里、最小化、在别的虚拟桌面上时都行，同 Rust 端的 show_main_window）：退出、更新前有修改
+   * 存不下来时先调出来再问用户
+   */
+  showMain: () => invoke<void>("show_main"),
 
   getSettings: () => invoke<SettingsInfo>("get_settings"),
   /** shortcut 为 null 表示不使用 */

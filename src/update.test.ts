@@ -29,6 +29,7 @@ const mocked = vi.hoisted(() => ({
     takeUpdateOutcome: vi.fn(async () => null),
     downloadUpdate: vi.fn(async () => {}),
     installUpdate: vi.fn(async () => {}),
+    showMain: vi.fn(async () => {}),
   },
   flushBeforeQuit: vi.fn(),
 }));
@@ -105,8 +106,8 @@ describe("更新前有修改没存好", () => {
   });
 });
 
-// docs/requirements.md「自动更新 → 立即更新」：下载好后保存打开着的待办，另存也失败、10 秒内没存完时问是否仍要更新，
-// 不更新时回到发现新版本的提示（之前点过「以后再说」的也是）
+// docs/requirements.md「自动更新 → 立即更新」：下载好后保存打开着的待办，另存也失败、10 秒内没存完时问是否仍要更新
+// （主窗口藏在托盘里时先调出来），不更新时回到发现新版本的提示（之前点过「以后再说」的也是）
 describe("「立即更新」时打开着的待办没存好", () => {
   let unmount = () => {};
   beforeEach(async () => {
@@ -179,5 +180,20 @@ describe("「立即更新」时打开着的待办没存好", () => {
     await click(confirmButton("先不更新"));
     expect(await until(() => prompting("0.1.4"))).toBe(true);
     expect(mocked.api.installUpdate).not.toHaveBeenCalled();
+  });
+
+  it("问之前先调出主窗口（可能藏在托盘里），同从托盘退出时存不上", async () => {
+    await found("0.1.5");
+    let askedBeforeShown = true;
+    mocked.api.showMain.mockImplementationOnce(async () => {
+      askedBeforeShown = !!confirmButton("先不更新");
+    });
+    mocked.flushBeforeQuit.mockResolvedValue("failed");
+    await act(async () => startUpdate());
+    expect(await until(() => !!confirmButton("先不更新"))).toBe(true);
+    expect(mocked.api.showMain).toHaveBeenCalledTimes(1);
+    expect(askedBeforeShown).toBe(false);
+    await click(confirmButton("先不更新"));
+    expect(await until(() => prompting("0.1.5"))).toBe(true);
   });
 });

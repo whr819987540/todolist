@@ -147,9 +147,13 @@ export function useUpdatePrompt() {
       });
     };
 
-    /** 有修改没存好时问还更不更新 */
-    const confirmUnsaved = (r: Exclude<QuitFlush, "saved">) =>
-      new Promise<boolean>((resolve) => {
+    /**
+     * 有修改没存好时问还更不更新。主窗口可能藏在托盘里（点了「立即更新」后，下载时关到了托盘）：先调出来再问，
+     * 同从托盘退出时存不上（App.tsx 的 quit），不然确认框弹在看不见的窗口里，更新停在那里
+     */
+    const confirmUnsaved = async (r: Exclude<QuitFlush, "saved">) => {
+      await api.showMain().catch(() => {});
+      return new Promise<boolean>((resolve) => {
         const { title, content } = unsavedWarning(r);
         apis.current.modal.confirm({
           title,
@@ -161,6 +165,7 @@ export function useUpdatePrompt() {
           onCancel: () => resolve(false),
         });
       });
+    };
 
     async function run() {
       if (busy) return;

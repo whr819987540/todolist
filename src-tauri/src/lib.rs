@@ -506,15 +506,16 @@ static QUIT_REQUESTS: AtomicU64 = AtomicU64::new(0);
 /// 前端已经收到、接手了的那一次（hold_quit）：这一次不再强制退出
 static QUIT_HELD: AtomicU64 = AtomicU64::new(0);
 
-/// 前端收到退出请求、开始存盘时调用：由前端存好后调 quit_app；有存不下来的修改时不退出，问用户（cancel_quit）
+/// 前端收到退出请求、开始存盘时调用：由前端存好后调 quit_app；有存不下来的修改时不退出，调出主窗口问用户（show_main）
 #[tauri::command]
 fn hold_quit() {
     QUIT_HELD.store(QUIT_REQUESTS.load(Ordering::SeqCst), Ordering::SeqCst);
 }
 
-/// 退出前有修改存不下来（或一直没存完），这次不退出：把主窗口调出来，让用户看到提示、决定还退不退
+/// 把主窗口调出来（藏在托盘里、最小化、在别的虚拟桌面上时都行，同 show_main_window）：从托盘退出、自动更新前
+/// 有修改存不下来（或一直没存完）时，先调出来再问用户还退不退、还更不更新，不然对话框弹在看不见的窗口里
 #[tauri::command]
-fn cancel_quit(app: AppHandle) {
+fn show_main(app: AppHandle) {
     show_main_window(&app);
 }
 
@@ -2449,7 +2450,7 @@ pub fn run() {
             open_url,
             quit_app,
             hold_quit,
-            cancel_quit,
+            show_main,
             get_settings,
             set_shortcut,
             set_edit_shortcuts,

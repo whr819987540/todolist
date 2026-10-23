@@ -1,7 +1,8 @@
 // 自动更新：测试版连本机的假更新服务器（e2e/lib/updater.mjs），「安装程序」是测试时编出来的小程序，只记下收到的命令行。
-// 启动后自动检查、右下角提示、「以后再说」、设置里检查更新；签名对不上时不安装；打开着的待办存不上时问还更不更新，
-// 「先不更新」回到发现新版本的提示（点过「以后再说」、从设置里点的也是）；「立即更新」时先保存打开着的待办，
-// 运行安装程序后软件退出；再打开时提示装好了没有（开机自启只在托盘里时也显示主窗口）；关掉自动检查后启动时不检查
+// 启动后自动检查、右下角提示、「以后再说」、设置里检查更新；签名对不上时不安装；打开着的待办存不上时问还更不更新
+// （主窗口藏在托盘里时先调出来），「先不更新」回到发现新版本的提示（点过「以后再说」、从设置里点的也是）；
+// 「立即更新」时先保存打开着的待办，运行安装程序后软件退出；再打开时提示装好了没有（开机自启只在托盘里时也显示主窗口）；
+// 关掉自动检查后启动时不检查
 import { existsSync, readFileSync } from "node:fs";
 import { runningPids } from "../lib/app.mjs";
 import { appVersion, ARGS_FILE, MARKER, resetUpdateTraces, startUpdateServer, writeMarker } from "../lib/updater.mjs";
@@ -107,6 +108,17 @@ export default async function (t) {
     check("点过「以后再说」、从设置里点「立即更新」：「先不更新」后也回到发现新版本的提示",
       askedAgain === "有修改没能保存" && !!(await t.until(() => prompting("99.0.5"))), { askedAgain, notice: await notice() });
     await m().closeModal();
+
+    // 点了「立即更新」后把主窗口关到了托盘（这里先关再点）：先调出主窗口再问，不然确认框弹在看不见的窗口里、更新停在那里
+    win.close();
+    const hidden = await t.until(() => win.windows().main?.visible === false);
+    await clickIn(".update-now");
+    const askedHidden = await unsavedAsked();
+    const shownWhenAsked = await t.until(() => win.windows().main?.visible === true);
+    check("主窗口藏在托盘里时存不上：先调出主窗口，再问还更不更新",
+      hidden && askedHidden === "有修改没能保存" && shownWhenAsked, { hidden, askedHidden, main: win.windows().main });
+    await decline();
+    check("调出来后选「先不更新」：同样回到发现新版本的提示", !!(await t.until(() => prompting("99.0.5"))), await notice());
     await failSaving(false);
 
     // 立即更新：先保存打开着的待办（没开 auto save 也存），运行安装程序，软件退出
