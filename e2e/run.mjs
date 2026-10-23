@@ -68,6 +68,8 @@ const FOREGROUND_LOCKED =
 let lastSkipReason = "";
 let failed = 0;
 let current = "";
+/** 主窗口的页面断开了，却不是测试让测试版退出的 */
+const EXITED_ITSELF = "测试版自己退出了（主窗口的页面断开了），多半是崩溃了";
 
 /** 交给套件的上下文 */
 function makeContext() {
@@ -138,10 +140,15 @@ function makeContext() {
       runEntryOf: win.runEntry,
     },
     exe: app.EXE,
-    /** 退出测试版：和托盘「退出」一样先让页面存盘（quit-requested），等进程结束；没结束就强制结束 */
+    /**
+     * 退出测试版：和托盘「退出」一样先让页面存盘（quit-requested），等进程结束；没结束就强制结束。
+     * 主窗口的页面这时已经断开了的，是测试版自己退出了（崩溃了）：照样收拾好，再抛错。
+     * 故意让它退出的（如 update 套件点「立即更新」）先把 t.main 设成 null
+     */
     async quit() {
       t._quick?.close();
       t._quick = null;
+      const exitedItself = !!t.main?.closed;
       if (t.main) {
         t.main.send("Runtime.evaluate", { expression: `window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "quit-requested", payload: null })` });
         await sleep(300);
@@ -150,6 +157,7 @@ function makeContext() {
       }
       if (!(await app.waitExit(8000))) app.killLeftovers();
       await app.waitExit(3000);
+      if (exitedItself) throw new Error(EXITED_ITSELF);
     },
     /** 重新启动测试版：fresh 时先重建测试数据（settings 盖在默认的测试设置上）；args 是命令行参数；onSpawn 见 app.launch */
     async restart({ fresh = false, settings = {}, args = [], onSpawn } = {}) {
@@ -185,11 +193,15 @@ async function main() {
         // 套件可以导出 settings，盖在测试数据默认的设置上（fixtures.mjs）
         await t.restart({ fresh: true, settings: suite.settings });
         await suite.default(t);
+        // 套件最后一次用页面之后测试版自己退出（崩溃）了：后面只看文件、窗口的检查可能照样通过，算这个套件没通过
+        if (t.main?.closed) throw new Error(EXITED_ITSELF);
       } catch (e) {
         failed++;
         results.push({ suite: name, name: "（出错中断）", ok: false });
         console.log(`  ✗ 出错中断：${e.stack ?? e}`);
         await t.main?.viewport(0).catch(() => {});
+        // 测试版已经自己退出了的，这里报过了：下一个套件启动前退出它时不再报一次
+        if (t.main?.closed) t.main = null;
       }
     }
   } finally {

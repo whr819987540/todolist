@@ -45,12 +45,16 @@ const WATCH_STOP = `return window.__e2e.stopWatch?.() ?? ""`;
  * - ev(code)：在页面里执行一段 async 函数体（可以用 page.mjs 里的工具函数），返回 return 的值
  * - press("Ctrl+Shift+F")、type(text)：真实的按键、输入；press(combo, { repeat: 5 }) 是按住不放
  * - click(p, { ctrl, shift, right })、drag：鼠标
+ * - send(method, params)：直接发一条 CDP 命令，返回回话；页面断开了时给 { closed: true }，不抛错
+ * - closed：页面断开了没有（程序退出了、崩溃了）
+ * 页面断开以后，ev（连同 invoke、toast 等靠它取值的）、press、type、click、drag 等都抛错，只有 send 不抛错
  */
 export async function connect(kind = "main") {
+  const name = kind === "quick" ? "快速记录小窗" : "主窗口";
   const targets = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
   // 只认 Vite 上的页面：导出 PDF 时还有一个看不见的窗口开着本地的 HTML
   const page = targets.find((t) => t.type === "page" && t.url.startsWith(VITE_URL) && (kind === "quick") === t.url.includes("quick.html"));
-  if (!page) throw new Error(`找不到${kind === "quick" ? "快速记录小窗" : "主窗口"}的页面`);
+  if (!page) throw new Error(`找不到${name}的页面`);
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((r, j) => {
     ws.addEventListener("open", r, { once: true });
@@ -65,8 +69,10 @@ export async function connect(kind = "main") {
       pending.delete(m.id);
     }
   });
-  // 程序退出了（如自动更新运行了安装程序）、页面断开时，还在等的都当作没有结果（ev 返回 undefined），不一直等下去；
-  // 不 reject：退出程序时发的 quit-requested 没人等它的结果，reject 了会变成没处理的错误、让测试进程退出
+  // 程序退出了（如自动更新运行了安装程序、崩溃了）、页面断开时，还在等回话的和之后发的都马上结束，不一直等下去。
+  // send 给 { closed: true }、不 reject：退出测试版时发的 quit-requested 没人等它的结果，reject 了会变成没处理的错误、
+  // 让测试进程退出。别的都经 call 发，这时抛错：当作没有结果的话，「没有提示」这类否定的检查会当作通过；
+  // 按键、点击什么都没做时，后面只看文件、窗口的检查也可能通过
   let closed = false;
   ws.addEventListener("close", () => {
     closed = true;
@@ -80,9 +86,14 @@ export async function connect(kind = "main") {
       pending.set(i, r);
       ws.send(JSON.stringify({ id: i, method, params }));
     });
+  const call = async (method, params) => {
+    const r = await send(method, params);
+    if (r.closed) throw new Error(`${name}的页面断开了（测试版退出了或崩溃了）：${method} 没等到回话`);
+    return r;
+  };
 
   const ev = async (code) => {
-    const r = await send("Runtime.evaluate", {
+    const r = await call("Runtime.evaluate", {
       expression: `(async () => { ${PRELUDE}\n${code} })()`,
       awaitPromise: true,
       returnByValue: true,
@@ -111,15 +122,15 @@ export async function connect(kind = "main") {
     const down = k === "Enter" && !alt ? { type: "keyDown", ...base, text: "\r", unmodifiedText: "\r" } : { type: "rawKeyDown", ...base };
     for (let i = 0; i <= repeat; i++) {
       if (i) await sleep(i === 1 ? 250 : 35);
-      await send("Input.dispatchKeyEvent", { ...down, autoRepeat: i > 0 });
-      if (!ctrl && !alt && key.length === 1) await send("Input.dispatchKeyEvent", { type: "char", ...base, text: key, autoRepeat: i > 0 });
+      await call("Input.dispatchKeyEvent", { ...down, autoRepeat: i > 0 });
+      if (!ctrl && !alt && key.length === 1) await call("Input.dispatchKeyEvent", { type: "char", ...base, text: key, autoRepeat: i > 0 });
     }
-    await send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+    await call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
     await sleep(80);
   };
-  const type = (text) => send("Input.insertText", { text });
+  const type = (text) => call("Input.insertText", { text });
 
-  const mouse = (type, p, extra = {}) => send("Input.dispatchMouseEvent", { type, x: p.x, y: p.y, ...extra });
+  const mouse = (type, p, extra = {}) => call("Input.dispatchMouseEvent", { type, x: p.x, y: p.y, ...extra });
   const click = async (p, { ctrl = false, shift = false, right = false } = {}) => {
     const modifiers = (ctrl ? 2 : 0) | (shift ? 8 : 0);
     const button = right ? "right" : "left";
@@ -194,16 +205,19 @@ export async function connect(kind = "main") {
   const closeModal = () => ev(`document.querySelector(".ant-modal-close")?.click(); await sleep(300); return 1`);
   /** 刷新页面（相当于重新打开窗口，不重启程序） */
   const reload = async () => {
-    await send("Page.reload");
+    await call("Page.reload");
     await sleep(2500);
   };
   /** 把页面视口设大一些：窗口小的时候展开几个工作区后，要拖到的行在侧栏可见区域外面 */
   const viewport = (width, height) =>
-    width ? send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }) : send("Emulation.clearDeviceMetricsOverride");
+    width ? call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }) : call("Emulation.clearDeviceMetricsOverride");
 
   return {
     send, ev, press, type, mouse, click, drag, drop, at, toast, clearToasts, invoke, emit,
     enter, selectAllWorkspaces, expandAll, openSettings, closeModal, reload, viewport,
+    get closed() {
+      return closed;
+    },
     close: () => ws.close(),
   };
 }
