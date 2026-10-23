@@ -203,6 +203,9 @@ export function useUpdatePrompt() {
       showStep(version, "正在保存打开着的待办…");
       const saved = await flushBeforeQuit();
       if (saved !== "saved" && !(await confirmUnsaved(saved))) {
+        // 先不更新：回到发现新版本的提示。用户刚刚自己点了更新，之前点过「以后再说」的这个版本也提示，
+        // 不然「正在保存打开着的待办…」（关不掉）一直留在右下角
+        dismissed.delete(version);
         busy = false;
         prompt(status);
         return;

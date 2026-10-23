@@ -1,6 +1,42 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment happy-dom
+import { App as AntApp } from "antd";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "./types";
-import { outcomeMessage, progressPercent, progressText, shouldPrompt, unsavedWarning, updateStateText } from "./update";
+import {
+  outcomeMessage,
+  progressPercent,
+  progressText,
+  shouldPrompt,
+  startUpdate,
+  unsavedWarning,
+  updateStateText,
+  useUpdatePrompt,
+} from "./update";
+
+// 「立即更新」的流程（useUpdatePrompt）用的 Rust 端命令、事件和退出前写盘换成假的：事件记下回调，用例里直接调
+const tauri = vi.hoisted(() => ({ events: new Map<string, (e: { payload: unknown }) => void>() }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: async (name: string, cb: (e: { payload: unknown }) => void) => {
+    tauri.events.set(name, cb);
+    return () => tauri.events.delete(name);
+  },
+}));
+const mocked = vi.hoisted(() => ({
+  api: {
+    getUpdateStatus: vi.fn(),
+    takeUpdateOutcome: vi.fn(async () => null),
+    downloadUpdate: vi.fn(async () => {}),
+    installUpdate: vi.fn(async () => {}),
+  },
+  flushBeforeQuit: vi.fn(),
+}));
+vi.mock("./api", () => ({ api: mocked.api, errMsg: (e: unknown) => String(e) }));
+vi.mock("./hooks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./hooks")>()),
+  flushBeforeQuit: mocked.flushBeforeQuit,
+}));
 
 const status = (patch: Partial<UpdateStatus> = {}): UpdateStatus => ({
   current: "0.1.2",
@@ -66,5 +102,82 @@ describe("更新前有修改没存好", () => {
       content: "正在编辑的待办里有修改没能保存下来（见上方的提示），现在更新会丢掉这些修改。",
     });
     expect(unsavedWarning("timeout").content).toBe("正在编辑的内容 10 秒内没有保存完，现在更新可能丢掉还没保存的修改。");
+  });
+});
+
+// docs/requirements.md「自动更新 → 立即更新」：下载好后保存打开着的待办，另存也失败、10 秒内没存完时问是否仍要更新，
+// 不更新时回到发现新版本的提示（之前点过「以后再说」的也是）
+describe("「立即更新」时打开着的待办没存好", () => {
+  let unmount = () => {};
+  beforeEach(async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    // 打开时还没检查到新版本
+    mocked.api.getUpdateStatus.mockResolvedValue(status());
+    function Probe() {
+      useUpdatePrompt();
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(createElement(AntApp, null, createElement(Probe))));
+    unmount = () => act(() => root.unmount());
+  });
+  afterEach(() => {
+    unmount();
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+  });
+
+  /** 等到 fn() 为真（让 React、antd 的提示渲染完），最多 ms 毫秒；返回最后一次的结果 */
+  async function until(fn: () => boolean, ms = 2000) {
+    const end = Date.now() + ms;
+    while (!fn() && Date.now() < end) await act(() => new Promise((r) => setTimeout(r, 20)));
+    return fn();
+  }
+  /** 右下角的提示（关掉了的还在淡出，不算） */
+  const notice = () => [...document.querySelectorAll(".update-notice:not(.ant-notification-fade-leave)")];
+  /** 右下角是发现新版本 version 的提示，有「立即更新」「以后再说」 */
+  const prompting = (version: string) =>
+    notice().length === 1 &&
+    !!notice()[0].textContent?.includes(`发现新版本 ${version}`) &&
+    !!notice()[0].querySelector(".update-now") &&
+    !!notice()[0].querySelector(".update-later");
+  const confirmTitle = () => document.querySelector(".ant-modal-confirm-title")?.textContent ?? "";
+  const click = (el: Element | null | undefined) => act(async () => (el as HTMLElement).click());
+  const confirmButton = (text: string) =>
+    [...document.querySelectorAll(".ant-modal-confirm-btns button")].find((b) => b.textContent?.replace(/\s/g, "") === text);
+  /** 检查到了新版本 version：同 Rust 端检查完发的 update-status */
+  const found = async (version: string) => {
+    const s = status({ available: { version, notes: "" } });
+    mocked.api.getUpdateStatus.mockResolvedValue(s);
+    await act(async () => tauri.events.get("update-status")?.({ payload: s }));
+    return s;
+  };
+
+  it("另存也失败：问是否仍要更新，选「先不更新」时不安装，回到发现新版本的提示", async () => {
+    await found("0.1.3");
+    expect(await until(() => prompting("0.1.3"))).toBe(true);
+    mocked.flushBeforeQuit.mockResolvedValue("failed");
+    await click(notice()[0].querySelector(".update-now"));
+    expect(await until(() => !!confirmButton("先不更新"))).toBe(true);
+    expect(confirmTitle()).toBe("有修改没能保存");
+    await click(confirmButton("先不更新"));
+    expect(await until(() => prompting("0.1.3"))).toBe(true);
+    expect(mocked.api.installUpdate).not.toHaveBeenCalled();
+  });
+
+  it("点过「以后再说」、再从设置里点「立即更新」，10 秒内没存完时选「先不更新」：也回到发现新版本的提示", async () => {
+    await found("0.1.4");
+    expect(await until(() => prompting("0.1.4"))).toBe(true);
+    await click(notice()[0].querySelector(".update-later"));
+    // 点了「以后再说」的版本再检查到时不提示
+    await found("0.1.4");
+    expect(await until(() => notice().length === 0)).toBe(true);
+    mocked.flushBeforeQuit.mockResolvedValue("timeout");
+    await act(async () => startUpdate());
+    expect(await until(() => !!confirmButton("先不更新"))).toBe(true);
+    expect(confirmTitle()).toBe("还没保存完");
+    await click(confirmButton("先不更新"));
+    expect(await until(() => prompting("0.1.4"))).toBe(true);
+    expect(mocked.api.installUpdate).not.toHaveBeenCalled();
   });
 });
