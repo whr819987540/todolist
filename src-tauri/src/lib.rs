@@ -906,13 +906,16 @@ fn request_quit(app: &AppHandle) {
     });
 }
 
+/// 托盘图标的 id
+const TRAY: &str = "main";
+
 /// 托盘图标：左键单击显示主窗口，右键菜单「显示主窗口 / 退出」
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
     let quick = MenuItem::with_id(app, "quick", "快速记录", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quick, &PredefinedMenuItem::separator(app)?, &quit])?;
-    let mut tray = TrayIconBuilder::with_id("main")
+    let mut tray = TrayIconBuilder::with_id(TRAY)
         .tooltip("待办清单")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -937,6 +940,15 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     }
     tray.build(app)?;
     Ok(())
+}
+
+/// 藏起 / 显示回托盘图标（更新退出时用，见 before_update_exit）。tray-icon 在 Windows 上是给通知区里的这个图标加上 / 去掉
+/// NIS_HIDDEN（NIM_MODIFY），不删掉它：显示回来的还是原来那个，图标、提示文字不用重设，菜单在本进程里，也不变。
+/// TrayIcon 的方法转到主线程上执行、等它做完：在别的线程里调用时，不能拿着主线程上也要用的锁
+fn set_tray_visible(app: &AppHandle, visible: bool) {
+    if let Some(tray) = app.tray_by_id(TRAY) {
+        let _ = tray.set_visible(visible);
+    }
 }
 
 // ----- 窗口图标 -----
@@ -1736,8 +1748,8 @@ fn print_pdf(app: &AppHandle, html: &str, pdf: &Path, title: &str) -> Cmd<Printe
     result
 }
 
-/// 这次运行中写了、还没删掉的导出 PDF 的临时文件（退回打印对话框的窗口开着时留着）：退出时（RunEvent::Exit，托盘「退出」
-/// 走的也是它）一起删掉；启动时清理临时文件夹不碰它们
+/// 这次运行中写了、还没删掉的导出 PDF 的临时文件（退回打印对话框的窗口开着时留着）：退出时（clean_up_on_exit，正常退出、
+/// 更新退出都做）一起删掉；启动时清理临时文件夹不碰它们
 static TEMP_HTMLS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 
 fn temp_htmls() -> MutexGuard<'static, BTreeSet<PathBuf>> {
@@ -2194,11 +2206,29 @@ fn start_update_checks(app: &AppHandle) {
     });
 }
 
-/// 安装程序运行起来后插件直接结束进程（不经 RunEvent::Exit）：这里做正常退出时的收尾，记下窗口的大小位置、删掉导出用的临时文件
-fn before_update_exit(app: &AppHandle) {
-    let _ = app.save_window_state(window_state_flags());
+/// 退出时的收尾：正常退出（RunEvent::Exit，托盘「退出」最后也走到这里）和更新退出（before_update_exit）都做，正常退出时
+/// 要加的收尾加在这里，更新退出也就跟着做了。更新时这里在运行安装程序之前做（插件先调钩子再运行安装程序），安装程序
+/// 没运行起来时软件接着运行，所以这里做的都不能妨碍接着用：
+/// - keep_unshown_window_state 取走 HIDDEN_AT_START：「立即更新」在主窗口里点，这时主窗口显示过了：藏着启动的，第一次显示时
+///   （都经 present_main_window）已经取走了它，一开始就显示的没有记，它是 None，什么都不做
+/// - remove_temp_htmls 删掉退回打印对话框的窗口还在用的临时文件：那些窗口早就加载完了，导出的 HTML 只有一个文件（图片嵌在
+///   里面），删了照常显示、打印、点目录跳转，只是在那个窗口里刷新时找不到文件
+fn clean_up_on_exit(app: &AppHandle) {
     keep_unshown_window_state(app);
     remove_temp_htmls();
+}
+
+/// 插件运行安装程序之前调的钩子。安装程序运行起来后插件直接结束进程（不经 RunEvent::Exit）：这里做正常退出时的收尾
+/// （clean_up_on_exit），记下窗口的大小位置（正常退出时由记住窗口状态的插件自己记），再藏起托盘图标：进程直接结束时
+/// 没人删它，通知区里会留下一个点不了的旧图标，鼠标移过去才消失；藏起来的，进程结束后也不会再显示出来。
+/// 设了这个钩子，插件默认的钩子 cleanup_before_exit（删掉托盘图标、清空 resources table、在 Windows 上藏起所有窗口）就不跑了，
+/// 这里也不调它：这时还不知道安装程序能不能运行起来，运行不起来时软件照常运行，它做的恢复不回来。托盘图标只是藏起来，
+/// 安装程序没运行起来时 install_update 再显示回来。
+/// 跑在 install_update 的后台线程里，这时主线程空着：转到主线程上做的（读窗口的状态、藏托盘图标）不会卡住
+fn before_update_exit(app: &AppHandle) {
+    let _ = app.save_window_state(window_state_flags());
+    clean_up_on_exit(app);
+    set_tray_visible(app, false);
 }
 
 #[tauri::command]
@@ -2240,7 +2270,7 @@ async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()>
 }
 
 /// 运行下载好的安装程序：先记下从哪个版本更新到哪个版本（下次启动时提示），插件运行安装程序后结束这个进程
-/// （之前 before_update_exit 做正常退出时的收尾），装好后安装程序重新打开软件。只有出错时才返回
+/// （之前调 before_update_exit 收尾、藏起托盘图标），装好后安装程序重新打开软件。只有出错时才返回
 #[tauri::command]
 async fn install_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()> {
     let update = locked(&updates.found).clone().ok_or("没有检查到新版本，先检查更新")?;
@@ -2251,7 +2281,8 @@ async fn install_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()> 
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     update::write_marker(&dir, &update::Marker { from: update.current_version.clone(), to: update.version.clone() })?;
     let result = update.install(bytes);
-    // 走到这里说明安装程序没运行起来
+    // 走到这里说明安装程序没运行起来，软件接着运行：钩子藏起来的托盘图标显示回来（安装包没能写出来时钩子还没跑，图标本来就显示着）
+    set_tray_visible(&app, true);
     update::remove_marker(&dir);
     result.map_err(|e| format!("没能运行安装程序：{}", update_error(&e)))
 }
@@ -2471,8 +2502,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                keep_unshown_window_state(app);
-                remove_temp_htmls();
+                clean_up_on_exit(app);
             }
         });
 }
