@@ -1,10 +1,11 @@
 //! 自动更新里和 Tauri 无关的部分：运行安装程序之前记下的标记（从哪个版本更新到哪个版本），
-//! 下次启动时读出来，据此显示主窗口、提示更新好了没有。
+//! 下次启动时读出来，据此显示主窗口、提示更新好了没有；定时检查这次等多久。
 //! 检查、下载、安装在 lib.rs 的「自动更新」里（tauri-plugin-updater）。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 /// 标记文件：放在这台电脑上的配置目录（和记住窗口位置的文件在一起），不跟着数据目录走
 pub const MARKER_FILE: &str = "update-pending.json";
@@ -59,6 +60,17 @@ pub fn take_outcome(dir: &Path, current: &str) -> Option<Outcome> {
         return None;
     }
     Some(Outcome { from: marker.from, to: marker.to, done })
+}
+
+/// 定时检查更新这次等多久：离上次检查（last，毫秒时间戳）过了 every 就该检查了，返回 0；否则等到那时，但最多等 tick
+/// 就醒来再看。按墙上时间算，电脑睡眠的时间也算在里面：Windows 上等待的超时不算睡眠的时间，一次等 6 小时的话，
+/// 常睡眠的笔记本要醒着满 6 小时才检查；最多等 tick，睡醒后不超过 tick 就会发现已经过了 6 小时。
+/// 时钟往回调了（now 比 last 还早）时也算该检查了，免得一直等到时钟追上上次检查的时间
+pub fn check_wait(last: i64, now: i64, every: Duration, tick: Duration) -> Duration {
+    let Some(elapsed) = now.checked_sub(last).and_then(|ms| u64::try_from(ms).ok()) else {
+        return Duration::ZERO;
+    };
+    every.saturating_sub(Duration::from_millis(elapsed)).min(tick)
 }
 
 #[cfg(test)]
@@ -158,6 +170,26 @@ mod tests {
         assert!(!dir.join(MARKER_FILE).exists());
         assert_eq!(take_outcome(&dir, "0.1.3"), None);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_checks_count_wall_clock_time() {
+        const MIN: i64 = 60 * 1000;
+        const HOUR: i64 = 60 * MIN;
+        let every = Duration::from_secs(6 * 60 * 60);
+        let tick = Duration::from_secs(10 * 60);
+        let last = 1_790_000_000_000;
+        // 刚检查过：只等一小段就醒来看看，不一口气等 6 小时
+        assert_eq!(check_wait(last, last, every, tick), tick);
+        assert_eq!(check_wait(last, last + 5 * HOUR, every, tick), tick);
+        // 快到了：等到那时
+        assert_eq!(check_wait(last, last + 6 * HOUR - 3 * MIN, every, tick), Duration::from_secs(3 * 60));
+        // 到了、过了：马上检查。电脑睡眠了 8 小时，醒来后再看时就过了
+        assert_eq!(check_wait(last, last + 6 * HOUR, every, tick), Duration::ZERO);
+        assert_eq!(check_wait(last, last + 8 * HOUR, every, tick), Duration::ZERO);
+        // 时钟往回调了：也马上检查，不一直等到时钟追上上次检查的时间
+        assert_eq!(check_wait(last, last - MIN, every, tick), Duration::ZERO);
+        assert_eq!(check_wait(last, i64::MIN, every, tick), Duration::ZERO);
     }
 
     #[test]

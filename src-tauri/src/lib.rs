@@ -2061,9 +2061,12 @@ async fn reveal_exported(files: State<'_, ExportedFiles>, path: String) -> Cmd<(
 
 // ----- 自动更新 -----
 
-/// 启动后多久第一次检查更新（不和启动抢时间），之后每隔多久检查一次（藏在托盘里也照常）
+/// 启动后多久第一次检查更新（不和启动抢时间），之后每隔多久检查一次（藏在托盘里也照常；按墙上时间算，电脑睡眠的
+/// 时间也算）。定时检查的线程最多等 UPDATE_CHECK_TICK 就醒来看看到没到时候（见 update::check_wait）：睡醒后过了
+/// 6 小时的，最多再过这么久就检查；刚醒来时网络可能还没连上，不用醒得太勤
 const UPDATE_FIRST_CHECK: Duration = Duration::from_secs(10);
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+const UPDATE_CHECK_TICK: Duration = Duration::from_secs(10 * 60);
 /// 检查、下载最多等多久（网络卡住时不一直挂着）
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -2194,22 +2197,32 @@ async fn check_update_now(app: &AppHandle) -> UpdateStatus {
     })
 }
 
-/// 定时检查更新：启动后 UPDATE_FIRST_CHECK 检查一次，之后每 UPDATE_CHECK_EVERY 一次；关了「自动检查更新」时不检查
+/// 定时检查更新：启动后 UPDATE_FIRST_CHECK 检查一次，之后离上次检查过了 UPDATE_CHECK_EVERY 就检查（按墙上时间算，电脑
+/// 睡眠的时间也算，见 update::check_wait）；关了「自动检查更新」时不检查，打开时叫醒它（wake），马上检查
 fn start_update_checks(app: &AppHandle) {
     let (tx, rx) = mpsc::channel();
     *locked(&app.state::<Updates>().waker) = Some(tx);
     let app = app.clone();
     std::thread::spawn(move || {
-        let mut wait = UPDATE_FIRST_CHECK;
+        let now = || Local::now().timestamp_millis();
+        // 第一次在启动后 UPDATE_FIRST_CHECK 检查：当作上次检查是在那之前 UPDATE_CHECK_EVERY
+        let mut last = now() + UPDATE_FIRST_CHECK.as_millis() as i64 - UPDATE_CHECK_EVERY.as_millis() as i64;
         loop {
-            if let Err(RecvTimeoutError::Disconnected) = rx.recv_timeout(wait) {
-                return;
+            let wait = update::check_wait(last, now(), UPDATE_CHECK_EVERY, UPDATE_CHECK_TICK);
+            if !wait.is_zero() {
+                match rx.recv_timeout(wait) {
+                    // 叫醒了（打开了「自动检查更新」）：马上检查
+                    Ok(()) => {}
+                    // 还没到时候，等完了这一小段：再看过了多久（这期间电脑可能睡眠过）
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
             }
             while rx.try_recv().is_ok() {}
             if app.state::<SettingsStore>().get().auto_update {
                 tauri::async_runtime::block_on(check_update_now(&app));
             }
-            wait = UPDATE_CHECK_EVERY;
+            last = now();
         }
     });
 }
