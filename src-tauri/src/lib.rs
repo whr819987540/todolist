@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use store::{
     DoneTodo, ImageFile, PurgeResult, RecycleEntry, RestoreResult, SaveResult, SavedImage, SearchHit, Store,
@@ -2111,8 +2111,9 @@ struct Updates {
     status: Mutex<UpdateStatus>,
     /// 检查到的新版本（下载、安装用）
     found: Mutex<Option<tauri_plugin_updater::Update>>,
-    /// 下载好、验过签名的安装包：版本号和内容
-    downloaded: Mutex<Option<(String, Vec<u8>)>>,
+    /// 下载好、验过签名的安装包：版本号和内容。Arc：安装时交给插件不用再复制一份（几 MB）。选「先不更新」后也留着，
+    /// 再点「立即更新」时不用重新下载；下一次下载时换掉，最多留一个
+    downloaded: Mutex<Option<(String, Arc<[u8]>)>>,
     /// 叫醒定时检查的线程：打开「自动检查更新」时马上检查一次
     waker: Mutex<Option<mpsc::Sender<()>>>,
     /// 上次的更新装好了没有：启动时从标记文件读出来，前端取一次（take_update_outcome）
@@ -2296,7 +2297,7 @@ async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()>
         )
         .await
         .map_err(|e| update_error(&e))?;
-    *locked(&updates.downloaded) = Some((update.version.clone(), bytes));
+    *locked(&updates.downloaded) = Some((update.version.clone(), bytes.into()));
     Ok(())
 }
 
@@ -2306,7 +2307,7 @@ async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()>
 async fn install_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()> {
     let update = locked(&updates.found).clone().ok_or("没有检查到新版本，先检查更新")?;
     let bytes = match locked(&updates.downloaded).as_ref() {
-        Some((v, bytes)) if *v == update.version => bytes.clone(),
+        Some((v, bytes)) if *v == update.version => Arc::clone(bytes),
         _ => return Err("新版本还没下载好".into()),
     };
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
