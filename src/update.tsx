@@ -18,6 +18,49 @@ export function shouldPrompt(status: UpdateStatus, dismissedVersions: ReadonlySe
   return !!status.available && !dismissedVersions.has(status.available.version);
 }
 
+/**
+ * 比较两个版本号，a 大时为正数、一样时为 0（语义化版本：x.y.z 逐段按数字比；1.0.0-beta 这样的预发布版比 1.0.0 小，
+ * 预发布标识逐段比，数字的按数字比、比字母的小；+ 后面的不算）
+ */
+export function compareVersions(a: string, b: string): number {
+  const parse = (v: string) => {
+    const s = v.trim().replace(/^v/i, "").split("+")[0];
+    const dash = s.indexOf("-");
+    const core = (dash < 0 ? s : s.slice(0, dash)).split(".").map((n) => Number.parseInt(n, 10) || 0);
+    return { core, pre: dash < 0 ? null : s.slice(dash + 1).split(".") };
+  };
+  const x = parse(a);
+  const y = parse(b);
+  for (let i = 0; i < Math.max(x.core.length, y.core.length); i++) {
+    const d = (x.core[i] ?? 0) - (y.core[i] ?? 0);
+    if (d) return Math.sign(d);
+  }
+  // 正式版比同号的预发布版大
+  if (!x.pre || !y.pre) return (x.pre ? -1 : 0) + (y.pre ? 1 : 0);
+  for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+    const p = x.pre[i];
+    const q = y.pre[i];
+    // 前面都一样时，段多的大
+    if (p === undefined || q === undefined) return p === undefined ? -1 : 1;
+    if (p === q) continue;
+    const pn = /^\d+$/.test(p);
+    const qn = /^\d+$/.test(q);
+    if (pn && qn) return Math.sign(Number(p) - Number(q));
+    if (pn !== qn) return pn ? -1 : 1;
+    return p < q ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * 更新失败的提示（更新到 failed 这个版本时失败的，写着原因、有「重试」）显示着时，检查的结果 s 换不换掉它：
+ * 检查到版本号更大的新版本（换成它的提示）、已经没有新版本了（收起）时换；再检查到同一个版本（检查开始时、检查失败时
+ * 之前检查到的也留着）时不换，免得原因还没看到就没了
+ */
+export function replacesFailure(s: UpdateStatus, failed: string): boolean {
+  return !s.available || compareVersions(s.available.version, failed) > 0;
+}
+
 /** 下载进度的百分比（0～100）；不知道安装包多大时为 null */
 export function progressPercent(p: UpdateProgress | null): number | null {
   if (!p?.total) return null;
@@ -70,10 +113,21 @@ export function useUpdatePrompt() {
   useEffect(() => {
     let busy = false;
     let cancelled = false;
+    /** 右下角显示着更新失败的提示时，是更新到哪个版本时失败的（不知道时为空串，检查到哪个新版本都换掉它）；没有时为 null */
+    let failed: string | null = null;
     const { notification } = apis.current;
 
     const prompt = (s: UpdateStatus) => {
       if (busy) return;
+      if (failed !== null) {
+        // 失败的提示留着，直到用户关掉或点「重试」；检查到版本号更大的新版本、没有新版本了时才换掉
+        if (!replacesFailure(s, failed)) return;
+        failed = null;
+        if (!shouldPrompt(s, dismissed)) {
+          notification.destroy(NOTICE_KEY);
+          return;
+        }
+      }
       if (!shouldPrompt(s, dismissed)) {
         // 再检查时没有新版本了（如发布的版本撤了）：收起提示；点过「以后再说」的已经收起
         if (!s.available) notification.destroy(NOTICE_KEY);
@@ -123,8 +177,10 @@ export function useUpdatePrompt() {
         description,
       });
 
-    const fail = (reason: string) => {
+    /** 更新到 version 时失败了：提示原因，可以重试 */
+    const fail = (reason: string, version: string) => {
       busy = false;
+      failed = version;
       notification.open({
         key: NOTICE_KEY,
         className: "update-notice",
@@ -137,6 +193,10 @@ export function useUpdatePrompt() {
             重试
           </Button>
         ),
+        // 用户关掉了：之后照常，再检查到这个版本时提示发现新版本（没点过「以后再说」的）
+        onClose: () => {
+          failed = null;
+        },
       });
     };
 
@@ -161,11 +221,13 @@ export function useUpdatePrompt() {
     async function run() {
       if (busy) return;
       busy = true;
+      // 失败的提示（点了「重试」）接下来换成进度、收起，或者再失败时换成新的
+      failed = null;
       let status: UpdateStatus;
       try {
         status = await api.getUpdateStatus();
       } catch (e) {
-        return fail(errMsg(e));
+        return fail(errMsg(e), "");
       }
       const found = status.available?.version;
       if (!found) {
@@ -195,7 +257,7 @@ export function useUpdatePrompt() {
       try {
         downloaded = await api.downloadUpdate();
       } catch (e) {
-        return fail(errMsg(e));
+        return fail(errMsg(e), version);
       } finally {
         unlisten();
       }
@@ -223,7 +285,7 @@ export function useUpdatePrompt() {
       try {
         await api.installUpdate();
       } catch (e) {
-        fail(errMsg(e));
+        fail(errMsg(e), version);
       }
     }
 

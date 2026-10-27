@@ -1,6 +1,7 @@
 // 自动更新：测试版连本机的假更新服务器（e2e/lib/updater.mjs），「安装程序」是测试时编出来的小程序，只记下收到的命令行。
-// 启动后自动检查、右下角提示、「以后再说」、设置里检查更新；签名对不上、签名里记的版本不对时不安装，同一个版本重新打包后
-// 点「重试」用新的签名（下载前重新检查）；打开着的待办存不上时问还更不更新
+// 启动后自动检查、右下角提示、「以后再说」、设置里检查更新；签名对不上、签名里记的版本不对时不安装，失败的提示留着（再检查到
+// 同一个版本时不换掉，检查到更大的版本时换掉），同一个版本重新打包后点「重试」用新的签名（下载前重新检查）；
+// 打开着的待办存不上时问还更不更新
 // （主窗口藏在托盘里时先调出来），「先不更新」回到发现新版本的提示（点过「以后再说」、从设置里点的也是），
 // 问的时候又检查到了更新的版本，「仍然更新」装的仍是下载好的；
 // 「立即更新」时先保存打开着的待办，运行安装程序后软件退出；再打开时提示装好了没有（开机自启只在托盘里时也显示主窗口）；
@@ -104,9 +105,16 @@ export default async function (t) {
     await failSaving(true);
     await m().ev(`const v = view(); v.focus(); v.dispatch({ changes: { from: v.state.doc.length, insert: "存不上的一行\\n" } }); await sleep(200); return 1`);
     await m().invoke("check_update");
-    await t.until(async () => (await notice()).includes("发现新版本 99.0.5"));
+    check("更新失败的提示在时检查到版本号更大的新版本：换成新版本的提示", !!(await t.until(() => prompting("99.0.5"))), await notice());
     await clickIn(".update-now");
     const badFirst = await t.until(async () => (await notice()).includes("签名对不上"), 15000);
+    // 失败的提示留着：再检查到同一个版本时不换成发现新版本的提示，原因和「重试」还在
+    await m().invoke("check_update");
+    await t.sleep(800);
+    const kept = await notice();
+    check("更新失败后再检查到同一个版本：失败的提示还在（原因、「重试」），不换成发现新版本的提示",
+      !!badFirst && kept.includes("更新失败") && kept.includes("签名对不上") && !kept.includes("发现新版本") &&
+        (await m().ev(`return !!document.querySelector(".update-notice .update-retry")`)), kept);
     server.offer({ version: "99.0.5", notes: "存不上时先不更新" });
     await clickIn(".update-retry");
     const asked = await unsavedAsked();

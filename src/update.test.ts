@@ -4,7 +4,17 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "./types";
-import { outcomeMessage, progressPercent, progressText, shouldPrompt, startUpdate, updateStateText, useUpdatePrompt } from "./update";
+import {
+  compareVersions,
+  outcomeMessage,
+  progressPercent,
+  progressText,
+  replacesFailure,
+  shouldPrompt,
+  startUpdate,
+  updateStateText,
+  useUpdatePrompt,
+} from "./update";
 
 // 「立即更新」的流程（useUpdatePrompt）用的 Rust 端命令、事件和退出前写盘换成假的：事件记下回调，用例里直接调
 const tauri = vi.hoisted(() => ({ events: new Map<string, (e: { payload: unknown }) => void>() }));
@@ -52,6 +62,38 @@ describe("新版本的提示", () => {
     expect(shouldPrompt(found, new Set(["0.1.3"]))).toBe(false);
     // 又发布了更新的版本：再提示
     expect(shouldPrompt(status({ available: { version: "0.1.4", notes: "" } }), new Set(["0.1.3"]))).toBe(true);
+  });
+});
+
+describe("版本号的大小", () => {
+  it("逐段按数字比，预发布版比正式版小，+ 后面的不算", () => {
+    expect(compareVersions("0.1.4", "0.1.3")).toBeGreaterThan(0);
+    expect(compareVersions("0.1.3", "0.1.4")).toBeLessThan(0);
+    expect(compareVersions("0.1.3", "0.1.3")).toBe(0);
+    expect(compareVersions("0.10.0", "0.9.0")).toBeGreaterThan(0);
+    expect(compareVersions("1.0", "1.0.0")).toBe(0);
+    expect(compareVersions("v1.2.3", "1.2.3")).toBe(0);
+    expect(compareVersions("1.2.3+build.5", "1.2.3")).toBe(0);
+    expect(compareVersions("1.0.0", "1.0.0-beta")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0-alpha", "1.0.0-beta")).toBeLessThan(0);
+    expect(compareVersions("1.0.0-beta.2", "1.0.0-beta.10")).toBeLessThan(0);
+    expect(compareVersions("1.0.0-1", "1.0.0-alpha")).toBeLessThan(0);
+    expect(compareVersions("1.0.0-alpha", "1.0.0-alpha.1")).toBeLessThan(0);
+  });
+});
+
+// docs/requirements.md「自动更新 → 立即更新」：出错的提示留着，直到关掉或点「重试」；再检查到同一个版本时不换掉，
+// 检查到版本号更大的新版本时换成新版本的提示，没有新版本了时收起
+describe("更新失败的提示换不换掉", () => {
+  it("检查到版本号更大的新版本、没有新版本了时换掉；同一个版本（检查开始时、检查失败时也是）不换", () => {
+    const at = (version: string | null, patch: Partial<UpdateStatus> = {}) =>
+      status({ available: version ? { version, notes: "" } : null, ...patch });
+    expect(replacesFailure(at("0.1.3"), "0.1.3")).toBe(false);
+    expect(replacesFailure(at("0.1.3", { checking: true }), "0.1.3")).toBe(false);
+    expect(replacesFailure(at("0.1.3", { error: "连不上更新服务器" }), "0.1.3")).toBe(false);
+    expect(replacesFailure(at("0.1.4"), "0.1.3")).toBe(true);
+    expect(replacesFailure(at("0.1.10"), "0.1.9")).toBe(true);
+    expect(replacesFailure(at(null), "0.1.3")).toBe(true);
   });
 });
 
@@ -135,12 +177,28 @@ describe("「立即更新」", () => {
   const click = (el: Element | null | undefined) => act(async () => (el as HTMLElement).click());
   const confirmButton = (text: string) =>
     [...document.querySelectorAll(".ant-modal-confirm-btns button")].find((b) => b.textContent?.replace(/\s/g, "") === text);
-  /** 检查到了新版本 version：同 Rust 端检查完发的 update-status */
-  const found = async (version: string) => {
-    const s = status({ available: { version, notes: "" } });
+  /** 同 Rust 端检查开始、检查完时发的 update-status */
+  const emitStatus = async (s: UpdateStatus) => {
     mocked.api.getUpdateStatus.mockResolvedValue(s);
     await act(async () => tauri.events.get("update-status")?.({ payload: s }));
+  };
+  /** 检查到了新版本 version */
+  const found = async (version: string) => {
+    const s = status({ available: { version, notes: "" } });
+    await emitStatus(s);
     return s;
+  };
+  /** 右下角是更新失败的提示：写着原因 reason，有「重试」 */
+  const failing = (reason: string) =>
+    notice().length === 1 &&
+    !!notice()[0].textContent?.includes("更新失败") &&
+    !!notice()[0].textContent?.includes(reason) &&
+    !!notice()[0].querySelector(".update-retry");
+  /** 点右下角的「立即更新」，下载时出错（reason） */
+  const failDownload = async (reason: string) => {
+    mocked.api.downloadUpdate.mockRejectedValueOnce(reason);
+    await click(notice()[0].querySelector(".update-now"));
+    expect(await until(() => failing(reason))).toBe(true);
   };
 
   it("另存也失败：问是否仍要更新，选「先不更新」时不安装，回到发现新版本的提示", async () => {
@@ -206,6 +264,43 @@ describe("「立即更新」", () => {
     await click(confirmButton("先不更新"));
     expect(await until(() => prompting("0.1.4"))).toBe(true);
     expect(mocked.api.installUpdate).not.toHaveBeenCalled();
+  });
+
+  it("更新失败的提示留着：再检查到同一个版本（检查开始、检查完、检查失败时）不换成发现新版本的提示", async () => {
+    const s = await found("0.1.3");
+    expect(await until(() => prompting("0.1.3"))).toBe(true);
+    await failDownload("下载的安装包和签名对不上");
+    await emitStatus({ ...s, checking: true });
+    await emitStatus({ ...s, checkedAt: 1 });
+    await emitStatus({ ...s, error: "连不上更新服务器", checkedAt: 2 });
+    expect(await until(() => prompting("0.1.3"), 300)).toBe(false);
+    expect(failing("下载的安装包和签名对不上")).toBe(true);
+  });
+
+  it("更新失败的提示在时检查到版本号更大的新版本：换成它的提示；检查到没有新版本了：收起", async () => {
+    await found("0.1.3");
+    expect(await until(() => prompting("0.1.3"))).toBe(true);
+    await failDownload("连不上更新服务器");
+    await found("0.1.4");
+    expect(await until(() => prompting("0.1.4"))).toBe(true);
+    await failDownload("连不上更新服务器");
+    await emitStatus(status({ checkedAt: 3 }));
+    expect(await until(() => notice().length === 0)).toBe(true);
+  });
+
+  it("关掉更新失败的提示后照常：再检查到这个版本时提示发现新版本；点「重试」重新下载", async () => {
+    await found("0.1.3");
+    expect(await until(() => prompting("0.1.3"))).toBe(true);
+    await failDownload("连不上更新服务器");
+    await click(notice()[0].querySelector(".ant-notification-notice-close"));
+    expect(await until(() => notice().length === 0)).toBe(true);
+    await found("0.1.3");
+    expect(await until(() => prompting("0.1.3"))).toBe(true);
+    await failDownload("连不上更新服务器");
+    mocked.flushBeforeQuit.mockResolvedValue("failed");
+    await click(notice()[0].querySelector(".update-retry"));
+    expect(await until(() => !!confirmButton("先不更新"))).toBe(true);
+    expect(mocked.api.downloadUpdate).toHaveBeenCalledTimes(3);
   });
 
   it("下载前重新检查时服务器上已经没有新版本了：不下载、不安装，收起提示，说已是最新版本", async () => {
