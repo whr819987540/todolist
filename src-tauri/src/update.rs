@@ -40,13 +40,24 @@ pub fn remove_marker(dir: &Path) {
 }
 
 /// 启动时读出并删掉标记：有标记说明上次运行时开始了更新，返回装好了没有（current 是现在运行的版本）。
-/// 读坏了的也删掉，当没有
+/// 读坏了的也删掉，当没有。
+///
+/// 删不掉（被杀毒软件、同步工具占着，没有删除权限）时不算刚更新过：删不掉就没法只提示一次，每次启动都会当作刚更新完，
+/// 强制显示主窗口（开机自启只在托盘里时也是）、再提示一遍；少提示一次「已更新到 x」没什么，设置里看得到现在的版本。
+/// 标记留着，以后哪次启动删掉了再看：那时的版本既不是更新前的、也不是要更新到的（之后又装过别的版本），标记是以前
+/// 留下的，不提示
 pub fn take_outcome(dir: &Path, current: &str) -> Option<Outcome> {
     let path = dir.join(MARKER_FILE);
     let bytes = fs::read(&path).ok()?;
-    let _ = fs::remove_file(&path);
+    if let Err(e) = fs::remove_file(&path) {
+        eprintln!("没能删掉更新的标记 {}，这次不当作刚更新过：{e}", path.display());
+        return None;
+    }
     let marker: Marker = serde_json::from_slice(&bytes).ok()?;
     let done = marker.to == current;
+    if !done && marker.from != current {
+        return None;
+    }
     Some(Outcome { from: marker.from, to: marker.to, done })
 }
 
@@ -103,6 +114,59 @@ mod tests {
         write_marker(&dir, &Marker { from: "0.1.2".into(), to: "0.1.3".into() }).unwrap();
         remove_marker(&dir);
         assert_eq!(take_outcome(&dir, "0.1.2"), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 让 dir 里的标记删不掉，放掉返回的值后恢复。Linux 上把目录设成只读（删文件要改目录）
+    #[cfg(unix)]
+    fn hold_undeletable(dir: &Path) -> impl Sized {
+        use std::os::unix::fs::PermissionsExt;
+        struct Restore(std::path::PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+        }
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o555)).unwrap();
+        Restore(dir.to_path_buf())
+    }
+
+    /// Windows 上 Rust 的 remove_file 连只读的文件也删得掉（去掉只读属性再删），把文件设成只读挡不住：改成打开着它、
+    /// 不共享删除，同被杀毒软件、同步工具占着
+    #[cfg(windows)]
+    fn hold_undeletable(dir: &Path) -> impl Sized {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(dir.join(MARKER_FILE)).unwrap()
+    }
+
+    #[test]
+    fn undeletable_marker_is_not_taken() {
+        let dir = temp_dir("undeletable");
+        write_marker(&dir, &Marker { from: "0.1.2".into(), to: "0.1.3".into() }).unwrap();
+        let held = hold_undeletable(&dir);
+        // 删不掉：不当作刚更新过，不然每次启动都强制显示主窗口、提示一遍；标记留着
+        assert_eq!(take_outcome(&dir, "0.1.3"), None);
+        assert_eq!(take_outcome(&dir, "0.1.3"), None);
+        assert!(dir.join(MARKER_FILE).exists());
+        drop(held);
+        // 以后哪次启动删掉了：还是那个版本，照常提示一次
+        assert_eq!(
+            take_outcome(&dir, "0.1.3"),
+            Some(Outcome { from: "0.1.2".into(), to: "0.1.3".into(), done: true })
+        );
+        assert!(!dir.join(MARKER_FILE).exists());
+        assert_eq!(take_outcome(&dir, "0.1.3"), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn leftover_marker_of_other_versions_is_dropped() {
+        let dir = temp_dir("leftover");
+        write_marker(&dir, &Marker { from: "0.1.2".into(), to: "0.1.3".into() }).unwrap();
+        // 现在的版本既不是更新前的、也不是要更新到的：标记是以前留下的（当时删不掉，之后又装过别的版本），不提示、删掉
+        assert_eq!(take_outcome(&dir, "0.1.5"), None);
+        assert!(!dir.join(MARKER_FILE).exists());
         let _ = fs::remove_dir_all(&dir);
     }
 }
