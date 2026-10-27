@@ -280,7 +280,10 @@ export const api = {
   // 自动更新
 
   getUpdateStatus: () => invoke<UpdateStatus>("get_update_status"),
-  /** 马上检查一次（设置里的「检查更新」）；检查失败时不 reject，原因在返回的 error 里 */
+  /**
+   * 马上检查一次（设置里的「检查更新」）；检查失败时不 reject，原因在返回的 error 里。同时要求的检查排队一个个来，
+   * 检查开始、检查完的状态都经 update-status 发
+   */
   checkUpdate: () => invoke<UpdateStatus>("check_update"),
   /** 下载检查到的新版本并验签名，下载中发 update-progress；要经 update.tsx 的 startUpdate 调用 */
   downloadUpdate: () => invoke<void>("download_update"),

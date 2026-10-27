@@ -2080,8 +2080,11 @@ const UPDATE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 struct UpdateStatus {
     /// 正在用的版本
     current: String,
-    /// 正在检查
+    /// 正在检查：还有没检查完的（正在检查的、排着队的）
     checking: bool,
+    /// 还没检查完的有几次（不发给前端）：都检查完了 checking 才变回 false
+    #[serde(skip)]
+    pending: usize,
     /// 上次检查完的时间（毫秒时间戳），还没检查过时为 None
     checked_at: Option<i64>,
     /// 上次检查失败的原因
@@ -2106,14 +2109,24 @@ struct UpdateProgress {
     total: Option<u64>,
 }
 
+/// 下载好、验过签名的新版本：安装时用这个 Update 和安装包，下载之后又检查过、found 换了也不影响
+#[derive(Clone)]
+struct Downloaded {
+    update: tauri_plugin_updater::Update,
+    /// 安装包。Arc：安装时交给插件不用再复制一份（几 MB）
+    bytes: Arc<[u8]>,
+}
+
 #[derive(Default)]
 struct Updates {
     status: Mutex<UpdateStatus>,
-    /// 检查到的新版本（下载、安装用）
+    /// 检查一个接一个进行（定时的、设置里点的、打开自动检查时叫醒的）：后要求的等前面的检查完了再检查，结果按要求的
+    /// 先后记下，早发出的检查的结果不会盖掉晚的。tokio 的 Mutex：排队的按先来后到，等着的时候不占线程
+    check_turn: tauri::async_runtime::Mutex<()>,
+    /// 检查到的新版本（下载用）
     found: Mutex<Option<tauri_plugin_updater::Update>>,
-    /// 下载好、验过签名的安装包：版本号和内容。Arc：安装时交给插件不用再复制一份（几 MB）。选「先不更新」后也留着，
-    /// 再点「立即更新」时不用重新下载；下一次下载时换掉，最多留一个
-    downloaded: Mutex<Option<(String, Arc<[u8]>)>>,
+    /// 下载好的新版本（安装用）。选「先不更新」后也留着，再点「立即更新」时不用重新下载；下一次下载时换掉，最多留一个
+    downloaded: Mutex<Option<Downloaded>>,
     /// 叫醒定时检查的线程：打开「自动检查更新」时马上检查一次
     waker: Mutex<Option<mpsc::Sender<()>>>,
     /// 上次的更新装好了没有：启动时从标记文件读出来，前端取一次（take_update_outcome）
@@ -2133,15 +2146,12 @@ impl Updates {
         }
     }
 
-    /// 改检查的结果，发给主窗口
+    /// 改检查的结果，发给主窗口。拿着锁发：几次检查同时改的，发出去的先后和改的先后一样，主窗口最后收到的是最新的
     fn set_status(&self, app: &AppHandle, f: impl FnOnce(&mut UpdateStatus)) -> UpdateStatus {
-        let status = {
-            let mut s = locked(&self.status);
-            f(&mut s);
-            s.clone()
-        };
-        let _ = app.emit_to("main", "update-status", status.clone());
-        status
+        let mut s = locked(&self.status);
+        f(&mut s);
+        let _ = app.emit_to("main", "update-status", s.clone());
+        s.clone()
     }
 
     fn wake(&self) {
@@ -2173,10 +2183,16 @@ fn update_error(e: &tauri_plugin_updater::Error) -> String {
     }
 }
 
-/// 检查一次有没有新版本：结果记下来、发给主窗口；失败不弹窗，设置里显示原因
+/// 检查一次有没有新版本：结果记下来、发给主窗口；失败不弹窗，设置里显示原因（之前检查到的新版本留着）。
+/// 同时要求的检查排队一个个来（check_turn），还有没检查完的时一直算正在检查
 async fn check_update_now(app: &AppHandle) -> UpdateStatus {
     let updates = app.state::<Updates>();
-    updates.set_status(app, |s| s.checking = true);
+    updates.set_status(app, |s| {
+        s.pending += 1;
+        s.checking = true;
+    });
+    // 拿到之后一直拿着，结果记下、发出去之后才轮到下一个
+    let _turn = updates.check_turn.lock().await;
     let handle = app.clone();
     let builder = app
         .updater_builder()
@@ -2190,7 +2206,8 @@ async fn check_update_now(app: &AppHandle) -> UpdateStatus {
     };
     let mut found = locked(&updates.found);
     updates.set_status(app, |s| {
-        s.checking = false;
+        s.pending -= 1;
+        s.checking = s.pending > 0;
         s.checked_at = Some(Local::now().timestamp_millis());
         match checked {
             Ok(Some(u)) => {
@@ -2279,7 +2296,8 @@ async fn check_update(app: AppHandle) -> UpdateStatus {
 #[tauri::command]
 async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()> {
     let update = locked(&updates.found).clone().ok_or("没有检查到新版本，先检查更新")?;
-    if locked(&updates.downloaded).as_ref().is_some_and(|(v, _)| *v == update.version) {
+    // 这个版本已经下载好了（「先不更新」后再点「立即更新」）：不再下载
+    if locked(&updates.downloaded).as_ref().is_some_and(|d| d.update.version == update.version) {
         return Ok(());
     }
     let (mut done, mut sent) = (0u64, 0u64);
@@ -2297,19 +2315,16 @@ async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()>
         )
         .await
         .map_err(|e| update_error(&e))?;
-    *locked(&updates.downloaded) = Some((update.version.clone(), bytes.into()));
+    *locked(&updates.downloaded) = Some(Downloaded { update, bytes: bytes.into() });
     Ok(())
 }
 
-/// 运行下载好的安装程序：先记下从哪个版本更新到哪个版本（下次启动时提示），插件运行安装程序后结束这个进程
+/// 运行下载好的安装程序：装的是下载好的那个（和提示里「正在更新到 x」的一致），下载之后又检查过、检查到了别的版本
+/// 也不影响。先记下从哪个版本更新到哪个版本（下次启动时提示），插件运行安装程序后结束这个进程
 /// （之前调 before_update_exit 收尾、藏起托盘图标），装好后安装程序重新打开软件。只有出错时才返回
 #[tauri::command]
 async fn install_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()> {
-    let update = locked(&updates.found).clone().ok_or("没有检查到新版本，先检查更新")?;
-    let bytes = match locked(&updates.downloaded).as_ref() {
-        Some((v, bytes)) if *v == update.version => Arc::clone(bytes),
-        _ => return Err("新版本还没下载好".into()),
-    };
+    let Downloaded { update, bytes } = locked(&updates.downloaded).clone().ok_or("新版本还没下载好")?;
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     update::write_marker(&dir, &update::Marker { from: update.current_version.clone(), to: update.version.clone() })?;
     let result = update.install(bytes);

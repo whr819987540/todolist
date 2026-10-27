@@ -22,7 +22,9 @@ export default function UpdateSettings() {
 
   const check = () => {
     setStatus({ ...status, checking: true });
-    api.checkUpdate().then(setStatus, (e) => message.error(errMsg(e)));
+    // 检查完的状态同定时检查的，经 update-status 收：几次检查排着队时，这一次检查完后面还有没检查完的，返回值可能比
+    // 之后收到的事件晚到，不拿它盖掉
+    api.checkUpdate().catch((e) => message.error(errMsg(e)));
   };
   const toggle = (on: boolean) =>
     api.setAutoUpdate(on).then(setInfo, (e) => message.error(errMsg(e)));

@@ -1,6 +1,7 @@
 // 自动更新：测试版连本机的假更新服务器（e2e/lib/updater.mjs），「安装程序」是测试时编出来的小程序，只记下收到的命令行。
 // 启动后自动检查、右下角提示、「以后再说」、设置里检查更新；签名对不上、签名里记的版本不对时不安装；打开着的待办存不上时问还更不更新
-// （主窗口藏在托盘里时先调出来），「先不更新」回到发现新版本的提示（点过「以后再说」、从设置里点的也是）；
+// （主窗口藏在托盘里时先调出来），「先不更新」回到发现新版本的提示（点过「以后再说」、从设置里点的也是），
+// 问的时候又检查到了更新的版本，「仍然更新」装的仍是下载好的；
 // 「立即更新」时先保存打开着的待办，运行安装程序后软件退出；再打开时提示装好了没有（开机自启只在托盘里时也显示主窗口）；
 // 关掉自动检查后启动时不检查
 import { existsSync, readFileSync } from "node:fs";
@@ -130,7 +131,26 @@ export default async function (t) {
       hidden && askedHidden === "有修改没能保存" && shownWhenAsked, { hidden, askedHidden, main: win.windows().main });
     await decline();
     check("调出来后选「先不更新」：同样回到发现新版本的提示", !!(await t.until(() => prompting("99.0.5"))), await notice());
-    await failSaving(false);
+
+    // 下载好以后、问还更不更新的时候又检查到了更新的版本：选「仍然更新」装的仍是下载好的那个（提示里写的版本），
+    // 不因为检查到的版本换了就报「还没下载好」
+    await clickIn(".update-now");
+    const askedThenNewer = await unsavedAsked();
+    server.offer({ version: "99.0.9", notes: "下载好以后才发布的" });
+    const newer = await m().invoke("check_update");
+    // 点了以后程序很快就退出：不等页面回话
+    await m().ev(`const b = button("仍然更新", document.querySelector(".ant-modal-confirm-btns") ?? document.createElement("div")); setTimeout(() => b?.click(), 50); return !!b`);
+    const exitedDownloaded = await t.until(() => runningPids().length === 0, 20000);
+    const argsDownloaded = (await t.until(() => existsSync(ARGS_FILE), 5000)) ? readFileSync(ARGS_FILE, "utf8") : "";
+    const markerDownloaded = existsSync(MARKER) ? JSON.parse(readFileSync(MARKER, "utf8")) : null;
+    check("下载好以后又检查到了更新的版本：「仍然更新」装的仍是下载好的那个，运行安装程序、软件退出",
+      askedThenNewer === "有修改没能保存" && newer?.available?.version === "99.0.9" && exitedDownloaded &&
+        argsDownloaded.includes("/UPDATE") && markerDownloaded?.to === "99.0.5",
+      { askedThenNewer, newer: newer?.available, exitedDownloaded, argsDownloaded, markerDownloaded, notice: exitedDownloaded ? "" : await notice() });
+    // 这里的安装程序什么都没装：重新打开接着测（页面里换掉的保存也就换回来了），清掉这次留下的记录
+    t.main = null;
+    await t.restart();
+    resetUpdateTraces();
 
     // 立即更新：先保存打开着的待办（没开 auto save 也存），运行安装程序，软件退出
     server.offer({ version: "99.1.0", notes: "又一版" });
