@@ -2067,9 +2067,12 @@ async fn reveal_exported(files: State<'_, ExportedFiles>, path: String) -> Cmd<(
 const UPDATE_FIRST_CHECK: Duration = Duration::from_secs(10);
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const UPDATE_CHECK_TICK: Duration = Duration::from_secs(10 * 60);
-/// 检查、下载最多等多久（网络卡住时不一直挂着）
+/// 检查最多等多久（网络卡住时不一直挂着）：从连接到读完 latest.json 一共的时间
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
-const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// 下载不限一共用多久（网速很慢时几 MB 的安装包要下很久），只限连接多久连不上、下载中多久收不到数据（检查也一样，
+/// 另有上面的总时长）
+const UPDATE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const UPDATE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 检查更新的结果：设置里显示，主窗口据此提示（update-status 事件）
 #[derive(Clone, Default, Serialize)]
@@ -2151,6 +2154,8 @@ impl Updates {
 fn update_error(e: &tauri_plugin_updater::Error) -> String {
     use tauri_plugin_updater::Error as E;
     match e {
+        // 连不上、检查的总时长到了、下载中太久收不到数据：reqwest 的说明里看不出是超时
+        E::Reqwest(r) if r.is_timeout() => "更新服务器太久没有响应（超时），请检查网络后再试".into(),
         E::Reqwest(_) | E::Network(_) => format!("连不上更新服务器：{e}"),
         E::ReleaseNotFound => "没能从更新服务器读到最新版本的信息".into(),
         E::Minisign(_) | E::Base64(_) | E::SignatureUtf8(_) => {
@@ -2172,7 +2177,12 @@ async fn check_update_now(app: &AppHandle) -> UpdateStatus {
     let updates = app.state::<Updates>();
     updates.set_status(app, |s| s.checking = true);
     let handle = app.clone();
-    let builder = app.updater_builder().timeout(UPDATE_CHECK_TIMEOUT);
+    let builder = app
+        .updater_builder()
+        .timeout(UPDATE_CHECK_TIMEOUT)
+        // 检查到的 Update 带着它，下载时也用：插件给 reqwest 设好 timeout（下载时是 Update::timeout，不设就不限总时长）
+        // 之后才调它，这里只加连接超时、读超时，不动总时长
+        .configure_client(|c| c.connect_timeout(UPDATE_CONNECT_TIMEOUT).read_timeout(UPDATE_READ_TIMEOUT));
     let checked = match builder.on_before_exit(move || before_update_exit(&handle)).build() {
         Ok(updater) => updater.check().await,
         Err(e) => Err(e),
@@ -2263,14 +2273,14 @@ async fn check_update(app: AppHandle) -> UpdateStatus {
     check_update_now(&app).await
 }
 
-/// 下载检查到的新版本、验签名，留着等 install_update；下载中发 update-progress（进度变了 1% 以上才发）
+/// 下载检查到的新版本、验签名，留着等 install_update；下载中发 update-progress（进度变了 1% 以上才发）。
+/// 不限一共下载多久，只限连接、多久收不到数据（检查时设的 configure_client，见 check_update_now）
 #[tauri::command]
 async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()> {
-    let mut update = locked(&updates.found).clone().ok_or("没有检查到新版本，先检查更新")?;
+    let update = locked(&updates.found).clone().ok_or("没有检查到新版本，先检查更新")?;
     if locked(&updates.downloaded).as_ref().is_some_and(|(v, _)| *v == update.version) {
         return Ok(());
     }
-    update.timeout = Some(UPDATE_DOWNLOAD_TIMEOUT);
     let (mut done, mut sent) = (0u64, 0u64);
     let bytes = update
         .download(
