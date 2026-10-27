@@ -2,7 +2,15 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { emitAppEvent, flushBeforeQuit, holdDataRefresh, registerFlusher, useAppEvent, useWindowFocus } from "./hooks";
+import {
+  emitAppEvent,
+  flushBeforeQuit,
+  holdDataRefresh,
+  registerFlusher,
+  unsavedWarning,
+  useAppEvent,
+  useWindowFocus,
+} from "./hooks";
 
 // Tauri 的窗口事件换成假的：记下注册的回调，用例里直接调
 const tauri = vi.hoisted(() => ({
@@ -84,6 +92,25 @@ describe("从托盘退出前写盘（flushBeforeQuit）", () => {
     await done;
     expect(result).toBe("timeout");
     finish(true);
+  });
+});
+
+// 「感知外部修改」「自动更新 → 立即更新」：从托盘退出、更新前另存也失败、10 秒内没存完时问是否仍要退出 / 更新
+describe("退出、更新前有修改没存好时的确认框", () => {
+  it("存不下来、没存完时说明现在退出 / 更新会丢掉修改", () => {
+    expect(unsavedWarning("failed", "退出")).toEqual({
+      title: "有修改没能保存",
+      content: "正在编辑的待办里有修改没能保存下来（见上方的提示），现在退出会丢掉这些修改。",
+    });
+    expect(unsavedWarning("timeout", "退出")).toEqual({
+      title: "还没保存完",
+      content: "正在编辑的内容 10 秒内没有保存完，现在退出可能丢掉还没保存的修改。",
+    });
+    expect(unsavedWarning("failed", "更新")).toEqual({
+      title: "有修改没能保存",
+      content: "正在编辑的待办里有修改没能保存下来（见上方的提示），现在更新会丢掉这些修改。",
+    });
+    expect(unsavedWarning("timeout", "更新").content).toBe("正在编辑的内容 10 秒内没有保存完，现在更新可能丢掉还没保存的修改。");
   });
 });
 

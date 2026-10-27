@@ -7,7 +7,7 @@ import Home from "./components/Home";
 import type { Selection } from "./components/sidebar/tree";
 import WorkspaceView, { type WorkspaceViewHandle } from "./components/WorkspaceView";
 import { recoveryNotice, restoreDoneText, takeRestoreNotice } from "./dataBackup";
-import { flushAll, flushBeforeQuit, QUIT_FLUSH_TIMEOUT, useAppEvent } from "./hooks";
+import { flushAll, flushBeforeQuit, unsavedWarning, useAppEvent } from "./hooks";
 import { go, visit } from "./navHistory";
 import { useSaveOptions } from "./settings";
 import { inDialog } from "./shortcuts";
@@ -172,11 +172,7 @@ export default function App() {
       if (r === "saved") return api.quitApp();
       api.showMain().catch(() => {});
       modalRef.current.confirm({
-        title: r === "failed" ? "有修改没能保存" : "还没保存完",
-        content:
-          r === "failed"
-            ? "正在编辑的待办里有修改没能保存下来（见上方的提示），现在退出会丢掉这些修改。"
-            : `正在编辑的内容 ${QUIT_FLUSH_TIMEOUT / 1000} 秒内没有保存完，现在退出可能丢掉还没保存的修改。`,
+        ...unsavedWarning(r, "退出"),
         okText: "仍然退出",
         okButtonProps: { danger: true },
         cancelText: "不退出",

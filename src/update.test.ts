@@ -4,16 +4,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "./types";
-import {
-  outcomeMessage,
-  progressPercent,
-  progressText,
-  shouldPrompt,
-  startUpdate,
-  unsavedWarning,
-  updateStateText,
-  useUpdatePrompt,
-} from "./update";
+import { outcomeMessage, progressPercent, progressText, shouldPrompt, startUpdate, updateStateText, useUpdatePrompt } from "./update";
 
 // 「立即更新」的流程（useUpdatePrompt）用的 Rust 端命令、事件和退出前写盘换成假的：事件记下回调，用例里直接调
 const tauri = vi.hoisted(() => ({ events: new Map<string, (e: { payload: unknown }) => void>() }));
@@ -22,6 +13,10 @@ vi.mock("@tauri-apps/api/event", () => ({
     tauri.events.set(name, cb);
     return () => tauri.events.delete(name);
   },
+}));
+// useAppEvent（设置里的「立即更新」经它发给 useUpdatePrompt）也收 Rust 端发给这个窗口的同名事件：换成什么都不收的
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({ listen: async () => () => {} }),
 }));
 const mocked = vi.hoisted(() => ({
   api: {
@@ -93,16 +88,6 @@ describe("更新完重新打开时", () => {
     const failed = outcomeMessage({ from: "0.1.2", to: "0.1.3", done: false });
     expect(failed.type).toBe("warning");
     expect(failed.text).toContain("没能更新到 0.1.3");
-  });
-});
-
-describe("更新前有修改没存好", () => {
-  it("存不下来、没存完时说明现在更新会丢掉修改", () => {
-    expect(unsavedWarning("failed")).toEqual({
-      title: "有修改没能保存",
-      content: "正在编辑的待办里有修改没能保存下来（见上方的提示），现在更新会丢掉这些修改。",
-    });
-    expect(unsavedWarning("timeout").content).toBe("正在编辑的内容 10 秒内没有保存完，现在更新可能丢掉还没保存的修改。");
   });
 });
 

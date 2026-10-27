@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { App as AntApp, Button, Progress, Space } from "antd";
 import { useEffect, useRef } from "react";
 import { api, errMsg } from "./api";
-import { flushBeforeQuit, type QuitFlush, QUIT_FLUSH_TIMEOUT } from "./hooks";
+import { emitAppEvent, flushBeforeQuit, type QuitFlush, unsavedWarning, useAppEvent } from "./hooks";
 import type { UpdateOutcome, UpdateProgress, UpdateStatus } from "./types";
 import { fullTime } from "./utils";
 
@@ -48,22 +48,12 @@ export function outcomeMessage(o: UpdateOutcome): { type: "success" | "warning";
     : { type: "warning", text: `没能更新到 ${o.to}（安装没有完成），可以在「设置 → 常规」里再检查更新` };
 }
 
-/** 下载好新版本后保存打开着的待办没存好时说明什么 */
-export function unsavedWarning(r: Exclude<QuitFlush, "saved">): { title: string; content: string } {
-  return r === "failed"
-    ? { title: "有修改没能保存", content: "正在编辑的待办里有修改没能保存下来（见上方的提示），现在更新会丢掉这些修改。" }
-    : {
-        title: "还没保存完",
-        content: `正在编辑的内容 ${QUIT_FLUSH_TIMEOUT / 1000} 秒内没有保存完，现在更新可能丢掉还没保存的修改。`,
-      };
-}
-
-/** 主窗口里的 useUpdatePrompt 注册的「立即更新」，设置里的按钮经 startUpdate 调它 */
-let runUpdate: (() => void) | null = null;
+/** 设置里的「立即更新」（startUpdate）发给主窗口里 useUpdatePrompt 的事件，走同一个流程 */
+const START_UPDATE = "start-update";
 
 /** 下载并安装检查到的新版本（设置里的「立即更新」），进度显示在右下角的提示里 */
 export function startUpdate() {
-  runUpdate?.();
+  emitAppEvent(START_UPDATE);
 }
 
 /** 主窗口里：发现新版本时在右下角提示；刚更新完时提示更新好了没有 */
@@ -73,6 +63,9 @@ export function useUpdatePrompt() {
   useEffect(() => {
     apis.current = { notification, modal, message };
   });
+  // 「立即更新」的流程在下面的 effect 里，挂上后经它收设置里的「立即更新」
+  const runUpdate = useRef<() => void>(() => {});
+  useAppEvent(START_UPDATE, () => runUpdate.current());
 
   useEffect(() => {
     let busy = false;
@@ -154,10 +147,8 @@ export function useUpdatePrompt() {
     const confirmUnsaved = async (r: Exclude<QuitFlush, "saved">) => {
       await api.showMain().catch(() => {});
       return new Promise<boolean>((resolve) => {
-        const { title, content } = unsavedWarning(r);
         apis.current.modal.confirm({
-          title,
-          content,
+          ...unsavedWarning(r, "更新"),
           okText: "仍然更新",
           okButtonProps: { danger: true },
           cancelText: "先不更新",
@@ -223,7 +214,7 @@ export function useUpdatePrompt() {
       }
     }
 
-    runUpdate = () => void run();
+    runUpdate.current = () => void run();
     api.getUpdateStatus().then((s) => cancelled || prompt(s), () => {});
     const unlisten = listen<UpdateStatus>("update-status", (e) => prompt(e.payload));
     // 刚更新完重新打开：提示装好了没有（Rust 端只给一次）
@@ -234,7 +225,7 @@ export function useUpdatePrompt() {
     }, () => {});
     return () => {
       cancelled = true;
-      runUpdate = null;
+      runUpdate.current = () => {};
       unlisten.then((f) => f());
     };
   }, []);

@@ -188,6 +188,19 @@ export const QUIT_FLUSH_TIMEOUT = 10_000;
 /** 退出前写盘的结果：都存好了、有存不下来的（已经提示过）、timeoutMs 内没存完 */
 export type QuitFlush = "saved" | "failed" | "timeout";
 
+/**
+ * 从托盘退出、自动更新前写盘没存好（flushBeforeQuit 的结果不是 saved）时，问还要不要接着做的确认框里写什么；
+ * action 是要接着做的事
+ */
+export function unsavedWarning(r: Exclude<QuitFlush, "saved">, action: "退出" | "更新"): { title: string; content: string } {
+  return r === "failed"
+    ? { title: "有修改没能保存", content: `正在编辑的待办里有修改没能保存下来（见上方的提示），现在${action}会丢掉这些修改。` }
+    : {
+        title: "还没保存完",
+        content: `正在编辑的内容 ${QUIT_FLUSH_TIMEOUT / 1000} 秒内没有保存完，现在${action}可能丢掉还没保存的修改。`,
+      };
+}
+
 /** 从托盘退出前写盘：都写，正在编辑的待办存不上的另存为新待办（见 TodoEditor 的 leave） */
 export async function flushBeforeQuit(timeoutMs = QUIT_FLUSH_TIMEOUT): Promise<QuitFlush> {
   const list = [...flushers];
