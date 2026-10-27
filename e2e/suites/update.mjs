@@ -24,6 +24,21 @@ export default async function (t) {
   const clickIn = (sel) => m().ev(`const e = await waitFor(() => document.querySelector(${JSON.stringify(sel)})); e?.click(); await sleep(300); return !!e`);
   const settingsFile = () => JSON.parse(t.read(".settings.json"));
   /**
+   * 假安装程序记下的命令行：等它写完再读。它刚运行起来时文件可能还没建、建了还没写进去（File.WriteAllText 先建空文件），
+   * 新写出来的安装程序运行前还要被杀毒软件扫一遍，慢的时候要好几秒；15 秒内没写完时返回已经写了的（没有时为 ""）
+   */
+  const installerArgs = async () => {
+    const read = () => {
+      try {
+        return readFileSync(ARGS_FILE, "utf8");
+      } catch {
+        return "";
+      }
+    };
+    await t.until(() => read().includes("/UPDATE"), 15000);
+    return read();
+  };
+  /**
    * 保存打开着的待办存不上、另存为新待办也失败（on 为 false 时换回来）：换掉页面里 api 的保存正文、新建待办，都报错
    * （同 backup、export 套件换掉对话框）。不在磁盘上弄坏项目：窗口显示着时监听到项目没了会刷新、关掉打开着的待办
    * （离开时另存，存不上的放进剪贴板），到更新时就没有要存的了
@@ -157,7 +172,7 @@ export default async function (t) {
     // 点了以后程序很快就退出：不等页面回话
     await m().ev(`const b = button("仍然更新", document.querySelector(".ant-modal-confirm-btns") ?? document.createElement("div")); setTimeout(() => b?.click(), 50); return !!b`);
     const exitedDownloaded = await t.until(() => runningPids().length === 0, 20000);
-    const argsDownloaded = (await t.until(() => existsSync(ARGS_FILE), 5000)) ? readFileSync(ARGS_FILE, "utf8") : "";
+    const argsDownloaded = await installerArgs();
     const markerDownloaded = existsSync(MARKER) ? JSON.parse(readFileSync(MARKER, "utf8")) : null;
     check("下载好以后又检查到了更新的版本：「仍然更新」装的仍是下载好的那个，运行安装程序、软件退出",
       askedThenNewer === "有修改没能保存" && newer?.available?.version === "99.0.9" && exitedDownloaded &&
@@ -179,7 +194,7 @@ export default async function (t) {
     // 点了以后程序很快就退出：不等页面回话
     await m().ev(`const e = await waitFor(() => document.querySelector(".update-now")); setTimeout(() => e?.click(), 50); return !!e`);
     const exited = await t.until(() => runningPids().length === 0, 20000);
-    const args = (await t.until(() => existsSync(ARGS_FILE), 5000)) ? readFileSync(ARGS_FILE, "utf8") : "";
+    const args = await installerArgs();
     check("「立即更新」：下载、验过签名后运行安装程序（被动模式、按更新安装），软件退出",
       exited && / \/P\b/.test(args) && args.includes("/UPDATE"), { exited, args });
     check("更新前保存了打开着的待办里没存的修改", t.read("工作/日常/D.md").includes("更新前没存的一行"));
