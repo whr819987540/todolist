@@ -1,5 +1,5 @@
 // 自动更新：测试版连本机的假更新服务器（e2e/lib/updater.mjs），「安装程序」是测试时编出来的小程序，只记下收到的命令行。
-// 启动后自动检查、右下角提示、「以后再说」、设置里检查更新；签名对不上时不安装；打开着的待办存不上时问还更不更新
+// 启动后自动检查、右下角提示、「以后再说」、设置里检查更新；签名对不上、签名里记的版本不对时不安装；打开着的待办存不上时问还更不更新
 // （主窗口藏在托盘里时先调出来），「先不更新」回到发现新版本的提示（点过「以后再说」、从设置里点的也是）；
 // 「立即更新」时先保存打开着的待办，运行安装程序后软件退出；再打开时提示装好了没有（开机自启只在托盘里时也显示主窗口）；
 // 关掉自动检查后启动时不检查
@@ -78,6 +78,17 @@ export default async function (t) {
     const failed = await notice();
     check("签名对不上时不安装：提示更新失败和原因，软件没有退出",
       failed.includes("更新失败") && failed.includes("签名对不上") && runningPids().length === 1 && !existsSync(ARGS_FILE), failed);
+
+    // 签名对得上，但签名里记的版本和宣布的不一样（旧版的安装包配上了新的版本号）：同样不安装，写明两个版本号
+    server.offer({ version: "99.0.0", signedFor: "98.0.0" });
+    await clickIn(".check-update");
+    await t.until(async () => (await stateText()).startsWith("发现新版本"));
+    await clickIn(".settings-update-now");
+    const mismatched = await t.until(async () => (await notice()).includes("签名里记的版本"), 15000);
+    const mismatchText = await notice();
+    check("签名里记的版本和宣布的版本对不上时不安装：写明两个版本号、可能被改过，软件没有退出",
+      !!mismatched && mismatchText.includes("98.0.0") && mismatchText.includes("99.0.0") && mismatchText.includes("可能被改过") &&
+        runningPids().length === 1 && !existsSync(ARGS_FILE), mismatchText);
     await m().closeModal();
 
     // 下载好后保存打开着的待办，存不上、另存为新待办也失败：问还更不更新；「先不更新」时回到发现新版本的提示

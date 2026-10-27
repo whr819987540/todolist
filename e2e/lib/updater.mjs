@@ -21,12 +21,14 @@ export const MARKER = join(process.env.APPDATA ?? "", IDENTIFIER, "update-pendin
 /** 测试版的版本号（tauri.conf.json） */
 export const appVersion = () => JSON.parse(readFileSync(join(ROOT, "src-tauri", "tauri.conf.json"), "utf8")).version;
 
-/** 用测试用的私钥给 file 签名，返回签名（同 .sig 文件的内容） */
-function sign(file) {
+/**
+ * 用测试用的私钥给 file 签名，返回签名（同 .sig 文件的内容）。给了 version 时签名里记下这个版本号（同发布时 tauri build
+ * 签的），软件会拿它和 latest.json 宣布的版本比
+ */
+function sign(file, version) {
   rmSync(`${file}.sig`, { force: true });
-  execFileSync(process.execPath, [join(ROOT, "node_modules", "@tauri-apps", "cli", "tauri.js"), "signer", "sign", "-f", join(ROOT, "e2e", "updater", "test.key"), "-p", "", file], {
-    stdio: "ignore",
-  });
+  const args = ["signer", "sign", "-f", join(ROOT, "e2e", "updater", "test.key"), "-p", "", ...(version ? ["--app-version", version] : []), file];
+  execFileSync(process.execPath, [join(ROOT, "node_modules", "@tauri-apps", "cli", "tauri.js"), ...args], { stdio: "ignore" });
   return readFileSync(`${file}.sig`, "utf8").trim();
 }
 
@@ -43,8 +45,9 @@ public static class FakeSetup { public static void Main() { File.WriteAllText(@"
 }
 
 /**
- * 启动假更新服务器。offer({ version, notes, badSignature }) 换成「发布了」这个版本（badSignature 时给的签名对不上安装包），
- * offer(null) 是 latest.json 不存在（404）；requests 是收到的请求的路径
+ * 启动假更新服务器。offer({ version, notes, badSignature, signedFor }) 换成「发布了」这个版本（badSignature 时给的签名对不上
+ * 安装包；signedFor 时签名对得上，但签名里记的是 signedFor 这个版本），offer(null) 是 latest.json 不存在（404）；
+ * requests 是收到的请求的路径
  */
 export async function startUpdateServer() {
   const sigs = buildInstaller();
@@ -77,7 +80,7 @@ export async function startUpdateServer() {
         pub_date: new Date().toISOString(),
         platforms: {
           "windows-x86_64": {
-            signature: release.badSignature ? sigs.other : sigs.setup,
+            signature: release.badSignature ? sigs.other : release.signedFor ? sign(SETUP, release.signedFor) : sigs.setup,
             url: `http://127.0.0.1:${UPDATE_PORT}/setup.exe`,
           },
         },

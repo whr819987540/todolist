@@ -2153,6 +2153,13 @@ fn update_error(e: &tauri_plugin_updater::Error) -> String {
         E::Minisign(_) | E::Base64(_) | E::SignatureUtf8(_) => {
             "下载的安装包和签名对不上（可能下载出错或被改过），没有安装".into()
         }
+        // 签名对得上，但签名里记的版本（发布时打包签名的那一版）不是 latest.json 宣布的版本：可能有人把旧版的安装包
+        // 换上新的版本号发出来
+        E::SignedVersionMismatch { signed, announced } => format!(
+            "安装包签名里记的版本（{signed}）和更新服务器宣布的版本（{announced}）对不上，可能被改过，没有安装"
+        ),
+        // 只在打开了插件的 requireSignedVersion 时才会有（现在没开）：签名里没记版本，没法和宣布的版本对
+        E::MissingSignedVersion => "安装包的签名里没有记着是哪个版本，没法确认是不是宣布的版本，没有安装".into(),
         _ => e.to_string(),
     }
 }
