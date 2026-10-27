@@ -26,9 +26,9 @@ export function progressPercent(p: UpdateProgress | null): number | null {
 
 const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
 
-/** 下载进度的文字：已下载 / 一共多少 MB */
+/** 下载进度的文字：已下载 / 一共多少 MB；还没开始（下载前先告诉要下载哪个版本，还没收到数据）时只说正在下载 */
 export function progressText(p: UpdateProgress | null): string {
-  if (!p) return "正在下载…";
+  if (!p || (!p.downloaded && !p.total)) return "正在下载…";
   return p.total ? `正在下载 ${mb(p.downloaded)} / ${mb(p.total)} MB` : `正在下载 ${mb(p.downloaded)} MB`;
 }
 
@@ -167,13 +167,15 @@ export function useUpdatePrompt() {
       } catch (e) {
         return fail(errMsg(e));
       }
-      const version = status.available?.version;
-      if (!version) {
+      const found = status.available?.version;
+      if (!found) {
         busy = false;
         notification.destroy(NOTICE_KEY);
         apis.current.message.info("没有检查到新版本");
         return;
       }
+      // 提示里写的版本：下载前 Rust 端重新检查一次，可能又发布了更新的版本，跟着进度里的走
+      let version = found;
       let progress: UpdateProgress | null = null;
       const showProgress = () =>
         showStep(
@@ -186,15 +188,25 @@ export function useUpdatePrompt() {
       showProgress();
       const unlisten = await listen<UpdateProgress>("update-progress", (e) => {
         progress = e.payload;
+        version = e.payload.version;
         showProgress();
       });
+      let downloaded: string | null;
       try {
-        await api.downloadUpdate();
+        downloaded = await api.downloadUpdate();
       } catch (e) {
         return fail(errMsg(e));
       } finally {
         unlisten();
       }
+      if (!downloaded) {
+        // 重新检查时服务器上已经没有新版本了（发布的版本撤了）：不更新，收起提示
+        busy = false;
+        notification.destroy(NOTICE_KEY);
+        apis.current.message.info(`已是最新版本（更新服务器上已经没有 ${version} 了）`);
+        return;
+      }
+      version = downloaded;
       // 软件马上要退出：先保存打开着的待办，同从托盘退出（存不上的另存为新待办）
       showStep(version, "正在保存打开着的待办…");
       const saved = await flushBeforeQuit();
@@ -203,7 +215,8 @@ export function useUpdatePrompt() {
         // 不然「正在保存打开着的待办…」（关不掉）一直留在右下角
         dismissed.delete(version);
         busy = false;
-        prompt(status);
+        // 按现在检查到的：下载前重新检查过，版本可能换了
+        prompt(await api.getUpdateStatus().catch(() => status));
         return;
       }
       showStep(version, "正在启动安装程序：软件会先退出，装好后自动重新打开。");

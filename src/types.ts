@@ -353,6 +353,8 @@ export interface UpdateStatus {
 
 /** 下载新版本的进度（update-progress 事件）；total 是安装包的大小，不知道时为 null */
 export interface UpdateProgress {
+  /** 正在下载的版本：下载前重新检查过，可能不是之前检查到的（又发布了更新的版本） */
+  version: string;
   downloaded: number;
   total: number | null;
 }

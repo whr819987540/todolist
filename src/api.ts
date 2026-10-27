@@ -285,8 +285,11 @@ export const api = {
    * 检查开始、检查完的状态都经 update-status 发
    */
   checkUpdate: () => invoke<UpdateStatus>("check_update"),
-  /** 下载检查到的新版本并验签名，下载中发 update-progress；要经 update.tsx 的 startUpdate 调用 */
-  downloadUpdate: () => invoke<void>("download_update"),
+  /**
+   * 下载新版本并验签名，返回下载好的版本；下载中发 update-progress（带着版本号）。下载前先重新检查一次，按更新服务器上
+   * 现在的版本信息下载（可能是又发布的更新的版本），已经没有新版本了时不下载、返回 null。要经 update.tsx 的 startUpdate 调用
+   */
+  downloadUpdate: () => invoke<string | null>("download_update"),
   /** 运行下载好的安装程序，软件随即退出（装好后重新打开）；只有出错时才返回（reject） */
   installUpdate: () => invoke<void>("install_update"),
   /** 打开时马上检查一次 */

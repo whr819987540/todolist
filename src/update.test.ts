@@ -18,16 +18,17 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: () => ({ listen: async () => () => {} }),
 }));
-const mocked = vi.hoisted(() => ({
-  api: {
+const mocked = vi.hoisted(() => {
+  const api = {
     getUpdateStatus: vi.fn(),
     takeUpdateOutcome: vi.fn(async () => null),
-    downloadUpdate: vi.fn(async () => {}),
+    // 同 Rust 端：下载前重新检查一次，默认服务器上还是检查到的那个版本，下载好后返回它
+    downloadUpdate: vi.fn(async (): Promise<string | null> => (await api.getUpdateStatus())?.available?.version ?? null),
     installUpdate: vi.fn(async () => {}),
     showMain: vi.fn(async () => {}),
-  },
-  flushBeforeQuit: vi.fn(),
-}));
+  };
+  return { api, flushBeforeQuit: vi.fn() };
+});
 vi.mock("./api", () => ({ api: mocked.api, errMsg: (e: unknown) => String(e) }));
 vi.mock("./hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./hooks")>()),
@@ -56,17 +57,19 @@ describe("新版本的提示", () => {
 
 describe("下载进度", () => {
   it("知道安装包多大时显示百分比和 MB", () => {
-    const p = { downloaded: 1.5 * 1024 * 1024, total: 3 * 1024 * 1024 };
+    const p = { version: "0.1.3", downloaded: 1.5 * 1024 * 1024, total: 3 * 1024 * 1024 };
     expect(progressPercent(p)).toBe(50);
     expect(progressText(p)).toBe("正在下载 1.5 / 3.0 MB");
-    expect(progressPercent({ downloaded: 10, total: 10 })).toBe(100);
+    expect(progressPercent({ version: "0.1.3", downloaded: 10, total: 10 })).toBe(100);
   });
 
   it("不知道大小、还没开始时", () => {
-    expect(progressPercent({ downloaded: 1024 * 1024, total: null })).toBeNull();
-    expect(progressText({ downloaded: 1024 * 1024, total: null })).toBe("正在下载 1.0 MB");
+    expect(progressPercent({ version: "0.1.3", downloaded: 1024 * 1024, total: null })).toBeNull();
+    expect(progressText({ version: "0.1.3", downloaded: 1024 * 1024, total: null })).toBe("正在下载 1.0 MB");
     expect(progressPercent(null)).toBeNull();
     expect(progressText(null)).toBe("正在下载…");
+    // 下载前先告诉要下载哪个版本，还没收到数据
+    expect(progressText({ version: "0.1.3", downloaded: 0, total: null })).toBe("正在下载…");
   });
 });
 
@@ -91,9 +94,10 @@ describe("更新完重新打开时", () => {
   });
 });
 
-// docs/requirements.md「自动更新 → 立即更新」：下载好后保存打开着的待办，另存也失败、10 秒内没存完时问是否仍要更新
-// （主窗口藏在托盘里时先调出来），不更新时回到发现新版本的提示（之前点过「以后再说」的也是）
-describe("「立即更新」时打开着的待办没存好", () => {
+// docs/requirements.md「自动更新 → 立即更新」：下载前重新检查一次，按服务器上现在的版本下载（提示里的版本号跟着变，
+// 没有新版本了时不更新）；下载好后保存打开着的待办，另存也失败、10 秒内没存完时问是否仍要更新（主窗口藏在托盘里时
+// 先调出来），不更新时回到发现新版本的提示（之前点过「以后再说」的也是）
+describe("「立即更新」", () => {
   let unmount = () => {};
   beforeEach(async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -180,5 +184,39 @@ describe("「立即更新」时打开着的待办没存好", () => {
     expect(askedBeforeShown).toBe(false);
     await click(confirmButton("先不更新"));
     expect(await until(() => prompting("0.1.5"))).toBe(true);
+  });
+
+  it("下载前重新检查到了又发布的更新的版本：下载它，提示里的版本号跟着变；「先不更新」后提示这个版本", async () => {
+    await found("0.1.3");
+    expect(await until(() => prompting("0.1.3"))).toBe(true);
+    let finishDownload: (v: string | null) => void = () => {};
+    mocked.api.downloadUpdate.mockImplementationOnce(() => new Promise((r) => (finishDownload = r)));
+    mocked.flushBeforeQuit.mockResolvedValue("failed");
+    await click(notice()[0].querySelector(".update-now"));
+    const updating = (version: string) => !!notice()[0]?.textContent?.includes(`正在更新到 ${version}`);
+    expect(await until(() => updating("0.1.3"))).toBe(true);
+    // 同 Rust 端：重新检查到了 0.1.4（检查完发 update-status），下载前先发一个带着版本号的进度
+    const newer = status({ available: { version: "0.1.4", notes: "又一版" } });
+    mocked.api.getUpdateStatus.mockResolvedValue(newer);
+    await act(async () => tauri.events.get("update-status")?.({ payload: newer }));
+    await act(async () => tauri.events.get("update-progress")?.({ payload: { version: "0.1.4", downloaded: 0, total: null } }));
+    expect(await until(() => updating("0.1.4"))).toBe(true);
+    await act(async () => finishDownload("0.1.4"));
+    expect(await until(() => !!confirmButton("先不更新"))).toBe(true);
+    await click(confirmButton("先不更新"));
+    expect(await until(() => prompting("0.1.4"))).toBe(true);
+    expect(mocked.api.installUpdate).not.toHaveBeenCalled();
+  });
+
+  it("下载前重新检查时服务器上已经没有新版本了：不下载、不安装，收起提示，说已是最新版本", async () => {
+    await found("0.1.3");
+    expect(await until(() => prompting("0.1.3"))).toBe(true);
+    mocked.api.downloadUpdate.mockResolvedValueOnce(null);
+    await click(notice()[0].querySelector(".update-now"));
+    expect(await until(() => notice().length === 0)).toBe(true);
+    const toast = () => document.querySelector(".ant-message-notice")?.textContent ?? "";
+    expect(await until(() => toast().includes("已是最新版本"))).toBe(true);
+    expect(mocked.flushBeforeQuit).not.toHaveBeenCalled();
+    expect(mocked.api.installUpdate).not.toHaveBeenCalled();
   });
 });

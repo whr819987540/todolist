@@ -1,5 +1,6 @@
 // 自动更新：测试版连本机的假更新服务器（e2e/lib/updater.mjs），「安装程序」是测试时编出来的小程序，只记下收到的命令行。
-// 启动后自动检查、右下角提示、「以后再说」、设置里检查更新；签名对不上、签名里记的版本不对时不安装；打开着的待办存不上时问还更不更新
+// 启动后自动检查、右下角提示、「以后再说」、设置里检查更新；签名对不上、签名里记的版本不对时不安装，同一个版本重新打包后
+// 点「重试」用新的签名（下载前重新检查）；打开着的待办存不上时问还更不更新
 // （主窗口藏在托盘里时先调出来），「先不更新」回到发现新版本的提示（点过「以后再说」、从设置里点的也是），
 // 问的时候又检查到了更新的版本，「仍然更新」装的仍是下载好的；
 // 「立即更新」时先保存打开着的待办，运行安装程序后软件退出；再打开时提示装好了没有（开机自启只在托盘里时也显示主窗口）；
@@ -92,8 +93,10 @@ export default async function (t) {
         runningPids().length === 1 && !existsSync(ARGS_FILE), mismatchText);
     await m().closeModal();
 
-    // 下载好后保存打开着的待办，存不上、另存为新待办也失败：问还更不更新；「先不更新」时回到发现新版本的提示
-    server.offer({ version: "99.0.5", notes: "存不上时先不更新" });
+    // 下载好后保存打开着的待办，存不上、另存为新待办也失败：问还更不更新；「先不更新」时回到发现新版本的提示。
+    // 先发出来的安装包签名对不上，更新失败；随后同一个版本重新打包（release.yml 重新打包已有的 tag，换掉安装包和
+    // latest.json），点「重试」时下载前重新检查、用新的签名，下载成功后才走到保存这一步
+    server.offer({ version: "99.0.5", notes: "存不上时先不更新", badSignature: true });
     await m().enter("工作");
     await m().expandAll();
     await m().ev(`return await openTodo("工作", "需求", "A")`);
@@ -103,7 +106,12 @@ export default async function (t) {
     await m().invoke("check_update");
     await t.until(async () => (await notice()).includes("发现新版本 99.0.5"));
     await clickIn(".update-now");
+    const badFirst = await t.until(async () => (await notice()).includes("签名对不上"), 15000);
+    server.offer({ version: "99.0.5", notes: "存不上时先不更新" });
+    await clickIn(".update-retry");
     const asked = await unsavedAsked();
+    check("同一个版本重新打包（换了签名）后点「重试」：下载前重新检查、用新的签名，下载成功",
+      !!badFirst && asked !== "", { badFirst, asked, notice: await notice() });
     check("下载好后保存打开着的待办存不上、另存也失败：问还更不更新", asked === "有修改没能保存", { asked, notice: await notice() });
     await decline();
     check("「先不更新」：不运行安装程序，回到发现新版本的提示（有「立即更新」「以后再说」）",

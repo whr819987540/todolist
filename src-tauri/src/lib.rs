@@ -2105,6 +2105,8 @@ struct AvailableUpdate {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateProgress {
+    /// 正在下载的版本：下载前重新检查过，可能不是之前检查到的（又发布了更新的版本）
+    version: String,
     downloaded: u64,
     total: Option<u64>,
 }
@@ -2117,11 +2119,18 @@ struct Downloaded {
     bytes: Arc<[u8]>,
 }
 
+impl Downloaded {
+    /// 下载好的就是 u 宣布的那个安装包：版本号、签名、下载地址都一样（同一个版本重新打包过的签名不一样）
+    fn is(&self, u: &tauri_plugin_updater::Update) -> bool {
+        self.update.version == u.version && self.update.signature == u.signature && self.update.download_url == u.download_url
+    }
+}
+
 #[derive(Default)]
 struct Updates {
     status: Mutex<UpdateStatus>,
-    /// 检查一个接一个进行（定时的、设置里点的、打开自动检查时叫醒的）：后要求的等前面的检查完了再检查，结果按要求的
-    /// 先后记下，早发出的检查的结果不会盖掉晚的。tokio 的 Mutex：排队的按先来后到，等着的时候不占线程
+    /// 检查一个接一个进行（定时的、设置里点的、打开自动检查时叫醒的、下载前的）：后要求的等前面的检查完了再检查，结果
+    /// 按要求的先后记下，早发出的检查的结果不会盖掉晚的。tokio 的 Mutex：排队的按先来后到，等着的时候不占线程
     check_turn: tauri::async_runtime::Mutex<()>,
     /// 检查到的新版本（下载用）
     found: Mutex<Option<tauri_plugin_updater::Update>>,
@@ -2184,8 +2193,9 @@ fn update_error(e: &tauri_plugin_updater::Error) -> String {
 }
 
 /// 检查一次有没有新版本：结果记下来、发给主窗口；失败不弹窗，设置里显示原因（之前检查到的新版本留着）。
-/// 同时要求的检查排队一个个来（check_turn），还有没检查完的时一直算正在检查
-async fn check_update_now(app: &AppHandle) -> UpdateStatus {
+/// 同时要求的检查（定时的、设置里点的、打开自动检查时叫醒的、下载前的）排队一个个来（check_turn），还有没检查完的时
+/// 一直算正在检查。返回检查完的状态和检查到的新版本（这次检查失败时是之前检查到的）
+async fn check_update_now(app: &AppHandle) -> (UpdateStatus, Option<tauri_plugin_updater::Update>) {
     let updates = app.state::<Updates>();
     updates.set_status(app, |s| {
         s.pending += 1;
@@ -2205,7 +2215,7 @@ async fn check_update_now(app: &AppHandle) -> UpdateStatus {
         Err(e) => Err(e),
     };
     let mut found = locked(&updates.found);
-    updates.set_status(app, |s| {
+    let status = updates.set_status(app, |s| {
         s.pending -= 1;
         s.checking = s.pending > 0;
         s.checked_at = Some(Local::now().timestamp_millis());
@@ -2222,7 +2232,8 @@ async fn check_update_now(app: &AppHandle) -> UpdateStatus {
             }
             Err(e) => s.error = Some(update_error(&e)),
         }
-    })
+    });
+    (status, found.clone())
 }
 
 /// 定时检查更新：启动后 UPDATE_FIRST_CHECK 检查一次，之后离上次检查过了 UPDATE_CHECK_EVERY 就检查（按墙上时间算，电脑
@@ -2288,18 +2299,32 @@ fn get_update_status(updates: State<'_, Updates>) -> UpdateStatus {
 /// 设置里的「检查更新」
 #[tauri::command]
 async fn check_update(app: AppHandle) -> UpdateStatus {
-    check_update_now(&app).await
+    check_update_now(&app).await.0
 }
 
-/// 下载检查到的新版本、验签名，留着等 install_update；下载中发 update-progress（进度变了 1% 以上才发）。
-/// 不限一共下载多久，只限连接、多久收不到数据（检查时设的 configure_client，见 check_update_now）
+/// 下载新版本、验签名，留着等 install_update，返回下载好的版本；下载中发 update-progress（带着版本号，进度变了 1% 以上
+/// 才发）。不限一共下载多久，只限连接、多久收不到数据（检查时设的 configure_client，见 check_update_now）。
+/// 下载前先重新检查一次（和别的检查一起排队），用更新服务器上现在的 latest.json，不用上次检查时记下的签名和下载地址：
+/// - 同一个版本重新打包过（release.yml 重新打包已有的 tag，换掉了安装包和 latest.json）：用新的签名，不然下载到的是新的
+///   安装包、签名却是旧的，一直报签名对不上，要等下一次检查才好
+/// - 又发布了更新的版本：下载它，进度里带着它的版本号，主窗口提示里的版本号跟着变
+/// - 已经没有新版本了（发布的版本撤了）：不下载，返回 None
+/// - 检查失败：下载之前检查到的（同检查失败时之前检查到的新版本留着），之前也没有时报检查失败的原因
 #[tauri::command]
-async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()> {
-    let update = locked(&updates.found).clone().ok_or("没有检查到新版本，先检查更新")?;
-    // 这个版本已经下载好了（「先不更新」后再点「立即更新」）：不再下载
-    if locked(&updates.downloaded).as_ref().is_some_and(|d| d.update.version == update.version) {
-        return Ok(());
+async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<Option<String>> {
+    let update = match check_update_now(&app).await {
+        (_, Some(u)) => u,
+        // 检查到已经没有新版本了；检查失败、之前也没检查到时报检查失败的原因
+        (status, None) => return status.error.map_or(Ok(None), Err),
+    };
+    let version = update.version.clone();
+    // 下载好的就是现在宣布的这个安装包（「先不更新」后再点「立即更新」）：不再下载
+    if locked(&updates.downloaded).as_ref().is_some_and(|d| d.is(&update)) {
+        return Ok(Some(version));
     }
+    let progress = |downloaded, total| UpdateProgress { version: version.clone(), downloaded, total };
+    // 先告诉主窗口下载的是哪个版本（重新检查后可能换了），不等收到第一段数据
+    let _ = app.emit_to("main", "update-progress", progress(0, None));
     let (mut done, mut sent) = (0u64, 0u64);
     let bytes = update
         .download(
@@ -2308,7 +2333,7 @@ async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()>
                 let step = total.map_or(256 * 1024, |t| (t / 100).max(1));
                 if done - sent >= step || total == Some(done) {
                     sent = done;
-                    let _ = app.emit_to("main", "update-progress", UpdateProgress { downloaded: done, total });
+                    let _ = app.emit_to("main", "update-progress", progress(done, total));
                 }
             },
             || {},
@@ -2316,7 +2341,7 @@ async fn download_update(app: AppHandle, updates: State<'_, Updates>) -> Cmd<()>
         .await
         .map_err(|e| update_error(&e))?;
     *locked(&updates.downloaded) = Some(Downloaded { update, bytes: bytes.into() });
-    Ok(())
+    Ok(Some(version))
 }
 
 /// 运行下载好的安装程序：装的是下载好的那个（和提示里「正在更新到 x」的一致），下载之后又检查过、检查到了别的版本
