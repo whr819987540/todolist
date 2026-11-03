@@ -8,6 +8,7 @@ import { appearance } from "./appearance";
 import { codeFenceKeymap } from "./codeFences";
 import { editBindings } from "./editBindings";
 import { findExtensions } from "./find";
+import { Highlight } from "./highlightMark";
 import { clipboardImages, dropCaret, type ImageResolver, imageResolver } from "./images";
 import { ctrlClickLinks } from "./links";
 import { listKeymap } from "./lists";
@@ -97,11 +98,12 @@ function changeReporter(o: EditorOptions): Extension {
 }
 
 /**
- * Markdown 解析（含 GFM：表格、任务列表、删除线、网址自动识别；回车续写列表、退格删除列表标记）和缩进宽度。
+ * Markdown 解析（含 GFM：表格、任务列表、删除线、网址自动识别；另加 ==高亮==（highlightMark.ts）；回车续写列表、
+ * 退格删除列表标记）和缩进宽度。
  * 编辑命令按它解析出的语法树增删标记，单元测试构造 EditorState 时用同一份
  */
 export const markdownSupport = (): Extension[] => [
-  markdown({ base: markdownLanguage, completeHTMLTags: false }),
+  markdown({ base: markdownLanguage, extensions: [Highlight], completeHTMLTags: false }),
   EditorState.tabSize.of(2),
 ];
 

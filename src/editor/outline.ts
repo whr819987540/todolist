@@ -15,8 +15,18 @@ export interface OutlineItem {
   pos: number;
 }
 
-/** 语法树里标题中不显示的部分：标题、加粗、行内代码、删除线、链接的标记，HTML 标签（如 <u>） */
-const MARKS = new Set(["HeaderMark", "EmphasisMark", "CodeMark", "StrikethroughMark", "LinkMark", "HTMLTag", "LinkTitle", "LinkLabel"]);
+/** 语法树里标题中不显示的部分：标题、加粗、行内代码、删除线、高亮、链接的标记，HTML 标签（如 <u>） */
+const MARKS = new Set([
+  "HeaderMark",
+  "EmphasisMark",
+  "CodeMark",
+  "StrikethroughMark",
+  "HighlightMark",
+  "LinkMark",
+  "HTMLTag",
+  "LinkTitle",
+  "LinkLabel",
+]);
 
 /** 正文里的全部标题。正文很长、语法树还没解析完时最多等一小会儿，还没解析到的部分里的标题先不列 */
 export function outlineItems(state: EditorState): OutlineItem[] {

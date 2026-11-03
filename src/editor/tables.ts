@@ -13,7 +13,7 @@ import { ImageWidget } from "./images";
 import { linkOpener, linkTarget } from "./links";
 
 // 实时渲染时的 GFM 表格（docs/requirements.md「待办内容 → 表格」）：光标（选区）不在表格里时，整个表格换成渲染后的
-// <table>（表头加粗、按分隔行对齐，单元格里的加粗、斜体、行内代码、链接、图片也渲染），在表格里时显示原文。
+// <table>（表头加粗、按分隔行对齐，单元格里的加粗、斜体、删除线、高亮、行内代码、链接、图片也渲染），在表格里时显示原文。
 // 换掉的是好几行（块级的替换），CodeMirror 只许从 StateField 里给，所以不在 livePreview.ts 的 ViewPlugin 里；
 // 字段里看不到编辑器有没有焦点、鼠标是不是按着，由下面的事件告诉它。只改显示，正文原样不动
 
@@ -24,7 +24,7 @@ export type Align = "left" | "center" | "right" | null;
 export type Inline =
   | { kind: "text"; text: string }
   | { kind: "br" }
-  | { kind: "strong" | "em" | "del"; children: Inline[] }
+  | { kind: "strong" | "em" | "del" | "mark"; children: Inline[] }
   | { kind: "code"; text: string }
   | { kind: "link"; url: string; children: Inline[] }
   | { kind: "image"; src: string; alt: string };
@@ -72,6 +72,14 @@ function inlines(state: EditorState, parent: SyntaxNode, from = parent.from, to 
   return out;
 }
 
+/** 带格式的行内节点是哪一种（DOM 里就是这个元素） */
+const INLINE_KIND: Record<string, "strong" | "em" | "del" | "mark"> = {
+  StrongEmphasis: "strong",
+  Emphasis: "em",
+  Strikethrough: "del",
+  Highlight: "mark",
+};
+
 /** 一个行内节点渲染成什么 */
 function inline(state: EditorState, n: SyntaxNode): Inline[] {
   const raw = (): Inline[] => [{ kind: "text", text: state.sliceDoc(n.from, n.to) }];
@@ -86,8 +94,9 @@ function inline(state: EditorState, n: SyntaxNode): Inline[] {
   switch (n.name) {
     case "StrongEmphasis":
     case "Emphasis":
-    case "Strikethrough": {
-      const kind = n.name === "StrongEmphasis" ? "strong" : n.name === "Emphasis" ? "em" : "del";
+    case "Strikethrough":
+    case "Highlight": {
+      const kind = INLINE_KIND[n.name];
       return [{ kind, children: inlines(state, n, ...inner()) }];
     }
     case "InlineCode": {
@@ -212,8 +221,11 @@ function renderInlines(view: EditorView, items: readonly Inline[], parent: HTMLE
         break;
       case "strong":
       case "em":
-      case "del": {
+      case "del":
+      case "mark": {
         const el = document.createElement(it.kind);
+        // 高亮同正文里的（appearance.ts），不用浏览器默认的黄底黑字
+        if (it.kind === "mark") el.className = "cm-md-mark";
         renderInlines(view, it.children, el);
         parent.append(el);
         break;

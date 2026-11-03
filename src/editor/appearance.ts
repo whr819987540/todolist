@@ -1,6 +1,7 @@
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
-import type { Extension, Range } from "@codemirror/state";
+import { type Extension, Prec, type Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 import { tags as t } from "@lezer/highlight";
 import { INDENT, TASK } from "./listLayout";
 
@@ -86,6 +87,11 @@ const theme = EditorView.theme({
     borderRadius: "4px",
     padding: "1px 4px",
   },
+  // ==高亮==（highlightMark.ts）：底色只铺在两头的 == 之间，颜色和正文里查找结果的底色（find.ts）分得开；
+  // 表格里渲染成 <mark>（tables.ts），文字颜色不用浏览器默认的黑色
+  ".cm-md-mark": { backgroundColor: "var(--c-mark)", color: "inherit", borderRadius: "2px" },
+  // 落在高亮里的查找结果：都是黄色，加深一点才分得出来（选中的那个照样是橙色，find.ts）
+  ".cm-md-mark .cm-searchMatch:not(.cm-searchMatch-selected)": { backgroundColor: "var(--c-mark-match)" },
 
   // 以下只在实时渲染模式出现（livePreview.ts）
   ".cm-md-link": { textDecoration: "underline", textUnderlineOffset: "3px" },
@@ -227,11 +233,29 @@ const lineDeco = (cls: string) => {
   return d;
 };
 const inlineCode = Decoration.mark({ class: "cm-md-code" });
+const highlightMark = Decoration.mark({ class: "cm-md-mark" });
 
-function buildBlocks(view: EditorView): DecorationSet {
+/** 两头的标记（`、== 等）之间的范围 */
+function between(node: SyntaxNode): [number, number] | null {
+  const open = node.firstChild;
+  const close = node.lastChild;
+  return open && close && close !== open && close.from > open.to ? [open.to, close.from] : null;
+}
+
+interface Blocks {
+  decorations: DecorationSet;
+  /**
+   * ==高亮== 的底色：优先级最低（Prec.lowest，查找结果是 Prec.low），在别的行内装饰外面。CodeMirror 里优先级高的
+   * 装饰在里层，这层不透明的底色放在最外面，查找结果、行内代码的底色才画在它上面，看得出来
+   */
+  marks: DecorationSet;
+}
+
+function buildBlocks(view: EditorView): Blocks {
   const { state } = view;
   const doc = state.doc;
   const out: Range<Decoration>[] = [];
+  const marks: Range<Decoration>[] = [];
   for (const { from, to } of view.visibleRanges) {
     // 给 [start, end] 覆盖的行加样式，只处理可见部分；first / last 标出块的首尾行
     const eachLine = (start: number, end: number, cls: (first: boolean, last: boolean) => string) => {
@@ -267,31 +291,40 @@ function buildBlocks(view: EditorView): DecorationSet {
             return;
           case "InlineCode": {
             // 背景只铺在反引号之间
-            const open = node.node.firstChild;
-            const close = node.node.lastChild;
-            if (open && close && close.from > open.to) out.push(inlineCode.range(open.to, close.from));
+            const inner = between(node.node);
+            if (inner) out.push(inlineCode.range(...inner));
             return false;
+          }
+          case "Highlight": {
+            // 里面还可能有加粗、行内代码等，接着往里看
+            const inner = between(node.node);
+            if (inner) marks.push(highlightMark.range(...inner));
+            return;
           }
         }
       },
     });
   }
-  return Decoration.set(out, true);
+  return { decorations: Decoration.set(out, true), marks: Decoration.set(marks, true) };
 }
 
 const blockStyles = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    marks: DecorationSet;
     constructor(view: EditorView) {
-      this.decorations = buildBlocks(view);
+      ({ decorations: this.decorations, marks: this.marks } = buildBlocks(view));
     }
     update(u: ViewUpdate) {
       if (u.docChanged || u.viewportChanged || syntaxTree(u.startState) !== syntaxTree(u.state)) {
-        this.decorations = buildBlocks(u.view);
+        ({ decorations: this.decorations, marks: this.marks } = buildBlocks(u.view));
       }
     }
   },
-  { decorations: (v) => v.decorations },
+  {
+    decorations: (v) => v.decorations,
+    provide: (plugin) => Prec.lowest(EditorView.decorations.of((view) => view.plugin(plugin)?.marks ?? Decoration.none)),
+  },
 );
 
 export const appearance: Extension = [theme, syntaxHighlighting(highlight), blockStyles];

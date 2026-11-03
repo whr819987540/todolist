@@ -62,6 +62,21 @@ describe("渲染后的表格", () => {
     ]);
   });
 
+  it("单元格里的 ==高亮== 也渲染，可以和加粗套着用", () => {
+    const [t] = tablesOf("| a | b |\n| --- | --- |\n| ==重点== | ==**很**重要== |").tables;
+    const [r] = t.model.rows;
+    expect(r[0].content).toEqual([{ kind: "mark", children: [{ kind: "text", text: "重点" }] }]);
+    expect(r[1].content).toEqual([
+      {
+        kind: "mark",
+        children: [
+          { kind: "strong", children: [{ kind: "text", text: "很" }] },
+          { kind: "text", text: "重要" },
+        ],
+      },
+    ]);
+  });
+
   it("从第一行的行首到最后一行的行尾整个换掉", () => {
     const { state, tables } = tablesOf(doc);
     const [t] = tables;

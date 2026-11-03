@@ -39,6 +39,7 @@ const SUITES = [
   "watch",
   "images",
   "tables",
+  "marks",
   "backup",
   "update",
   "history",

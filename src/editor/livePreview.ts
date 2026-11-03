@@ -14,7 +14,7 @@ import { keepCaretVisible, leftOverIndent } from "./listCaret";
 import { type ListLine, type ListMarker, listLine, listLineStyle, markerParts, type QuoteGroup, quoteGroups } from "./listLayout";
 import { linkTarget } from "./links";
 
-// 实时渲染（类似 Typora / Obsidian）：正文始终是原样的 Markdown 文本，只是把 **、#、> 这类标记藏起来，
+// 实时渲染（类似 Typora / Obsidian）：正文始终是原样的 Markdown 文本，只是把 **、==、#、> 这类标记藏起来，
 // 列表符号、任务框、分隔线、图片换成对应的样子（表格在 tables.ts）。光标（或选区）碰到的元素显示原文，方便修改
 // （图片按行：光标在那一行时显示原文）。
 // 只改显示，不改文本，所以切换模式、保存都不会动文件里的写法。
@@ -339,6 +339,7 @@ function buildPreview(view: EditorView, sel: readonly SelectionRange[] | null): 
           case "Emphasis":
           case "StrongEmphasis":
           case "Strikethrough":
+          case "Highlight":
           case "InlineCode":
             if (!touches(node.from, node.to)) {
               for (let c = node.firstChild; c; c = c.nextSibling) {

@@ -146,7 +146,7 @@ const STYLES: Record<InlineStyle, { node: string | null; open: string; close: st
   underline: { node: null, open: "<u>", close: "</u>" },
 };
 
-/** 节点首尾的标记（**、~~、` 等），删掉它们就去掉了这个格式 */
+/** 节点首尾的标记（**、~~、==、` 等），删掉它们就去掉了这个格式 */
 function edgeMarks(node: SyntaxNode): Span[] {
   const out: Span[] = [];
   const first = node.firstChild;
@@ -295,6 +295,7 @@ function formatMarks(state: EditorState, node: SyntaxNode): Span[] {
     case "Emphasis":
     case "StrongEmphasis":
     case "Strikethrough":
+    case "Highlight":
     case "InlineCode":
     case "Autolink":
       return edgeMarks(node);
@@ -315,7 +316,7 @@ function formatMarks(state: EditorState, node: SyntaxNode): Span[] {
   }
 }
 
-/** 清除格式：去掉选中部分碰到的加粗、斜体、删除线、行内代码、链接和 <u> 等标签；没有选中时去掉光标所在的格式 */
+/** 清除格式：去掉选中部分碰到的加粗、斜体、删除线、高亮、行内代码、链接和 <u> 等标签；没有选中时去掉光标所在的格式 */
 export const clearFormat = (view: EditorView): boolean => {
   const { state } = view;
   if (blocked(state)) return true;

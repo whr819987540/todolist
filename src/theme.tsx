@@ -84,6 +84,9 @@ export function CssVars({ dark }: { dark: boolean }) {
       "--c-hover": token.colorFillTertiary,
       "--c-fill": token.colorFillQuaternary,
       "--c-highlight": dark ? "rgba(250, 173, 20, 0.35)" : "#ffe58f",
+      // 正文里 ==高亮== 的底色：比上面查找、搜索结果的底色淡、偏柠檬黄；落在高亮里的查找结果用深一点的 --c-mark-match
+      "--c-mark": dark ? "rgba(255, 230, 0, 0.26)" : "#fff3a3",
+      "--c-mark-match": dark ? "rgba(250, 173, 20, 0.6)" : "#ffd666",
       "--font": token.fontFamily,
     };
     const root = document.documentElement;
