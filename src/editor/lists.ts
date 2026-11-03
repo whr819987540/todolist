@@ -1,12 +1,13 @@
 import { indentLess, indentMore } from "@codemirror/commands";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
-import type { ChangeSpec, EditorState } from "@codemirror/state";
-import type { Command, EditorView } from "@codemirror/view";
+import { type ChangeSpec, EditorSelection, type EditorState } from "@codemirror/state";
+import { type Command, type EditorView, keymap } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { selectedLines } from "./formatting";
 
 // 列表缩进（同 Typora）：光标（选区）在列表项里时，Tab / Ctrl+] 把这一项连同它的子项缩进成上一项的子项，
-// Shift+Tab / Ctrl+[ 提到上一级；有序列表跟着重新编号。不在列表里时 Tab 仍是插入两个空格
+// Shift+Tab / Ctrl+[ 提到上一级；有序列表跟着重新编号。不在列表里时 Tab 仍是插入两个空格。
+// 回车在列表项的正文开头时在上面新起一项（newItemAbove），别处的回车续写列表用 Markdown 自带的
 
 function fullTree(state: EditorState): Tree {
   return ensureSyntaxTree(state, state.doc.length, 100) ?? syntaxTree(state);
@@ -216,6 +217,65 @@ export function indentListItems(view: EditorView, dir: 1 | -1): boolean {
   });
   return true;
 }
+
+/** 有空行隔开的列表（同 Markdown 自带的回车续写列表：看前两项之间有没有空行） */
+function looseList(state: EditorState, list: SyntaxNode): boolean {
+  const first = list.getChild("ListItem");
+  const second = first && siblingItem(first, 1);
+  if (!first || !second) return false;
+  const end = state.doc.lineAt(first.to);
+  const blank = /^[\s>]*$/.test(end.text);
+  return end.number + (blank ? 0 : 1) < state.doc.lineAt(second.from).number;
+}
+
+/**
+ * 回车：光标在列表项第一行的正文开头（列表符号、任务框后面），后面还有字时，在上面新起一个同一级的空项，
+ * 这一项连同光标挪到下一行（同 Typora）。空项的任务框没勾，这一项的勾选状态不变；有序列表里这一项和后面接着编号的
+ * 往后排一个号。不是这种情况时返回 false，交给 Markdown 自带的回车续写列表（insertNewlineContinueMarkup）：
+ * 它会删掉光标前面的空白，上面那一行剩下 "- [ ]"，任务框后面没有空格就不再是任务，勾也留在上面的空项上
+ */
+export const newItemAbove: Command = (view) => {
+  const { state } = view;
+  const sel = state.selection.main;
+  if (state.readOnly || state.selection.ranges.length > 1 || !sel.empty) return false;
+  const { doc } = state;
+  const pos = sel.head;
+  const line = doc.lineAt(pos);
+  const item = itemAt(fullTree(state), pos);
+  const mark = item?.getChild("ListMark");
+  if (!item || !mark || mark.from < line.from) return false;
+  const box = mark.nextSibling?.name === "Task" ? mark.nextSibling.getChild("TaskMarker") : null;
+  // 光标前面到列表符号（任务框）之间只有空白，后面紧接着就是字
+  if (!/^[ \t]+$/.test(doc.sliceString(box ? box.to : mark.to, pos)) || !/\S/.test(doc.sliceString(pos, pos + 1))) return false;
+
+  const at = (p: number) => p - line.from;
+  // 挪到下一行的这一项：同一行里外层的列表符号（"- - 甲" 的第一个 -）换成空格，引用标记、缩进照抄
+  let prefix = doc.sliceString(line.from, pos);
+  for (let p = item.parent; p; p = p.parent) {
+    const m = p.name === "ListItem" ? p.getChild("ListMark") : null;
+    if (m && m.from >= line.from) prefix = prefix.slice(0, at(m.from)) + " ".repeat(m.to - m.from) + prefix.slice(at(m.to));
+  }
+  const changes: ChangeSpec[] = [];
+  const num = itemNumber(state, item);
+  if (item.parent?.name === "OrderedList" && num) {
+    prefix = prefix.slice(0, at(num.from)) + String(num.value + 1) + prefix.slice(at(num.to));
+    const next = siblingItem(item, 1);
+    const renumber = new Map<number, ChangeSpec>();
+    if (next && itemNumber(state, next)?.value === num.value + 1) renumberRun(state, next, num.value + 2, renumber);
+    changes.push(...renumber.values());
+  }
+  // 上面的空项：任务框没勾
+  if (box && /x/i.test(doc.sliceString(box.from, box.to))) changes.push({ from: box.from + 1, to: box.from + 2, insert: " " });
+  // 有空行隔开的列表，新的一项和这一项之间也隔一行（引用里的空行留着 >）
+  const blank = item.parent && looseList(state, item.parent) ? prefix.slice(0, at(mark.from)).trimEnd() + state.lineBreak : "";
+  changes.push({ from: pos, insert: state.lineBreak + blank + prefix });
+  const all = state.changes(changes);
+  view.dispatch({ changes: all, selection: EditorSelection.cursor(all.mapPos(pos, 1)), scrollIntoView: true, userEvent: "input" });
+  return true;
+};
+
+/** 回车（要先于 Markdown 自带的回车续写列表） */
+export const listKeymap = keymap.of([{ key: "Enter", run: newItemAbove }]);
 
 /** Tab 插入两个空格；选中多行时整体缩进。只读时什么也不做，但同样不让焦点跳出编辑器 */
 export const insertTab: Command = (view) => {

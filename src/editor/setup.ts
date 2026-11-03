@@ -10,6 +10,7 @@ import { editBindings } from "./editBindings";
 import { findExtensions } from "./find";
 import { clipboardImages, dropCaret, type ImageResolver, imageResolver } from "./images";
 import { ctrlClickLinks } from "./links";
+import { listKeymap } from "./lists";
 import { livePreview } from "./livePreview";
 import { trackReadingPos } from "./outline";
 import { historyKeys, syncAnnotation } from "./peers";
@@ -118,8 +119,9 @@ export function createExtensions(o: EditorOptions): Extension[] {
     // 编辑快捷键：Ctrl+B 加粗、Tab 缩进列表等，同 Typora
     editBindings(o.editShortcuts),
     o.sharedHistory ? o.sharedHistory.extension : history(),
-    // 跳出代码块；要先于 Markdown 自带的回车续写列表
+    // 跳出代码块、在列表项的正文开头回车；要先于 Markdown 自带的回车续写列表
     Prec.highest(codeFenceKeymap),
+    Prec.highest(listKeymap),
     keymap.of([
       // Ctrl+/ 留给切换模式
       ...defaultKeymap.filter((b) => b.key !== "Mod-/"),

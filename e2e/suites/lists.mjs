@@ -349,5 +349,20 @@ export default async function (t) {
     qime.before.mark && near(qime.during.mark, qime.before.mark) && near(qime.during.pinyin, qime.before.caret) && !/zhong/.test(qime.during.markText) && qime.after.text.startsWith("> 中文普通的引用"),
     qime,
   );
+
+  // 任务框和文字之间按回车：上面新起一个空的任务（仍显示成任务框），勾着的这一项连同光标挪到下一行、照样勾着
+  await m.ev(`const v = view(); v.focus(); let n = 1; while (!v.state.doc.line(n).text.startsWith("  - [x] 嵌套的任务")) n++;
+    v.dispatch({ selection: { anchor: v.state.doc.line(n).from + 8 }, scrollIntoView: true }); return 1`);
+  await m.press("Enter");
+  await t.sleep(150);
+  const split = await m.ev(`const v = view(); const head = v.state.selection.main.head; const n = v.state.doc.lineAt(head).number;
+    const boxes = (k) => { const at = v.domAtPos(v.state.doc.line(k).from).node;
+      return [...(at.nodeType === 3 ? at.parentElement : at).closest(".cm-line").querySelectorAll("input[type=checkbox]")].map((b) => b.checked); };
+    return { above: v.state.doc.line(n - 1).text, here: v.state.doc.line(n).text.slice(0, 16), caret: head - v.state.doc.line(n).from, aboveBoxes: boxes(n - 1), hereBoxes: boxes(n) };`);
+  check(
+    "任务框和文字之间按回车：上面新起一个空的任务（显示成没勾的任务框），这一项连同光标挪到下一行、照样勾着",
+    split.above === "  - [ ] " && split.here.startsWith("  - [x] 嵌套的任务") && split.caret === 8 && JSON.stringify(split.aboveBoxes) === "[false]" && JSON.stringify(split.hereBoxes) === "[true]",
+    split,
+  );
   await m.viewport();
 }
