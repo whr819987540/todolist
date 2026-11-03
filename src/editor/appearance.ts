@@ -146,11 +146,16 @@ const theme = EditorView.theme({
   },
   // 同一行里第二个列表符号（如 "- - 甲"）
   ".cm-md-bullet": { display: "inline-block", width: "1.5em", textIndent: "0", color: "var(--c-text-2)" },
-  // 任务框连同右边的空当一共 --md-task 宽；无序列表的任务框占列表符号那一格，左边补上
+  // 任务框连同右边的空当（内边距，见 livePreview.ts 的 TaskWidget）一共 --md-task 宽；无序列表的任务框占列表符号那一格，左边补上
   ".cm-md-task": {
+    display: "inline-block",
+    paddingRight: "calc(var(--fs-editor) * 0.6)",
+    textIndent: "0",
+  },
+  ".cm-md-task-box": {
     width: "calc(var(--fs-editor) * 0.9)",
     height: "calc(var(--fs-editor) * 0.9)",
-    margin: "0 calc(var(--fs-editor) * 0.6) 0 0",
+    margin: "0",
     verticalAlign: "calc(var(--fs-editor) * -0.12)",
     cursor: "pointer",
     accentColor: "var(--c-primary)",

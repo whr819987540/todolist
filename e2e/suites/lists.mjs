@@ -364,5 +364,15 @@ export default async function (t) {
     split.above === "  - [ ] " && split.here.startsWith("  - [x] 嵌套的任务") && split.caret === 8 && JSON.stringify(split.aboveBoxes) === "[false]" && JSON.stringify(split.hereBoxes) === "[true]",
     split,
   );
+
+  // 空的任务项（上面刚新起的）：光标停在末尾时和任务框隔着空当，同有字的那一项的正文开头对齐，不贴着任务框
+  await m.ev(`const v = view(); v.focus(); const n = v.state.doc.lineAt(v.state.selection.main.head).number;
+    v.dispatch({ selection: { anchor: v.state.doc.line(n - 1).to } }); return 1`);
+  await m.press("End");
+  await t.sleep(80);
+  const gap = await m.ev(`const v = view(); const head = v.state.selection.main.head; const below = v.state.doc.lineAt(head).to + 1;
+    const at = v.domAtPos(head).node; const box = (at.nodeType === 3 ? at.parentElement : at).closest(".cm-line").querySelector("input[type=checkbox]");
+    return { caret: v.coordsAtPos(head, -1).left, text: v.coordsAtPos(below + 8, 1).left, box: box && box.getBoundingClientRect().right };`);
+  check("空的任务项：光标和任务框隔着空当，同下一项的正文开头对齐", gap.box !== null && near(gap.caret, gap.text) && gap.caret > gap.box + r.fs * 0.3, gap);
   await m.viewport();
 }

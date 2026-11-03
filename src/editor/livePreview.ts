@@ -163,22 +163,29 @@ class TaskWidget extends WidgetType {
   eq(other: TaskWidget) {
     return other.checked === this.checked && other.slot === this.slot;
   }
+  /**
+   * 复选框连同右边到正文的空当是一块：空当是外层的内边距，不是复选框的外边距。光标停在任务框后面、这一行后面没有字时
+   * （空的任务项），浏览器把光标画在这一块的右边，用外边距的话会贴着复选框
+   */
   toDOM(view: EditorView) {
-    const box = document.createElement("input");
+    const wrap = document.createElement("span");
+    wrap.className = this.slot ? "cm-md-task cm-md-task-slot" : "cm-md-task";
+    const box = wrap.appendChild(document.createElement("input"));
     box.type = "checkbox";
-    box.className = this.slot ? "cm-md-task cm-md-task-slot" : "cm-md-task";
+    box.className = "cm-md-task-box";
     box.checked = this.checked;
     box.tabIndex = -1;
     // 不移动光标、不抢焦点；勾选状态由文本决定，改完文本后整个控件会重建
     box.addEventListener("mousedown", (e) => e.preventDefault());
     box.addEventListener("click", (e) => {
       e.preventDefault();
-      toggleTask(view, view.posAtDOM(box));
+      toggleTask(view, view.posAtDOM(wrap));
     });
-    return box;
+    return wrap;
   }
-  ignoreEvent() {
-    return true;
+  // 复选框上的事件自己处理；点右边的空当照常放置光标（同点在正文开头前面）
+  ignoreEvent(e: Event) {
+    return e.target instanceof HTMLInputElement;
   }
 }
 
