@@ -795,9 +795,93 @@ pub fn markdown(md: &str, dir: &Path, key: &str) -> String {
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_GFM;
-    let events: Vec<Event> = TextMergeStream::new(Parser::new_ext(md, options)).collect();
+    let parsed: Vec<(Event, Range<usize>)> = Parser::new_ext(md, options).into_offset_iter().collect();
+    let events: Vec<Event> = TextMergeStream::new(highlights(md, parsed).into_iter()).collect();
     let html = with_footnotes(inline_pass(events, dir), key);
     sanitizer(dir.to_path_buf()).clean(&html).to_string()
+}
+
+/// `==高亮==` 换成 &lt;mark&gt;。pulldown-cmark 没有这个语法，照编辑器的规则（src/editor/highlightMark.ts，两边要一起改）
+/// 在文字里认：正好两个 =（三个以上连着的不算）；开头的 == 后面、结尾的 == 前面紧挨着字（是空白或在开头、结尾的不算）；
+/// 结尾的配同一层（同一段、同一个加粗、同一格……）里前面最近的、还没配上的开头。按源码里的位置看：转义了的 =（`\=`，
+/// 它的文字从 \ 后面起头）、字符引用（`&#61;`，文字和源码对不上）不算；行内代码是 Code 事件、不是文字，代码块和
+/// 图片的说明文字里的也不算。要在合并相邻的文字之前做，合并以后就看不出哪个 = 是转义来的
+fn highlights<'a>(md: &str, events: Vec<(Event<'a>, Range<usize>)>) -> Vec<Event<'a>> {
+    let src = md.as_bytes();
+    let blank = |c: Option<char>| c.is_none_or(char::is_whitespace);
+    // 每个文字事件里配上了的 ==：（在这段文字里的位置，是不是开头的）
+    let mut found: Vec<Vec<(usize, bool)>> = vec![Vec::new(); events.len()];
+    // 每一层里还没配上的开头的 ==：（第几个事件，在它的文字里的位置）
+    let mut open: Vec<Vec<(usize, usize)>> = vec![Vec::new()];
+    let mut skip = 0usize;
+    for (i, (e, r)) in events.iter().enumerate() {
+        match e {
+            Event::Start(tag) => {
+                if matches!(tag, Tag::CodeBlock(_) | Tag::Image { .. }) {
+                    skip += 1;
+                }
+                open.push(Vec::new());
+            }
+            Event::End(tag) => {
+                if matches!(tag, TagEnd::CodeBlock | TagEnd::Image) {
+                    skip = skip.saturating_sub(1);
+                }
+                open.pop();
+            }
+            Event::Text(text) if skip == 0 && md.get(r.clone()) == Some(text.as_ref()) => {
+                let b = text.as_bytes();
+                let mut j = 0;
+                while j + 1 < b.len() {
+                    let p = r.start + j;
+                    let escaped = j == 0 && p > 0 && src[p - 1] == b'\\';
+                    let run = (p > 0 && src[p - 1] == b'=') || src.get(p + 2) == Some(&b'=');
+                    if b[j] != b'=' || b[j + 1] != b'=' || escaped || run {
+                        j += 1;
+                        continue;
+                    }
+                    let close = !blank(md[..p].chars().next_back());
+                    let opening = !blank(md[p + 2..].chars().next());
+                    if let Some(level) = open.last_mut() {
+                        match (close, level.last()) {
+                            (true, Some(&(ei, ej))) => {
+                                level.pop();
+                                found[ei].push((ej, true));
+                                found[i].push((j, false));
+                            }
+                            _ if opening => level.push((i, j)),
+                            _ => {}
+                        }
+                    }
+                    j += 2;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::with_capacity(events.len());
+    for ((e, _), mut marks) in events.into_iter().zip(found) {
+        let Event::Text(text) = e else {
+            out.push(e);
+            continue;
+        };
+        if marks.is_empty() {
+            out.push(Event::Text(text));
+            continue;
+        }
+        marks.sort_unstable();
+        let mut at = 0;
+        for (j, opening) in marks {
+            if j > at {
+                out.push(Event::Text(text[at..j].to_string().into()));
+            }
+            out.push(Event::InlineHtml(if opening { "<mark>" } else { "</mark>" }.into()));
+            at = j + 2;
+        }
+        if at < text.len() {
+            out.push(Event::Text(text[at..].to_string().into()));
+        }
+    }
+    out
 }
 
 /// 图片换成嵌进去的 &lt;img&gt;（或占位），正文里的网址、邮箱变成链接（代码块、链接里的不算）
@@ -1325,6 +1409,7 @@ h4.todo-title, h5.todo-title, h6.todo-title { font-size: 18px; }
 .md li > ul, .md li > ol { margin-bottom: 0; }
 .md li:has(> input[type="checkbox"]) { list-style: none; }
 .md li > input[type="checkbox"] { margin: 0 0.45em 0 -1.4em; vertical-align: -0.1em; }
+.md mark { color: inherit; background: #fff3a3; border-radius: 2px; }
 .md code { padding: 0.1em 0.35em; font-family: "Cascadia Mono", Consolas, "Courier New", "Microsoft YaHei", monospace; font-size: 0.9em; background: #f2f3f5; border-radius: 3px; }
 .md pre { padding: 12px 16px; background: #f6f7f9; border: 1px solid #e5e6eb; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .md pre code { padding: 0; font-size: 0.875em; background: none; }
@@ -1437,6 +1522,70 @@ mod tests {
         ] {
             assert!(html.contains(want), "缺 {want}：{html}");
         }
+    }
+
+    /// 正文里每一处 &lt;mark&gt; 里的内容
+    fn marks(text: &str) -> Vec<String> {
+        let html = md(text);
+        html.split("<mark>").skip(1).map(|s| s.split("</mark>").next().unwrap_or_default().to_string()).collect()
+    }
+
+    // 怎样算 ==高亮== 同编辑器（src/editor/highlightMark.test.ts 的用例）
+    #[test]
+    fn highlights_follow_the_editor_rules() {
+        assert_eq!(md("买==牛奶==和==面包=="), "<p>买<mark>牛奶</mark>和<mark>面包</mark></p>\n");
+        assert_eq!(marks("==整段高亮=="), ["整段高亮"]);
+        // 挨着全角标点、英文的也算
+        assert_eq!(marks("这是==（重点）==。"), ["（重点）"]);
+        assert_eq!(marks("a==b==c"), ["b"]);
+        // 开头的 == 后面、结尾的 == 前面是空白的不算；结尾那个不算时，前面那个接着等后面的
+        assert!(marks("a == b == c").is_empty());
+        assert!(marks("== 甲==").is_empty());
+        assert!(marks("==甲 ==").is_empty());
+        assert_eq!(marks("==甲 == 乙=="), ["甲 == 乙"]);
+        // 只有一边的照原样
+        assert_eq!(md("if a==b {"), "<p>if a==b {</p>\n");
+        assert!(marks("==没有结尾").is_empty());
+        // 正好两个 = 才算
+        assert!(marks("===甲===").is_empty());
+        assert!(marks("==甲===").is_empty());
+        assert!(marks("a === b").is_empty());
+        // 转义了的、字符引用的 = 不算；转义的是 \ 时后面的 == 照样算
+        assert_eq!(md("\\==甲=="), "<p>==甲==</p>\n");
+        assert!(marks("&#61;=甲==").is_empty());
+        assert_eq!(marks("\\\\==甲=="), ["甲"]);
+        // 结尾的配前面最近的开头
+        assert_eq!(marks("==甲==乙=="), ["甲"]);
+        // 行内代码、代码块、链接地址里的不算
+        assert!(marks("`==甲==`").is_empty());
+        assert!(marks("```\n==甲==\n```").is_empty());
+        assert!(marks("[链接](https://a.cn/?q==甲==)").is_empty());
+    }
+
+    #[test]
+    fn highlights_nest_and_work_in_every_block() {
+        let html = md("**==甲==** ==**乙**== *==丙==* ~~==丁==~~ [==戊==](https://a.cn)");
+        for want in [
+            "<strong><mark>甲</mark></strong>",
+            "<mark><strong>乙</strong></mark>",
+            "<em><mark>丙</mark></em>",
+            "<del><mark>丁</mark></del>",
+            "<a href=\"https://a.cn\" rel=\"noopener noreferrer\"><mark>戊</mark></a>",
+        ] {
+            assert!(html.contains(want), "缺 {want}：{html}");
+        }
+        // 同一段里可以跨行，跨段的不算
+        assert_eq!(marks("==甲\n乙=="), ["甲\n乙"]);
+        assert!(marks("==甲\n\n乙==").is_empty());
+        assert_eq!(
+            marks("# ==标题==\n\n- ==列表==\n\n> ==引用==\n\n| ==表头== |\n| --- |\n| ==格子== |"),
+            ["标题", "列表", "引用", "表头", "格子"]
+        );
+        // 文字下面一行的 == 是标题的下划线
+        assert_eq!(md("标题\n=="), "<h1>标题</h1>\n");
+        // 高亮里的网址照样变成链接
+        let link = md("==见 https://a.cn==");
+        assert!(link.contains("<mark>见 <a href=\"https://a.cn\""), "{link}");
     }
 
     #[test]

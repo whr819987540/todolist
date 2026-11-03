@@ -2,7 +2,8 @@ import { tags as t } from "@lezer/highlight";
 import type { DelimiterType, MarkdownConfig } from "@lezer/markdown";
 
 // ==高亮==（同 Typora、Obsidian）：不是 GFM 的语法，@lezer/markdown 里没有，照它的删除线 ~~…~~ 写成一个扩展，
-// 解析出 Highlight 节点，两头的 == 是 HighlightMark。怎样算高亮：
+// 解析出 Highlight 节点，两头的 == 是 HighlightMark。导出 HTML 时 Rust 端（src-tauri/src/export.rs 的 highlights）
+// 照同样的规则认，两边要一起改，单元测试用同样的例子。怎样算高亮：
 // - 正好两个 =，三个以上连着的 = 不算（=== 也是 Setext 标题的下划线）
 // - 开头的 == 后面紧挨着字，结尾的 == 前面紧挨着字；后面（前面）是空白或行尾（行首）的不算，a == b 这样的比较不会被当成高亮。
 //   不照 ~~ 那样看两边的标点：中文里 ==（甲）== 这种挨着全角标点的很常见，按标点的规则反而认不出
