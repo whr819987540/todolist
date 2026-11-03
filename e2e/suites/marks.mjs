@@ -45,11 +45,17 @@ export default async function (t) {
     return e && { text: e.textContent, bg: getComputedStyle(e).backgroundColor }`);
   check("表格的格子里也渲染成高亮，底色同正文里的", cell?.text === "格子里的" && cell.bg === style.bg, cell);
 
-  // 光标放进正文那一处高亮里：显示出两头的 ==，底色还在
-  await m.ev(`const v = view(); v.focus(); v.dispatch({ selection: { anchor: v.state.doc.toString().indexOf("（重点）") + 1 } });
-    await sleep(300); return 1`);
+  // 光标放进正文那一处高亮里：显示出两头的 ==，底色还在。光标先放在高亮的开头，再真的按一下 → 进去：
+  // 只用脚本放光标时，WebView2 里页面还没收到过输入、没有焦点（document.hasFocus() 是 false），编辑器当成没有焦点、全部渲染
+  await m.ev(`const v = view(); v.focus(); v.dispatch({ selection: { anchor: v.state.doc.toString().indexOf("（重点）") } }); return 1`);
+  await m.press("ArrowRight");
+  await t.sleep(300);
   const raw = await line(3);
-  check("光标碰到时显示出两头的 ==", raw === "这是==（重点）==，a == b 不算，if a==b 也不算。", raw);
+  check("光标碰到时显示出两头的 ==", raw === "这是==（重点）==，a == b 不算，if a==b 也不算。", {
+    raw,
+    focus: await m.ev(`const v = view(); return { editor: v.hasFocus, page: document.hasFocus(),
+      at: v.state.selection.main.head - v.state.doc.toString().indexOf("（重点）") }`),
+  });
   check("显示原文时中间的字照样高亮", (await marks()).includes("（重点）"), await marks());
 
   // 查找「重点」：两处都在高亮里，查找结果画在高亮上面（在高亮的里层），没选中的那个颜色也和高亮不同
