@@ -33,3 +33,34 @@
 - 开始一个新功能、一批新改动之前先 `git fetch`，看 `git log --oneline HEAD..origin/main`：main 动了就先把分支变基到最新的 main 上，趁差得少时处理，再接着做；做得久的，中途也看几次
 - 同时有几条线在开发（另一台机器、另一个会话、worktree 里的 subagent）时，先约好谁改哪些核心模块（存储层的项目路径、编辑区和会话、侧栏的树等）；要动同一块的，一条先合进 main，另一条再在它上面做，不要两边各写各的最后再合
 - 变基时的冲突不只是文字：对面改了架构或规则时，每个提交要按新的规则重新落实它要做到的行为，每个提交单独拿出来都要能编译、测试通过
+
+## 发布新版本（在 Linux 上）
+
+发版会影响到用户：tag 推上去后，`release.yml` 在 GitHub 的 Windows 机器上打包，发布成这个 tag 的 Release 并标成 Latest，已经装了软件的人随后都会收到更新提示。所以要等用户说了发哪个版本再做；用户没说版本号时先问（一般是改最后一位）。README.md「发布到 GitHub」里的 `npm run release -- <版本>` 会顺带在本机打包、安装，Linux 上做不了，所以在 Linux 上只改版本号，打包交给 GitHub：
+
+1. 发版前确认：要发的东西都已经合进 main，并且这个提交的 CI 和 E2E 都通过了（在功能分支上通过的同一个提交也算）；`git fetch` 后 `main` 和 `origin/main` 一致、工作区干净；`git ls-remote --tags origin "v$v"` 查到的结果是空的，说明这个 tag 还没用过
+2. 改版本号：要改 5 个文件、6 行，和以前「chore: 版本号改为 …」的提交一样（对照 `git show v0.1.5 --stat`）。Cargo.lock 在 Windows 上打包时会自动更新，Linux 上不打包，要手动改：
+   ```bash
+   v=0.1.6
+   npm version $v --no-git-tag-version   # package.json、package-lock.json
+   sed -i -E "0,/(\"version\":[[:space:]]*\")[^\"]*\"/s//\1$v\"/" src-tauri/tauri.conf.json
+   sed -i -E "0,/^version = \"[^\"]*\"/s//version = \"$v\"/" src-tauri/Cargo.toml
+   sed -i "/^name = \"todo-list\"$/{n;s/^version = \".*\"$/version = \"$v\"/}" src-tauri/Cargo.lock
+   git diff --stat                       # 应该正好是这 5 个文件、6 行
+   ```
+3. 预览更新说明：release 页面的说明和软件里的更新提示，都取上一个 tag 以来 feat / fix / perf 提交的标题（规则见 `release.yml` 的「更新说明」那一步）。用下面的命令看一遍，把结果告诉用户：
+   ```bash
+   git log --no-merges --format='%s' "$(git describe --tags --abbrev=0)..HEAD" \
+     | grep -E '^(feat|fix|perf)(\([^)]*\))?: ' | grep -vE '^[a-z]+\((e2e|ci|test|docs|build)\): '
+   ```
+4. 提交、打 tag、推送：tag 打在改版本号的那个提交上，用轻量 tag，名字是 `v` 加版本号。这里推送走 SSH，不受代理影响：
+   ```bash
+   git commit -am "chore: 版本号改为 $v"   # 提交说明照常带署名行
+   git tag "v$v"
+   git push origin main "v$v"
+   ```
+5. 盯着发布跑完（约 6～10 分钟）：用 `gh run list --workflow Release --limit 3` 找到这次的运行编号，写一个循环在后台每分钟查一次 `gh run view <编号> --json status,conclusion`，等它结束（Release 运行里有两个任务：打包发布的 build，和把版本号最大的标成 Latest 的 latest，要两个都结束）。`gh` 等联网命令要走用户 shell 里的代理，`gh` 用不了时轮询 Actions 页面（这两点见用户级的说明）
+6. 跑完后核对：`gh release view "v$v"` 里要有 `TodoList_<版本>_x64-setup.exe` 和 `latest.json` 两个附件，说明和第 3 步预览的一样；`gh release list --limit 3` 里它标着 Latest。最后告诉用户：安装包在 Linux 上没有试装过，要到 Windows 上装一下，或者等已经装着的软件提示更新时验证
+7. 失败时：
+   - 「检查版本号」那一步失败：说明 tag 和 `tauri.conf.json` 里的版本号对不上，多半是忘了改版本号或者改漏了。这时 tag 已经推上去了，删掉重打会改动别人已经拉到的东西，所以先问用户再动
+   - 打包、上传失败（网络、Actions 临时出故障）：tag 不用动，用 `gh workflow run release.yml -f tag="v$v"` 重新打包；这个 tag 已经有 release 时，只会替换安装包和 `latest.json`
