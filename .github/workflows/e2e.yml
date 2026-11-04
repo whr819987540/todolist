@@ -2,7 +2,14 @@
 name: E2E
 
 on:
+  # 改动的文件全是下面这些（文档、发布流程、编辑器设置）时不跑：它们不进构建，测试也不读；只要有一个别的文件就照常跑。
+  # 和 ci.yml 的同一份清单，改的时候两边一起改
   push:
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - ".vscode/**"
+      - ".github/workflows/release.yml"
   # 手动跑：Actions 页面，或 gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"
   workflow_dispatch:
     inputs:

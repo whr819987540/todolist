@@ -2,8 +2,20 @@
 name: CI
 
 on:
+  # 改动的文件全是下面这些（文档、发布流程、编辑器设置）时不跑：它们不进构建，测试也不读；只要有一个别的文件就照常跑。
+  # 和 e2e.yml 的同一份清单，改的时候两边一起改
   push:
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - ".vscode/**"
+      - ".github/workflows/release.yml"
   pull_request:
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - ".vscode/**"
+      - ".github/workflows/release.yml"
 
 # 同一个分支上新的提交到了，前面还没跑完的就不跑了
 concurrency:

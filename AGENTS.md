@@ -22,7 +22,7 @@
 写好功能后，端到端测试在 GitHub Actions 上跑，在 Windows 上开发时也一样。本机的 `npm run e2e` 会弹出测试版的窗口、抢前台、模拟键盘鼠标，打断用户在这台电脑上正在做的事；用户用着电脑时结果也不可靠（窗口被最小化、拿不到前台）。
 
 - 本机只跑不弹窗的检查：`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`
-- 提交后推到功能分支（不是 main），CI 和 E2E 推送后自动跑（E2E 全部套件约 10 分钟）：`gh run list --branch <分支>` 看进度，`gh run view <编号> --log` 看结果，没通过的修了再推；只重跑几个套件用 `gh workflow run e2e.yml --ref <分支> -f suites="tabs hidedone"`（同一分支推送触发的 E2E 还在跑时别派，会把它挤掉）。都通过后由用户决定要不要合进 main
+- 提交后推到功能分支（不是 main），CI 和 E2E 推送后自动跑（E2E 全部套件约 10 分钟；改动的文件全是根目录的 `.md`、`docs/`、`.vscode/`、`release.yml` 时两个都不跑，也就没有结果可等）：`gh run list --branch <分支>` 看进度，`gh run view <编号> --log` 看结果，没通过的修了再推；只重跑几个套件用 `gh workflow run e2e.yml --ref <分支> -f suites="tabs hidedone"`（同一分支推送触发的 E2E 还在跑时别派，会把它挤掉）。都通过后由用户决定要不要合进 main
 - 在本机跑 `npm run e2e`、启动测试版程序截图或调试之前，先问用户（比如 GitHub 上重现不了、要看着窗口查的时候）
 
 ## 分支要短，尽早合进 main
@@ -38,7 +38,7 @@
 
 发版会影响到用户：tag 推上去后，`release.yml` 在 GitHub 的 Windows 机器上打包，发布成这个 tag 的 Release 并标成 Latest，已经装了软件的人随后都会收到更新提示。所以要等用户说了发哪个版本再做；用户没说版本号时先问（一般是改最后一位）。README.md「发布到 GitHub」里的 `npm run release -- <版本>` 会顺带在本机打包、安装，Linux 上做不了，所以在 Linux 上只改版本号，打包交给 GitHub：
 
-1. 发版前确认：要发的东西都已经合进 main，并且这个提交的 CI 和 E2E 都通过了（在功能分支上通过的同一个提交也算）；`git fetch` 后 `main` 和 `origin/main` 一致、工作区干净；`git ls-remote --tags origin "v$v"` 查到的结果是空的，说明这个 tag 还没用过
+1. 发版前确认：要发的东西都已经合进 main，并且这个提交的 CI 和 E2E 都通过了（在功能分支上通过的同一个提交也算；只改了文档的提交不跑，看它前面最近一个跑过的提交）；`git fetch` 后 `main` 和 `origin/main` 一致、工作区干净；`git ls-remote --tags origin "v$v"` 查到的结果是空的，说明这个 tag 还没用过
 2. 改版本号：要改 5 个文件、6 行，和以前「chore: 版本号改为 …」的提交一样（对照 `git show v0.1.5 --stat`）。Cargo.lock 在 Windows 上打包时会自动更新，Linux 上不打包，要手动改：
    ```bash
    v=0.1.6
