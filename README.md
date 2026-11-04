@@ -206,7 +206,7 @@ npm run e2e             # Windows 上的端到端测试：启动测试版程序�
 
 ESLint 的配置在 `eslint.config.js`：typescript-eslint 的推荐规则，加上 eslint-plugin-react-hooks 的全部推荐规则（`rules-of-hooks`、`exhaustive-deps` 和 React Compiler 的 `refs`、`immutability`、`purity`、`set-state-in-effect` 等）。代码里有不少刻意绕开 hook 依赖的写法（用 ref 拿最新的值、只在挂载时执行一次的 effect），这些地方就地加了 `eslint-disable-next-line` 并写明原因；不要为了消掉警告机械地补依赖，那会让只该执行一次的 effect 反复执行。
 
-有 CI（`.github/workflows/ci.yml`）：每次 push、提 PR 时（改动的文件全是根目录的 `.md`、`docs/`、`.vscode/` 和 `release.yml` 时不跑，它们不进构建、测试也不读；清单在 `ci.yml`、`e2e.yml` 的 `paths-ignore`，两边一样）在 GitHub 的 Windows 机器（windows-latest，Node 24、stable Rust，缓存 npm 和 Rust 的依赖）上依次跑 `npm ci`、`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`；提交前在本机按同样的顺序跑一遍即可。`npm run build` 放在 `cargo test` 前面：`tauri::generate_context!` 在不是 dev 的构建（`tauri build`）里要把 `frontendDist`（`../dist`）嵌进程序，现在的 `cargo test` 是 dev 构建、用 `devUrl`，其实不读 `dist`，先构建好是为了以后换了构建方式也不出错。端到端测试是另一个 workflow（`.github/workflows/e2e.yml`），见下文「端到端测试（Windows）」。
+有 CI（`.github/workflows/ci.yml`）：每次 push、提 PR 时（改动的文件全是根目录的 `.md`、`docs/`、`.vscode/` 和 `release.yml` 时不跑，它们不进构建、测试也不读；清单在 `ci.yml`、`e2e.yml` 的 `paths-ignore`，两边一样；推 tag 时也不跑，发布的提交已经在 main 上跑过）在 GitHub 的 Windows 机器（windows-latest，Node 24、stable Rust，缓存 npm 和 Rust 的依赖）上依次跑 `npm ci`、`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`；提交前在本机按同样的顺序跑一遍即可。`npm run build` 放在 `cargo test` 前面：`tauri::generate_context!` 在不是 dev 的构建（`tauri build`）里要把 `frontendDist`（`../dist`）嵌进程序，现在的 `cargo test` 是 dev 构建、用 `devUrl`，其实不读 `dist`，先构建好是为了以后换了构建方式也不出错。端到端测试是另一个 workflow（`.github/workflows/e2e.yml`），见下文「端到端测试（Windows）」。
 
 测量扫描数据目录的耗时（`list_workspaces`、`load_workspace`，含预览缓存是空的和已缓存两种情况）：用一份测试数据（不要用真实数据），跑标了 `#[ignore]` 的 `bench_scan`。它只读不写（数据和 `.todos.json` 一致时扫描不会写盘）：
 
