@@ -10,6 +10,7 @@ import { editBindings } from "./editBindings";
 import { findExtensions } from "./find";
 import { Highlight } from "./highlightMark";
 import { clipboardImages, dropCaret, type ImageResolver, imageResolver } from "./images";
+import { lineCopy } from "./lineCopy";
 import { ctrlClickLinks } from "./links";
 import { listKeymap } from "./lists";
 import { livePreview } from "./livePreview";
@@ -151,6 +152,8 @@ export function createExtensions(o: EditorOptions): Extension[] {
       },
     }),
     dropCaret,
+    // 没选中文字时 Ctrl+C 复制整行：列表项、任务、标题的行不带行首的标记（lineCopy.ts）
+    lineCopy,
     changeReporter(o),
     trackPosition(o.onPosition),
     trackReadingPos(o.onReadingPos),
