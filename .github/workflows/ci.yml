@@ -18,10 +18,15 @@ on:
       - "docs/**"
       - ".vscode/**"
       - ".github/workflows/release.yml"
+  # 每周两次在 main 上定时跑（北京时间周一、周四凌晨 2 点）：GitHub 会删掉 7 天没用过的缓存，main 隔得久了没跑，
+  # 新分支就拿不到 Rust 的编译缓存、要从头编 300 多个 crate（多 3 分钟）；顺便早点发现 Windows 机器、Rust 更新后的问题。
+  # 和 e2e.yml 一样，改的时候两边一起改
+  schedule:
+    - cron: "0 18 * * 0,3"
 
-# 同一个分支上新的提交到了，前面还没跑完的就不跑了
+# 同一个分支上新的提交到了，前面还没跑完的就不跑了；定时跑的另算一组，不和推送的互相取消
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ github.event_name == 'schedule' && '-schedule' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -38,9 +43,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # 只在 main 上存：分支用 main 的（GitHub 的缓存按分支隔开，分支能读 main 的），不各存一份 500 多 MB，
+      # 免得占满仓库 10 GB 的缓存、把 main 的挤掉
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: 安装依赖
         run: npm ci

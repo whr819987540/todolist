@@ -19,9 +19,13 @@ on:
         description: 只跑这几个套件（空格分开，空着跑全部）
         required: false
         default: ""
+  # 每周两次在 main 上定时跑，免得 Rust 的编译缓存放过 7 天被删掉（见 ci.yml 的同一处，改的时候两边一起改）
+  schedule:
+    - cron: "0 18 * * 0,3"
 
+# 同一个分支上新的提交到了（或手动派了一次），前面还没跑完的就不跑了；定时跑的另算一组，不和推送的互相取消
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.ref }}${{ github.event_name == 'schedule' && '-schedule' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -50,8 +54,8 @@ jobs:
         with:
           workspaces: src-tauri -> target/e2e
           cache-on-failure: true
-          # 几组用的是同一份缓存，只让第 1 组存，不重复上传
-          save-if: ${{ matrix.shard == 1 }}
+          # 只在 main 上存（同 ci.yml）；几组用的是同一份缓存，只让第 1 组存，不重复上传
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 }}
 
       # 记下机器的情况，测试没通过时对照
       - name: 环境
