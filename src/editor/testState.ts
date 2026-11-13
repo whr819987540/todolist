@@ -2,7 +2,15 @@
 // 文本里用记号表示光标和选区：| 是光标；« 是选区的 anchor（不动的一端），» 是 head（光标所在的一端），
 // 写成 «abc» 是正向选区，»abc« 是反向选区
 
-import { EditorSelection, EditorState, type Extension, Transaction, type TransactionSpec } from "@codemirror/state";
+import { ensureSyntaxTree } from "@codemirror/language";
+import {
+  EditorSelection,
+  EditorState,
+  type EditorStateConfig,
+  type Extension,
+  Transaction,
+  type TransactionSpec,
+} from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { markdownSupport } from "./setup";
 
@@ -40,10 +48,22 @@ export function stringify(state: EditorState): string {
   return out;
 }
 
-/** 和编辑器一样的 Markdown 解析（setup.ts 的 markdownSupport） */
+/**
+ * 建好 EditorState，并且整篇解析完。CodeMirror 建 state 时只解析开头一段（约 3000 个字，最多 20 毫秒），
+ * 剩下的由编辑器在后台接着解析；单元测试里没有编辑器，按 syntaxTree 算的（列表排版、表格、图片、光标停在哪里）
+ * 拿到的就是没解析完的树：正文长时每次都这样，CI 的机器慢、刚开始跑还没热起来时短的正文也会这样。
+ * 测试里建 state 都用它，不直接用 EditorState.create
+ */
+export function parsedState(config: EditorStateConfig): EditorState {
+  const state = EditorState.create(config);
+  // ensureSyntaxTree 把解析接着做完，结果留在 state 的解析进度里；一个空的 update 才让 syntaxTree 拿到它
+  return ensureSyntaxTree(state, state.doc.length, 10_000) ? state.update({}).state : state;
+}
+
+/** 和编辑器一样的 Markdown 解析（setup.ts 的 markdownSupport），整篇解析完（parsedState） */
 export function makeState(marked: string, extensions: Extension[] = []): EditorState {
   const { doc, selection } = parse(marked);
-  return EditorState.create({ doc, selection, extensions: [markdownSupport(), extensions] });
+  return parsedState({ doc, selection, extensions: [markdownSupport(), extensions] });
 }
 
 /**

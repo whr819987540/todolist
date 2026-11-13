@@ -1,5 +1,5 @@
 import { history, undo } from "@codemirror/commands";
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import {
   clearFormat,
@@ -19,7 +19,7 @@ import {
 } from "./formatting";
 import { markdownSupport } from "./setup";
 import { tableBlocks } from "./tables";
-import { apply, exec, readOnly, TestView } from "./testState";
+import { apply, exec, parsedState, readOnly, TestView } from "./testState";
 
 // 按 docs/requirements.md「编辑快捷键」和 README 的快捷键表写的用例。
 // 记号：| 光标，«» 选区（« 是不动的一端，» 是光标所在的一端）
@@ -302,7 +302,7 @@ describe("插入表格（Ctrl+T）", () => {
   const TABLE = "|  |  |  |\n| --- | --- | --- |\n|  |  |  |";
   // 表格里有 |，不能用 testState 的记号（| 是光标），直接给出光标的位置
   const view = (doc: string, cursor: number, extra = [history()]) =>
-    new TestView(EditorState.create({ doc, selection: EditorSelection.cursor(cursor), extensions: [markdownSupport(), extra] }));
+    new TestView(parsedState({ doc, selection: EditorSelection.cursor(cursor), extensions: [markdownSupport(), extra] }));
   const insert = (doc: string, cursor: number) => {
     const v = view(doc, cursor);
     insertTable(v.asView);
@@ -313,7 +313,7 @@ describe("插入表格（Ctrl+T）", () => {
     const r = insert("", 0);
     expect(r.doc).toBe(TABLE);
     expect(r.cursor).toBe(2);
-    const state = EditorState.create({ doc: r.doc, extensions: markdownSupport() });
+    const state = parsedState({ doc: r.doc, extensions: markdownSupport() });
     const [t] = tableBlocks(state);
     expect([t.model.header.length, t.model.rows.length]).toEqual([3, 1]);
   });

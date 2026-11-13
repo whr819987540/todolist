@@ -1,7 +1,8 @@
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { markdownSupport } from "./setup";
 import { type Inline, renderedTables, type TableBlock, type TableCell, tableBlocks } from "./tables";
+import { parsedState } from "./testState";
 
 // 按 docs/requirements.md「待办内容 → 表格」写的用例：渲染后的表格里有什么（表头、对齐、单元格里的格式、格子数），
 // 点格子时光标放在哪里，哪些表格渲染、光标（选区）在表格里时显示原文
@@ -20,7 +21,7 @@ const texts = (cells: readonly TableCell[]) => cells.map((c) => plain(c.content)
 
 /** 和编辑器一样的 Markdown 解析（testState 的 makeState 把 | 当成光标的记号，表格里用不了） */
 function tablesOf(doc: string) {
-  const state = EditorState.create({ doc, extensions: markdownSupport() });
+  const state = parsedState({ doc, extensions: markdownSupport() });
   return { state, tables: tableBlocks(state) };
 }
 

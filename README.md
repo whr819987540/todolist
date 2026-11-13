@@ -202,7 +202,7 @@ cd src-tauri && cargo test   # 单元测试（存储（含图片的附件目录�
 npm run e2e             # Windows 上的端到端测试：启动测试版程序，模拟按键、鼠标，检查界面、文件、注册表、窗口，见下文
 ```
 
-前端单元测试放在被测模块旁边（`*.test.ts`），配置在 `vitest.config.ts`。默认在 Node 里跑：编辑命令直接构造 CodeMirror 的 `EditorState` 测（`src/editor/testState.ts` 提供用 `|`、`«»` 标出光标和选区的写法，和编辑器用同一份 Markdown 解析），不需要 DOM；要用 DOM、`localStorage` 的（`workspaceState.test.ts`，渲染 `SettingsProvider` 的 `settings.test.ts`，在 antd 的 `App` 里挂上 `useUpdatePrompt`、看右下角的提示和确认框的 `update.test.ts`；happy-dom 里 antd 的动画不会结束，关掉的提示、对话框留在页面里）在文件开头指定 happy-dom。用例按 docs/requirements.md 里写的行为写，不照着实现抄期望值。
+前端单元测试放在被测模块旁边（`*.test.ts`），配置在 `vitest.config.ts`。默认在 Node 里跑：编辑命令直接构造 CodeMirror 的 `EditorState` 测（`src/editor/testState.ts` 提供用 `|`、`«»` 标出光标和选区的写法，和编辑器用同一份 Markdown 解析；建 state 用它的 `parsedState` / `makeState`，不直接用 `EditorState.create`：CodeMirror 建 state 时只解析开头一段，剩下的靠编辑器在后台接着解析，测试里没有编辑器，长的正文、CI 的机器慢时按 `syntaxTree` 算的结果就不对，它们先把整篇解析完），不需要 DOM；要用 DOM、`localStorage` 的（`workspaceState.test.ts`，渲染 `SettingsProvider` 的 `settings.test.ts`，在 antd 的 `App` 里挂上 `useUpdatePrompt`、看右下角的提示和确认框的 `update.test.ts`；happy-dom 里 antd 的动画不会结束，关掉的提示、对话框留在页面里）在文件开头指定 happy-dom。用例按 docs/requirements.md 里写的行为写，不照着实现抄期望值。
 
 ESLint 的配置在 `eslint.config.js`：typescript-eslint 的推荐规则，加上 eslint-plugin-react-hooks 的全部推荐规则（`rules-of-hooks`、`exhaustive-deps` 和 React Compiler 的 `refs`、`immutability`、`purity`、`set-state-in-effect` 等）。代码里有不少刻意绕开 hook 依赖的写法（用 ref 拿最新的值、只在挂载时执行一次的 effect），这些地方就地加了 `eslint-disable-next-line` 并写明原因；不要为了消掉警告机械地补依赖，那会让只该执行一次的 effect 反复执行。
 

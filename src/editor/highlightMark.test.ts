@@ -1,13 +1,13 @@
 import { syntaxTree } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { markdownSupport } from "./setup";
+import { parsedState } from "./testState";
 
 // 按 docs/requirements.md「待办内容 → 高亮」写的用例：哪些 ==…== 算高亮（解析成 Highlight 节点），高亮里是哪些字
 
 /** 正文里每一段高亮里面的字（去掉两头的 ==） */
 function highlights(doc: string): string[] {
-  const state = EditorState.create({ doc, extensions: markdownSupport() });
+  const state = parsedState({ doc, extensions: markdownSupport() });
   const out: string[] = [];
   syntaxTree(state).iterate({
     enter(n) {
@@ -94,7 +94,7 @@ describe("==高亮==", () => {
   });
 
   it("文字下面一行的 == 是标题的下划线，不是高亮", () => {
-    const state = EditorState.create({ doc: "标题\n==", extensions: markdownSupport() });
+    const state = parsedState({ doc: "标题\n==", extensions: markdownSupport() });
     expect(syntaxTree(state).topNode.firstChild?.name).toBe("SetextHeading1");
     expect(highlights("标题\n==")).toEqual([]);
   });
