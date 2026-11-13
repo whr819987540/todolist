@@ -31,8 +31,9 @@ concurrency:
 jobs:
   e2e:
     # 套件分成 4 组，在 4 台机器上同时跑（run.mjs 的 --shard 按估计的耗时分，每个套件正好在一组里），
-    # 一个接一个跑要 20 分钟；每组各自装依赖、构建测试版。手动只跑几个套件时一组就够
-    name: e2e (${{ matrix.shard }}/${{ strategy.job-total }})
+    # 一个接一个跑要 20 分钟；每组各自装依赖、构建测试版。手动只跑几个套件时一组就够。
+    # 任务名里不能有 /：gh run view --log 按任务名在日志的压缩包里找，带 / 的找不到，什么都不打出来
+    name: e2e (${{ matrix.shard }} of ${{ strategy.job-total }})
     strategy:
       fail-fast: false
       matrix:

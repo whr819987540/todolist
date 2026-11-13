@@ -245,7 +245,7 @@ npm run e2e -- --shard=2/4        # 套件分成 4 组，只跑第 2 组（GitHu
 
 #### 在 GitHub Actions 上跑
 
-`.github/workflows/e2e.yml`：每次 push 时（只改了文档等时不跑，同上文 CI）把全部套件分成 4 组，在 4 台 windows-latest 上同时跑（任务名 `e2e (1/4)`～`e2e (4/4)`，各自 `npm ci`、构建测试版后跑 `run.mjs --shard=<组>/4`），加上构建测试版约 9 分钟。分组按 `run.mjs` 里 `SECONDS` 估计的耗时，从长到短每个放进加起来最短的那一组，每个套件正好在一组里，新加的套件不会漏跑；一组没通过时别的组照常跑完。Rust 的编译缓存放在 `src-tauri/target/e2e`，几组共用一份，只由第 1 组存。也可以手动跑，只跑其中几个套件（这时只开一组）：在 Actions 页面点「Run workflow」，或
+`.github/workflows/e2e.yml`：每次 push 时（只改了文档等时不跑，同上文 CI）把全部套件分成 4 组，在 4 台 windows-latest 上同时跑（任务名 `e2e (1 of 4)`～`e2e (4 of 4)`，各自 `npm ci`、构建测试版后跑 `run.mjs --shard=<组>/4`；任务名里不用 `/`，带 `/` 时 `gh run view --log` 什么都打不出来），加上构建测试版约 9 分钟。分组按 `run.mjs` 里 `SECONDS` 估计的耗时，从长到短每个放进加起来最短的那一组，每个套件正好在一组里，新加的套件不会漏跑；一组没通过时别的组照常跑完。Rust 的编译缓存放在 `src-tauri/target/e2e`，几组共用一份，只由第 1 组存。也可以手动跑，只跑其中几个套件（这时只开一组）：在 Actions 页面点「Run workflow」，或
 
 ```bash
 gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"
