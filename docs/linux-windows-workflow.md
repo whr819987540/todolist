@@ -182,7 +182,7 @@ gh run download <编号> -n desktop             # E2E 没通过时当时整个�
 gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"   # 修了以后只重跑这几个套件
 ```
 
-写好的功能先推到功能分支（不是 main）上试，两个 workflow 照样跑；都通过后再决定要不要合进 main。
+写好的功能先推到功能分支（不是 main）上试，两个 workflow 照样跑；都通过后合进 main（AGENTS.md「每次改动：在 worktree 里开新分支，测试通过后合进 main」）。
 
 ## 还要在 Windows 上做的
 
@@ -211,16 +211,18 @@ gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"   # 修了以�
 
 Linux 上：
 
+- [ ] 先 `git fetch`，从 `origin/main` 在新的 worktree 里开分支（AGENTS.md「每次改动」），在 worktree 里改；用测试壳时在主检出里 `git switch --detach <分支>`
 - [ ] 改 `docs/requirements.md` 和 `README.md`
 - [ ] 新的 Tauri 命令在 `mock.ts` 里加上模拟；新的、不依赖 Tauri 的 Rust 模块加进测试壳的 `lib.rs`
 - [ ] `npm run lint; npm test; npm run build`，测试壳的 `cargo test` 和 `check-windows.sh`
 - [ ] 在模拟后端里把功能点一遍，浅色、深色都截图看；新写的端到端套件先用 `e2e-harness.mjs` 跑一遍核对期望值
 - [ ] 要在 Windows 上才能确认的，写进 `e2e/suites/`（Linux 上跑不了，`npm run lint` 会检查脚本；推送后在 E2E 里跑），端到端测试也测不到的写进 `docs/windows-test-checklist.md` 的「要手动试的」
 - [ ] 一个功能一个提交，推到功能分支后看 CI 和 E2E 都通过，没通过的修了再推
+- [ ] 都通过后变基到最新的 main、让 main 快进过去并推送，看 main 上的 CI 和 E2E 也通过，再删掉 worktree
 
 Windows 上：
 
-- [ ] 同 Linux 上：本机只跑 `npm run lint; npm test; npm run build` 和 `cargo test`，端到端测试推到功能分支后在 GitHub 上跑
+- [ ] 同 Linux 上：在新的 worktree 里开分支；本机只跑 `npm run lint; npm test; npm run build` 和 `cargo test`，端到端测试推到功能分支后在 GitHub 上跑，都通过后合进 main
 - [ ] 手动清单里新加的那几项
 - [ ] 修掉的问题各自提交
 

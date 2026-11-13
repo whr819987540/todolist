@@ -17,19 +17,39 @@
 
 在 Linux 上开发（Tauri 在这里编不了、跑不了）、到 Windows 上测试，流程写在 [docs/linux-windows-workflow.md](docs/linux-windows-workflow.md)：Linux 上能验证什么、测试壳（`src-tauri/target/linux-harness/`，不在仓库里）怎么建和用、怎么交到 Windows 上测，以及加功能时的清单。在 Linux 上改代码之前先读它；改了流程或测试壳时同步更新它。
 
+## 每次改动：在 worktree 里开新分支，测试通过后合进 main
+
+不在主检出（`~/projects/todolist`）里直接改，也不直接往 main 上提交：每个功能、每组修复（只改文档的也一样）都在一个新的 git worktree 里开新分支做，测试通过后合进 main。主检出只用来合并到 main、跑测试壳，几条线可以同时做、互不干扰。
+
+1. 开分支：先 `git fetch`，从最新的 `origin/main` 开，worktree 放在主检出旁边；依赖链接到主检出的 `node_modules`，不用重新下载：
+   ```bash
+   git worktree add ../todolist-<名字> -b <feat|fix|docs>/<名字> origin/main
+   cd ../todolist-<名字> && ln -s ../todolist/node_modules node_modules
+   ```
+2. 在 worktree 里改、提交，照「仓库提交要求」一个逻辑功能一个提交
+3. 测试：本机跑 `npm run lint; npm test; npm run build`（改了 Rust 时加上测试壳的 `cargo test` 和 `check-windows.sh`），推到这个分支，等 CI 和 E2E 都通过（见下面的「测试在 GitHub 上跑」；只改了文档的两个都不跑，本机检查过就算通过）。没通过的修了再推；和这次改动无关的偶发失败先查清原因，用 `gh run rerun <编号> --failed` 重跑，要修的另开一个分支修
+4. 合进 main：历史保持线性，不做合并提交。分支落后于 main 时先在 worktree 里变基到最新的 `origin/main`，重跑本机的检查；然后在主检出里让 main 快进到这个分支、推送，再看 main 上这个提交的 CI 和 E2E 也通过：
+   ```bash
+   git -C ../todolist-<名字> rebase origin/main   # main 动过时
+   cd ~/projects/todolist && git switch main && git pull --ff-only && git merge --ff-only <分支> && git push origin main
+   ```
+5. 收尾：`git worktree remove ../todolist-<名字>`（`node_modules` 只是链接，删的不是主检出的依赖）
+
+测试壳（`src-tauri/target/linux-harness/`，被 gitignore 了）只在主检出里，跑的是主检出的代码。要用它（界面截图、`e2e-harness.mjs`）看 worktree 里的改动时，在主检出里 `git switch --detach <分支>` 再跑，跑完 `git switch main`。合进 main 不等于发版：发版另有规矩，见「发布新版本」。
+
 ## 测试在 GitHub 上跑，不在本机跑
 
 写好功能后，端到端测试在 GitHub Actions 上跑，在 Windows 上开发时也一样。本机的 `npm run e2e` 会弹出测试版的窗口、抢前台、模拟键盘鼠标，打断用户在这台电脑上正在做的事；用户用着电脑时结果也不可靠（窗口被最小化、拿不到前台）。
 
 - 本机只跑不弹窗的检查：`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`
-- 提交后推到功能分支（不是 main），CI 和 E2E 推送后自动跑（E2E 全部套件约 10 分钟；改动的文件全是根目录的 `.md`、`docs/`、`.vscode/`、`release.yml` 时两个都不跑，也就没有结果可等）：`gh run list --branch <分支>` 看进度，`gh run view <编号> --log` 看结果，没通过的修了再推；只重跑几个套件用 `gh workflow run e2e.yml --ref <分支> -f suites="tabs hidedone"`（同一分支推送触发的 E2E 还在跑时别派，会把它挤掉）。都通过后由用户决定要不要合进 main
+- 提交后推到功能分支（不是 main），CI 和 E2E 推送后自动跑（E2E 全部套件约 10 分钟；改动的文件全是根目录的 `.md`、`docs/`、`.vscode/`、`release.yml` 时两个都不跑，也就没有结果可等）：`gh run list --branch <分支>` 看进度，`gh run view <编号> --log` 看结果，没通过的修了再推；只重跑几个套件用 `gh workflow run e2e.yml --ref <分支> -f suites="tabs hidedone"`（同一分支推送触发的 E2E 还在跑时别派，会把它挤掉）。都通过后合进 main（见上面的「每次改动」）
 - 在本机跑 `npm run e2e`、启动测试版程序截图或调试之前，先问用户（比如 GitHub 上重现不了、要看着窗口查的时候）
 
 ## 分支要短，尽早合进 main
 
 功能分支开得越久，main 在这期间变了以后要返工的越多：曾经有 40 个提交按「只有一层子项目」「单个编辑区」写完、都通过了 CI，main 却已经改成了多级子项目和分屏，只好逐个提交按新架构重做一遍。
 
-- 一个功能（或一组修复）在功能分支上 CI 和 E2E 都通过了，就告诉用户可以合进 main，不要攒好几个功能一起合
+- 一个功能（或一组修复）在功能分支上 CI 和 E2E 都通过了就合进 main，不要攒好几个功能一起合
 - 开始一个新功能、一批新改动之前先 `git fetch`，看 `git log --oneline HEAD..origin/main`：main 动了就先把分支变基到最新的 main 上，趁差得少时处理，再接着做；做得久的，中途也看几次
 - 同时有几条线在开发（另一台机器、另一个会话、worktree 里的 subagent）时，先约好谁改哪些核心模块（存储层的项目路径、编辑区和会话、侧栏的树等）；要动同一块的，一条先合进 main，另一条再在它上面做，不要两边各写各的最后再合
 - 变基时的冲突不只是文字：对面改了架构或规则时，每个提交要按新的规则重新落实它要做到的行为，每个提交单独拿出来都要能编译、测试通过
