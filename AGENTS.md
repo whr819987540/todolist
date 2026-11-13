@@ -35,6 +35,8 @@
    ```
 5. 收尾：`git worktree remove ../todolist-<名字>`（`node_modules` 只是链接，删的不是主检出的依赖）
 
+同时有几条互不相关的改动（如一个功能和中途发现的一个修复）时并排做、并排推：各开各的 worktree 和分支，写好一条就推一条，几条的 CI、E2E 同时跑，不要等前一条跑完才开下一条——每推一次都要等一轮 E2E，排着队等就是几轮加起来。都通过后依次变基、让 main 快进过去，最后只推送一次 main（main 上只跑一轮，跑的是最后合起来的样子）。要动同一块代码的不算互不相关，照下面「分支要短」先合一条、另一条在它上面做。
+
 测试壳（`src-tauri/target/linux-harness/`，被 gitignore 了）只在主检出里，跑的是主检出的代码。要用它（界面截图、`e2e-harness.mjs`）看 worktree 里的改动时，在主检出里 `git switch --detach <分支>` 再跑，跑完 `git switch main`。合进 main 不等于发版：发版另有规矩，见「发布新版本」。
 
 ## 测试在 GitHub 上跑，不在本机跑
