@@ -206,7 +206,7 @@ npm run e2e             # Windows 上的端到端测试：启动测试版程序�
 
 ESLint 的配置在 `eslint.config.js`：typescript-eslint 的推荐规则，加上 eslint-plugin-react-hooks 的全部推荐规则（`rules-of-hooks`、`exhaustive-deps` 和 React Compiler 的 `refs`、`immutability`、`purity`、`set-state-in-effect` 等）。代码里有不少刻意绕开 hook 依赖的写法（用 ref 拿最新的值、只在挂载时执行一次的 effect），这些地方就地加了 `eslint-disable-next-line` 并写明原因；不要为了消掉警告机械地补依赖，那会让只该执行一次的 effect 反复执行。
 
-有 CI（`.github/workflows/ci.yml`）：每次 push、提 PR 时（改动的文件全是根目录的 `.md`、`docs/`、`.vscode/` 和 `release.yml` 时不跑，它们不进构建、测试也不读；清单在 `ci.yml`、`e2e.yml` 的 `paths-ignore`，两边一样；推 tag 时也不跑，发布的提交已经在 main 上跑过）在 GitHub 的 Windows 机器（windows-latest，Node 24、stable Rust，缓存 npm 和 Rust 的依赖）上依次跑 `npm ci`、`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`；提交前在本机按同样的顺序跑一遍即可。Rust 的编译缓存（`Swatinem/rust-cache`）只在 main 上存，分支上用 main 的（GitHub 的缓存按分支隔开，分支能读 main 的）：不让每个分支各存一份 500 多 MB、占满仓库 10 GB 的缓存把 main 的挤掉；分支改了 `Cargo.lock` 时每次推送都要重新编改了的依赖，合进 main 后就好了。GitHub 会删掉 7 天没用过的缓存，所以 CI 和 E2E 每周一、周四凌晨 2 点（北京时间）在 main 上定时跑一次，main 隔了一阵没人推送时缓存也还在（定时跑的单独算一组，不和推送、手动派的互相取消；仓库 60 天没有动静时 GitHub 会停掉定时任务，到 Actions 页面重新打开）。CI 的 `cargo test` 和 E2E 的测试版各用一份缓存：前者编在 `src-tauri/target`、带着测试用的依赖，后者带着测试版的配置（`TAURI_CONFIG`）编在 `src-tauri/target/e2e`，编出来的东西不一样，放进同一份缓存的话谁先存就只有谁的那一半，另一个照样要从头编。`npm run build` 放在 `cargo test` 前面：`tauri::generate_context!` 在不是 dev 的构建（`tauri build`）里要把 `frontendDist`（`../dist`）嵌进程序，现在的 `cargo test` 是 dev 构建、用 `devUrl`，其实不读 `dist`，先构建好是为了以后换了构建方式也不出错。端到端测试是另一个 workflow（`.github/workflows/e2e.yml`），见下文「端到端测试（Windows）」。
+有 CI（`.github/workflows/ci.yml`）：每次 push、提 PR 时（改动的文件全是根目录的 `.md`、`docs/`、`.vscode/` 和 `release.yml` 时不跑，它们不进构建、测试也不读；清单在 `ci.yml`、`e2e.yml` 的 `paths-ignore`，两边一样；推 tag 时也不跑，发布的提交已经在 main 上跑过）在 GitHub 的 Windows 机器（windows-latest，Node 24、stable Rust，缓存 npm 和 Rust 的依赖）上依次跑 `npm ci`、`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`，约 3 分钟（拿不到 Rust 的编译缓存时 6 分钟以上，多出来的是从头编 300 多个 crate）；提交前在本机按同样的顺序跑一遍即可。Rust 的编译缓存（`Swatinem/rust-cache`）只在 main 上存，分支上用 main 的（GitHub 的缓存按分支隔开，分支能读 main 的）：不让每个分支各存一份 500 多 MB、占满仓库 10 GB 的缓存把 main 的挤掉；分支改了 `Cargo.lock` 时每次推送都要重新编改了的依赖，合进 main 后就好了。GitHub 会删掉 7 天没用过的缓存，所以 CI 和 E2E 每周一、周四凌晨 2 点（北京时间）在 main 上定时跑一次，main 隔了一阵没人推送时缓存也还在（定时跑的单独算一组，不和推送、手动派的互相取消；仓库 60 天没有动静时 GitHub 会停掉定时任务，到 Actions 页面重新打开）。CI 的 `cargo test` 和 E2E 的测试版各用一份缓存：前者编在 `src-tauri/target`、带着测试用的依赖，后者带着测试版的配置（`TAURI_CONFIG`）编在 `src-tauri/target/e2e`，编出来的东西不一样，放进同一份缓存的话谁先存就只有谁的那一半，另一个照样要从头编。`npm run build` 放在 `cargo test` 前面：`tauri::generate_context!` 在不是 dev 的构建（`tauri build`）里要把 `frontendDist`（`../dist`）嵌进程序，现在的 `cargo test` 是 dev 构建、用 `devUrl`，其实不读 `dist`，先构建好是为了以后换了构建方式也不出错。端到端测试是另一个 workflow（`.github/workflows/e2e.yml`），见下文「端到端测试（Windows）」。
 
 测量扫描数据目录的耗时（`list_workspaces`、`load_workspace`，含预览缓存是空的和已缓存两种情况）：用一份测试数据（不要用真实数据），跑标了 `#[ignore]` 的 `bench_scan`。它只读不写（数据和 `.todos.json` 一致时扫描不会写盘）：
 
@@ -219,7 +219,7 @@ cd src-tauri; $env:TODOLIST_BENCH_DIR="$env:TEMP\todolist-bench"; cargo test --p
 单元测试测不到的（WebView2 里的界面、全局快捷键、窗口的显示 / 隐藏和前台、注册表、Windows 回收站、文件被占用）由 `e2e/` 里的端到端测试检查，只能在 Windows 上跑。平时在 GitHub Actions 上跑：推到功能分支后会在 GitHub 的 Windows 机器上跑全部套件（见下文「在 GitHub Actions 上跑」），不占用本机。在本机跑会弹出测试版的窗口、抢前台、模拟键盘鼠标，跑的时候没法用这台电脑，有人在用时结果也不可靠，只在 GitHub 上重现不了、要看着窗口调试时才跑：
 
 ```powershell
-npm run e2e                       # 全部套件，约 10 分钟
+npm run e2e                       # 全部套件一个接一个跑，GitHub 的机器上约 20 分钟
 npm run e2e -- quick recycle      # 只跑这几个套件
 npm run e2e -- --no-build         # 不重新构建测试版（只改了前端时）
 npm run e2e -- --keep             # 跑完留着测试数据（%TEMP%\todolist-e2e\data）
@@ -245,7 +245,7 @@ npm run e2e -- --shard=2/4        # 套件分成 4 组，只跑第 2 组（GitHu
 
 #### 在 GitHub Actions 上跑
 
-`.github/workflows/e2e.yml`：每次 push 时（只改了文档等时不跑，同上文 CI）把全部套件分成 4 组，在 4 台 windows-latest 上同时跑（任务名 `e2e (1 of 4)`～`e2e (4 of 4)`，各自 `npm ci`、构建测试版后跑 `run.mjs --shard=<组>/4`；任务名里不用 `/`，带 `/` 时 `gh run view --log` 什么都打不出来），加上构建测试版约 9 分钟。分组按 `run.mjs` 里 `SECONDS` 估计的耗时，从长到短每个放进加起来最短的那一组，每个套件正好在一组里，新加的套件不会漏跑；一组没通过时别的组照常跑完。Rust 的编译缓存放在 `src-tauri/target/e2e`，几组共用一份，只由第 1 组存。也可以手动跑，只跑其中几个套件（这时只开一组）：在 Actions 页面点「Run workflow」，或
+`.github/workflows/e2e.yml`：每次 push 时（只改了文档等时不跑，同上文 CI）把全部套件分成 4 组，在 4 台 windows-latest 上同时跑（任务名 `e2e (1 of 4)`～`e2e (4 of 4)`，各自 `npm ci`、构建测试版后跑 `run.mjs --shard=<组>/4`；任务名里不用 `/`，带 `/` 时 `gh run view --log` 什么都打不出来），整个约 8 分钟：每组准备环境、装依赖约 1.5 分钟，有缓存时构建测试版约 1 分钟，跑套件 4～5 分钟；拿不到 Rust 的编译缓存时构建要从头编 300 多个 crate，多 2～3 分钟。分组按 `run.mjs` 里 `SECONDS` 估计的耗时，从长到短每个放进加起来最短的那一组，每个套件正好在一组里，新加的套件不会漏跑；一组没通过时别的组照常跑完。Rust 的编译缓存放在 `src-tauri/target/e2e`，几组共用一份，只由第 1 组存。也可以手动跑，只跑其中几个套件（这时只开一组）：在 Actions 页面点「Run workflow」，或
 
 ```bash
 gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"

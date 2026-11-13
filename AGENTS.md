@@ -44,7 +44,7 @@
 写好功能后，端到端测试在 GitHub Actions 上跑，在 Windows 上开发时也一样。本机的 `npm run e2e` 会弹出测试版的窗口、抢前台、模拟键盘鼠标，打断用户在这台电脑上正在做的事；用户用着电脑时结果也不可靠（窗口被最小化、拿不到前台）。
 
 - 本机只跑不弹窗的检查：`npm run lint`、`npm test`、`npm run build`、`cd src-tauri && cargo test`
-- 提交后推到功能分支（不是 main），CI 和 E2E 推送后自动跑（E2E 全部套件约 10 分钟；改动的文件全是根目录的 `.md`、`docs/`、`.vscode/`、`release.yml` 时两个都不跑，也就没有结果可等）：`gh run list --branch <分支>` 看进度，`gh run view <编号> --log` 看结果，没通过的修了再推；只重跑几个套件用 `gh workflow run e2e.yml --ref <分支> -f suites="tabs hidedone"`（同一分支推送触发的 E2E 还在跑时别派，会把它挤掉）。都通过后合进 main（见上面的「每次改动」）
+- 提交后推到功能分支（不是 main），CI 和 E2E 推送后自动跑（CI 约 3 分钟；E2E 分成 4 组同时跑，约 8 分钟；分支拿不到 main 的 Rust 编译缓存时两个各多 2～3 分钟。改动的文件全是根目录的 `.md`、`docs/`、`.vscode/`、`release.yml` 时两个都不跑，也就没有结果可等）：`gh run list --branch <分支>` 看进度，`gh run view <编号> --log` 看结果，没通过的修了再推；只重跑几个套件用 `gh workflow run e2e.yml --ref <分支> -f suites="tabs hidedone"`（同一分支推送触发的 E2E 还在跑时别派，会把它挤掉）。都通过后合进 main（见上面的「每次改动」）
 - 在本机跑 `npm run e2e`、启动测试版程序截图或调试之前，先问用户（比如 GitHub 上重现不了、要看着窗口查的时候）
 
 ## 分支要短，尽早合进 main

@@ -176,7 +176,7 @@ exit 0
 GitHub Actions 的两个 workflow 都跑在 GitHub 的 Windows 机器上，在 Linux 上就能看结果（README.md「在 GitHub Actions 上跑」）：
 
 ```sh
-gh run list --branch <分支> --limit 4         # CI 约 3 分钟，E2E 约 9 分钟
+gh run list --branch <分支> --limit 4         # CI 约 3 分钟，E2E 约 8 分钟（4 组同时跑）
 gh run view <编号> --log                      # E2E 里搜 ✗ 看没通过的检查
 gh run download <编号> -n desktop-<组>        # E2E 的那一组没通过时当时整个桌面的截图
 gh workflow run e2e.yml --ref <分支> -f suites="batch recycle"   # 修了以后只重跑这几个套件
