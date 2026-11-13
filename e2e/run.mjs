@@ -4,6 +4,7 @@
 //   npm run e2e -- quick recycle      只跑这几个
 //   npm run e2e -- --no-build         不重新构建（只改了前端时）
 //   npm run e2e -- --keep             跑完留着测试数据（%TEMP%\todolist-e2e\data）
+//   npm run e2e -- --shard=2/4        套件分成 4 组，只跑第 2 组（GitHub Actions 上几台机器同时跑，见 e2e.yml）
 //
 // 详见 README.md 的「端到端测试（Windows）」
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -48,6 +49,33 @@ const SUITES = [
   "regress",
 ];
 
+/**
+ * 每个套件在 GitHub 的 Windows 机器上大约跑几秒（连同启动测试版，2026-11 量的），只用来给 --shard 分组：
+ * 不准只是几组跑完的时间差得多一些，不会漏跑。新套件没写的按 30 秒算
+ */
+const SECONDS = {
+  find: 19, search: 20, outline: 20, autostart: 19, startup: 34, desktops: 44, quick: 44, shortcuts: 29,
+  pin: 30, tags: 30, priority: 17, filter: 33, reorder: 25, batch: 36, recycle: 64, hidedone: 23,
+  subprojects: 48, projectorder: 49, tabs: 35, lists: 19, split: 68, conflict: 36, watch: 29, images: 22,
+  tables: 11, marks: 9, copy: 11, backup: 91, update: 66, history: 26, export: 54, regress: 83,
+};
+const seconds = (name) => SECONDS[name] ?? 30;
+
+/**
+ * 把 suites 分成 n 组，返回第 i 组（从 1 数起）：按估计的耗时从长到短，每个放进目前加起来最短的那一组，
+ * 几组差不多同时跑完。每个套件正好在一组里；同样的参数总是分得一样，组里照原来的顺序跑
+ */
+function shardOf(suites, i, n) {
+  const groups = Array.from({ length: n }, () => ({ total: 0, names: new Set() }));
+  const longestFirst = [...suites].sort((a, b) => seconds(b) - seconds(a) || suites.indexOf(a) - suites.indexOf(b));
+  for (const name of longestFirst) {
+    const g = groups.reduce((min, x) => (x.total < min.total ? x : min));
+    g.total += seconds(name);
+    g.names.add(name);
+  }
+  return suites.filter((s) => groups[i - 1].names.has(s));
+}
+
 const argv = process.argv.slice(2);
 const wanted = argv.filter((a) => !a.startsWith("--"));
 const unknown = wanted.filter((s) => !SUITES.includes(s));
@@ -55,6 +83,14 @@ if (unknown.length) {
   console.error(`没有这些套件：${unknown.join("、")}。可以用的：${SUITES.join("、")}`);
   process.exit(2);
 }
+const shardArg = argv.find((a) => a.startsWith("--shard"));
+const shard = shardArg && /^--shard=(\d+)\/(\d+)$/.exec(shardArg);
+if (shardArg && (!shard || +shard[1] < 1 || +shard[1] > +shard[2])) {
+  console.error(`--shard 要写成 --shard=第几组/共几组（从 1 数起），如 --shard=2/4，不是 ${shardArg}`);
+  process.exit(2);
+}
+/** 这次要跑的套件 */
+const toRun = shard ? shardOf(wanted.length ? wanted : SUITES, +shard[1], +shard[2]) : wanted.length ? wanted : SUITES;
 if (process.platform !== "win32") {
   console.error("端到端测试只能在 Windows 上跑");
   process.exit(2);
@@ -178,6 +214,11 @@ function makeContext() {
 }
 
 async function main() {
+  if (shard) {
+    const total = toRun.reduce((s, name) => s + seconds(name), 0);
+    console.log(`第 ${shard[1]} / ${shard[2]} 组（约 ${Math.round(total / 60)} 分钟）：${toRun.join("、") || "没有套件"}`);
+    if (!toRun.length) return;
+  }
   if (!argv.includes("--no-build")) app.build();
   if (!existsSync(app.EXE)) throw new Error(`没有测试版程序 ${app.EXE}，去掉 --no-build 先构建`);
   const vite = await app.ensureVite();
@@ -187,7 +228,7 @@ async function main() {
   }
   const t = makeContext();
   try {
-    for (const name of wanted.length ? wanted : SUITES) {
+    for (const name of toRun) {
       current = name;
       const suite = await import(`./suites/${name}.mjs`);
       console.log(`\n■ ${suite.title ?? name}`);

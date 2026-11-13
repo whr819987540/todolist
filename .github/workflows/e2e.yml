@@ -26,8 +26,15 @@ concurrency:
 
 jobs:
   e2e:
+    # 套件分成 4 组，在 4 台机器上同时跑（run.mjs 的 --shard 按估计的耗时分，每个套件正好在一组里），
+    # 一个接一个跑要 20 分钟；每组各自装依赖、构建测试版。手动只跑几个套件时一组就够
+    name: e2e (${{ matrix.shard }}/${{ strategy.job-total }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.suites && '[1]' || '[1, 2, 3, 4]') }}
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -43,6 +50,8 @@ jobs:
         with:
           workspaces: src-tauri -> target/e2e
           cache-on-failure: true
+          # 几组用的是同一份缓存，只让第 1 组存，不重复上传
+          save-if: ${{ matrix.shard == 1 }}
 
       # 记下机器的情况，测试没通过时对照
       - name: 环境
@@ -60,11 +69,11 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
-      # 等于 npm run e2e [套件…]；直接调 node，套件名一个个作为参数传过去
+      # 等于 npm run e2e -- --shard=<组>/<几组> [套件…]；直接调 node，套件名一个个作为参数传过去
       - name: 端到端测试
         env:
           SUITES: ${{ inputs.suites }}
-        run: node e2e/run.mjs @("$env:SUITES" -split '\s+' | Where-Object { $_ })
+        run: node e2e/run.mjs --shard=${{ matrix.shard }}/${{ strategy.job-total }} @("$env:SUITES" -split '\s+' | Where-Object { $_ })
 
       # 没通过时截一张整个桌面的图，看窗口当时的样子
       - name: 截屏
@@ -80,6 +89,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: desktop
+          name: desktop-${{ matrix.shard }}
           path: ${{ runner.temp }}/desktop.png
           if-no-files-found: ignore
