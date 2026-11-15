@@ -2406,11 +2406,14 @@ body.drag-moving .editor-tab-close {
 .settings-tabs .ant-tabs-nav {
   margin-bottom: 4px;
 }
-/* 窗口矮时只滚动标签页内容，标签栏保持可见 */
-.settings-tabs .ant-tabs-content-holder {
-  max-height: calc(100vh - 170px);
+/* 五个标签页的内容区一样高，内容多的在里面滚动，切换标签页时对话框的高度、位置都不变；
+   窗口矮时一起变矮（对话框上下各留 24px），标签栏保持可见。
+   每个标签页各自滚动，切过去时不会接着别的标签页滚到的位置；滚动条的位置总是留着，内容宽度也不随标签页变 */
+.settings-pane {
+  height: min(640px, calc(100vh - 170px));
   overflow-y: auto;
   padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 /* 备份与恢复 */
