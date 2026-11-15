@@ -218,7 +218,8 @@ Linux 上：
 - [ ] 在模拟后端里把功能点一遍，浅色、深色都截图看；新写的端到端套件先用 `e2e-harness.mjs` 跑一遍核对期望值
 - [ ] 要在 Windows 上才能确认的，写进 `e2e/suites/`（Linux 上跑不了，`npm run lint` 会检查脚本；推送后在 E2E 里跑），端到端测试也测不到的写进 `docs/windows-test-checklist.md` 的「要手动试的」
 - [ ] 一个功能一个提交，推到功能分支后看 CI 和 E2E 都通过，没通过的修了再推
-- [ ] 都通过后变基到最新的 main、让 main 快进过去并推送，看 main 上的 CI 和 E2E 也通过，再删掉 worktree
+- [ ] 都通过后变基到最新的 main、让 main 快进过去并推送，看 main 上的 CI 和 E2E 也通过；要发版的照 AGENTS.md「发布新版本」打 tag、推送
+- [ ] 最后删掉本地和远端的分支、删掉 worktree（AGENTS.md「每次改动」第 6 步）
 
 Windows 上：
 

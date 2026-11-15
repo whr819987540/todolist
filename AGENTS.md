@@ -21,6 +21,8 @@
 
 不在主检出（`~/projects/todolist`）里直接改，也不直接往 main 上提交：每个功能、每组修复（只改文档的也一样）都在一个新的 git worktree 里开新分支做，测试通过后合进 main。主检出只用来合并到 main、跑测试壳，几条线可以同时做、互不干扰。
 
+整个流程：在单独的 worktree 里改 → 检查功能（本机的检查和功能分支上的 CI、E2E）→ 没问题就合进 main → 打 tag（不是每次都有，用户说了要发版才打）→ 推送 → 最后删掉本地和远端的分支、删掉 worktree。
+
 1. 开分支：先 `git fetch`，从最新的 `origin/main` 开，worktree 放在主检出旁边；依赖链接到主检出的 `node_modules`，不用重新下载：
    ```bash
    git worktree add ../todolist-<名字> -b <feat|fix|docs>/<名字> origin/main
@@ -33,7 +35,15 @@
    git -C ../todolist-<名字> rebase origin/main   # main 动过时
    cd ~/projects/todolist && git switch main && git pull --ff-only && git merge --ff-only <分支> && git push origin main
    ```
-5. 收尾：`git worktree remove ../todolist-<名字>`（`node_modules` 只是链接，删的不是主检出的依赖）
+5. 打 tag（不是每次都有）：用户说了要发版时，照「发布新版本」在主检出里改版本号、打 tag，和 main 一起推送，等发布跑完、核对过
+6. 收尾：删掉这个分支（本地的和远端的都删）和 worktree，要发版的在第 5 步核对完之后再删：
+   ```bash
+   cd ~/projects/todolist
+   git worktree remove ../todolist-<名字>   # node_modules 只是链接，删的不是主检出的依赖
+   git branch -d <分支>
+   git push origin --delete <分支>
+   git fetch --prune
+   ```
 
 同时有几条互不相关的改动（如一个功能和中途发现的一个修复）时并排做、并排推：各开各的 worktree 和分支，写好一条就推一条，几条的 CI、E2E 同时跑，不要等前一条跑完才开下一条——每推一次都要等一轮 E2E，排着队等就是几轮加起来。都通过后依次变基、让 main 快进过去，最后只推送一次 main（main 上只跑一轮，跑的是最后合起来的样子）。要动同一块代码的不算互不相关，照下面「分支要短」先合一条、另一条在它上面做。
 
